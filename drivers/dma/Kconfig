@@ -273,6 +273,20 @@ config INTEL_IOATDMA
 
 	  If unsure, say N.
 
+config INTEL_DSA
+	tristate "Intel DSA support"
+	depends on PCI && X86_64
+	select DMA_ENGINE
+	select DMA_ENGINE_RAID
+	select DCA
+	help
+	  Enable support for the Intel(R) DSA DMA engine present
+	  in upcoming Intel Xeon chipsets.
+
+	  Say Y here if you have such a chipset.
+
+	  If unsure, say N.
+
 config INTEL_IOP_ADMA
 	tristate "Intel IOP ADMA support"
 	depends on ARCH_IOP32X || ARCH_IOP33X || ARCH_IOP13XX
