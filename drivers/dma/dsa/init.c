@@ -26,11 +26,15 @@
 #include <linux/dma-mapping.h>
 #include <linux/workqueue.h>
 #include <linux/prefetch.h>
+#include <linux/poll.h>
+#include <linux/miscdevice.h>
 #include <linux/dca.h>
 #include <linux/aer.h>
+#include <linux/fs.h>
 #include "dma.h"
 #include "registers.h"
 #include "hw.h"
+#include "svm.h"
 
 #include "../dmaengine.h"
 
@@ -45,6 +49,17 @@ static struct pci_device_id dsa_pci_tbl[] = {
 	{ 0, }
 };
 MODULE_DEVICE_TABLE(pci, dsa_pci_tbl);
+
+/* FIXME: Convert this into a list of DSA devices to handle multiple DSA devices
+ * in the platform.
+ */
+static struct dsadma_device *dsa;
+
+struct dsadma_device *get_dsadma_device(void)
+{
+	return dsa;
+}
+
 
 static int dsa_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id);
 static void dsa_remove(struct pci_dev *pdev);
@@ -82,6 +97,8 @@ static void dsa_dma_test_callback(void *dma_async_param)
 	complete(cmp);
 }
 
+static struct completion cmp;
+
 static int dsa_dma_batch_memcpy_self_test(struct dsadma_device *dsa)
 {
 	int i, num_descs;
@@ -96,7 +113,6 @@ static int dsa_dma_batch_memcpy_self_test(struct dsadma_device *dsa)
 	dma_addr_t dma_dest, dma_src, dma_batch, dma_compl;
 	dma_cookie_t cookie;
 	int err = 0;
-	struct completion cmp;
 	unsigned long tmo = 0;
 	unsigned long flags;
 	int order, buf_size, batch_size, cr_size;
@@ -197,7 +213,7 @@ static int dsa_dma_batch_memcpy_self_test(struct dsadma_device *dsa)
 		}
 		dma->device_issue_pending(dma_chan);
 
-		tmo = wait_for_completion_timeout(&cmp, msecs_to_jiffies(200));
+		tmo = wait_for_completion_timeout(&cmp, msecs_to_jiffies(1000));
 
 		if (tmo == 0 ||
 	    	dma->device_tx_status(dma_chan, cookie, NULL)
@@ -660,7 +676,7 @@ static int dsa_init_completion_ring(struct dsadma_device *dsa, int ring_idx)
 
 	/* FIXME: currently we allocate a completion ring per WQ. If a SWQ, the
 	 * the ring size is (maximum wq size * 2). If a DWQ, the ring size is
-	 * equal to the size of size of SWQ.
+	 * equal to the size of size of WQ.
 	 */
 	if (ring_idx > dsa->num_wqs || !dsa->wqs[ring_idx].dedicated)
 		dring->num_entries = dsa->tot_wq_size * 2;
@@ -692,6 +708,8 @@ static int dsa_init_wq (struct dsadma_device *dsa, int wq_idx)
 	init_timer(&wq->timer);
 	wq->timer.function = dsa_timer_event;
         wq->timer.data = data;
+	wq->available = 1;
+	wq->allocated = 0;
 
 	/* Each WQCONFIG register is 16 bytes (A, B, C, and D registers) */
 	wq_offset = DSA_WQCFG_OFFSET + wq_idx * 16;
@@ -964,6 +982,28 @@ static const struct pci_error_handlers dsa_err_handler = {
 	.resume = dsa_pcie_error_resume,
 };
 
+static const struct file_operations dsa_fops = {
+        .owner          = THIS_MODULE,
+        .open           = dsa_fops_open,
+        .release        = dsa_fops_release,
+        //.read           = dsa_fops_read,
+        //.write          = dsa_fops_write,
+        .unlocked_ioctl = dsa_fops_unl_ioctl,
+#ifdef CONFIG_COMPAT
+        .compat_ioctl   = dsa_fops_compat_ioctl,
+#endif
+        .mmap           = dsa_fops_mmap,
+	.poll           = dsa_fops_poll,
+};
+
+static struct miscdevice dsa_dev = {
+        .minor = MISC_DYNAMIC_MINOR,
+        .name = "dsa",
+        .fops = &dsa_fops,
+        .nodename = "dsa",
+        .mode = S_IRUGO | S_IWUGO,
+};
+
 static struct pci_driver dsa_pci_driver = {
 	.name		= DRV_NAME,
 	.id_table	= dsa_pci_tbl,
@@ -1023,6 +1063,8 @@ static int dsa_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	device = alloc_dsadma(pdev, iomap);
 	if (!device)
 		return -ENOMEM;
+	dsa = device;
+
 	pci_set_master(pdev);
 	pci_set_drvdata(pdev, device);
 
@@ -1039,6 +1081,12 @@ static int dsa_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		return -ENODEV;
 	}
 
+	printk("registering DSA user interface\n");
+	err = misc_register(&dsa_dev);
+
+	if (err)
+		printk("misc register failed %d\n", err);
+
 	return 0;
 }
 
@@ -1053,6 +1101,8 @@ static void dsa_remove(struct pci_dev *pdev)
 
 	pci_disable_pcie_error_reporting(pdev);
 	dsa_dma_remove(device);
+
+	misc_deregister(&dsa_dev);
 }
 
 static int __init dsa_init_module(void)

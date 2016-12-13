@@ -86,6 +86,9 @@ struct dsa_work_queue {
 #define DSA_WQ_DISABLED    0
 #define DSA_WQ_ENABLED     1
 #define DSA_WQ_RUN         5
+	struct list_head user_ctx_list;
+	int available;
+	int allocated;
 };
 
 struct dsa_work_queue_reg {
@@ -147,8 +150,8 @@ struct dsa_completion_ring {
 	void    *completion_ring_buf;
 	dma_addr_t  ring_base;
 	void __iomem *wq_reg;
+	struct dsa_work_queue *wq;
 	struct dsa_ring_ent *ring;
-
 };
 
 /**
@@ -434,5 +437,7 @@ int dsa_dma_setup_interrupts(struct dsadma_device *dsa_dma);
 void dsa_stop(struct dsa_work_queue *dsa_chan);
 
 int dsa_alloc_completion_ring(struct dsa_completion_ring *dring, gfp_t flags);
+
+struct dsadma_device * get_dsadma_device (void);
 
 #endif /* DSADMA_H */

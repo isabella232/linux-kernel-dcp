@@ -47,6 +47,7 @@ irqreturn_t dsa_wq_completion_interrupt(int irq, void *data)
 	struct dsa_completion_ring *dsa_ring = data;
 
 	printk("received wq completion interrupt\n");
+
 	tasklet_schedule(&dsa_ring->cleanup_task);
 
 	return IRQ_HANDLED;
@@ -152,7 +153,7 @@ static void __dsa_issue_pending(struct dsa_work_queue *wq)
 
 		wq_reg = dsa_get_wq_reg(wq->dsa, wq->idx, dring->idx, 1);
 
-		printk("desc op %x wq_reg %p ded %d\n", desc->desc->opcode, wq_reg, wq->dedicated);
+		printk("desc op %x wq_reg %p ded %d compl %llx\n", desc->desc->opcode, wq_reg, wq->dedicated, desc->desc->compl_addr);
 
 		if (wq->dedicated) {
 			/* use MOVDIR64B for DWQ */
@@ -349,6 +350,8 @@ int dsa_alloc_completion_ring(struct dsa_completion_ring *dring, gfp_t flags)
 
 	dring->completion_ring_buf =
 		pci_alloc_consistent(dev, dring->comp_ring_size, &dring->ring_base);
+
+	printk("allocated completion ring %p %llx\n", dring->completion_ring_buf, dring->ring_base);
 
 	if (!dring->completion_ring_buf) {
 		kfree(ring);
@@ -621,7 +624,23 @@ void dsa_wq_cleanup(unsigned long data)
 	struct dma_async_tx_descriptor *tx;
 	struct dsa_ring_ent *desc;
 	int idx;
+/*
+	if (dsa_ring->wq) {
+		if (!list_empty(&dsa_ring->wq->user_ctx_list)) {
+			struct dsa_context *ctx;
+			struct list_head *ptr, *n;
+			list_for_each_safe(ptr, n, dsa_ring->wq->user_ctx_list) {
+				ctx = list_entry(ptr, struct dsa_context, wq_list);
+				wake_up_interruptible(&ctx->intr_queue);
+				list_del(&ctx->wq_list);
+			}
+		} else {
 
+
+		}
+		return;
+	}
+*/
 	printk("cleanup completion ring %d h:t %d:%d\n", dring->idx, dring->head, dring->tail);
 	idx = dring->tail;
         do {
