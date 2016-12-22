@@ -24,6 +24,7 @@
 #include <linux/pci_ids.h>
 #include <linux/circ_buf.h>
 #include <linux/interrupt.h>
+#include "svm.h"
 #include "registers.h"
 #include "hw.h"
 
@@ -115,7 +116,8 @@ struct dsa_work_queue_reg {
 			u32 rsvd2:2;
 			u32 priority:4;
 			u32 pasid:20;
-			u32 rsvd3:3;
+			u32 rsvd3:2;
+			u32 paside:1;
 			u32 u_s:1;
 		}c_fields;
 		u32     val;
@@ -149,7 +151,6 @@ struct dsa_completion_ring {
 	void    *desc_ring_buf;
 	void    *completion_ring_buf;
 	dma_addr_t  ring_base;
-	void __iomem *wq_reg;
 	struct dsa_work_queue *wq;
 	struct dsa_ring_ent *ring;
 };
@@ -177,6 +178,11 @@ struct dsadma_device {
 	struct pci_pool *dma_pool;
 	struct pci_pool *completion_pool;
 	struct dma_device dma_dev;
+	struct dsa_context priv_ctx;
+	bool pasid_enabled;
+	int system_pasid;
+	spinlock_t cmd_lock;
+
 	u32 version;
 	struct msix_entry *msix_entries;
 	struct msix_entry *ims_entries;
@@ -197,6 +203,8 @@ struct dsadma_device {
 	u16 max_engs;
 	u16 num_wqs;
 	u16 num_grps;
+
+	u16 num_kern_dwqs;
 
 	u16 msixcnt;
 
@@ -383,9 +391,19 @@ void dsa_dma_prep_batch_memcpy(struct dma_chan *c, dma_addr_t dest,
 			dma_addr_t src, struct dsa_dma_descriptor *hw,
 			dma_addr_t compl_addr, size_t len, unsigned long flags);
 
+void __dsa_dma_prep_batch_memcpy(struct dsa_work_queue *wq, u64 dest,
+			u64 src, struct dsa_dma_descriptor *hw,
+			u64 compl_addr, size_t len, unsigned long flags);
 struct dma_async_tx_descriptor *
 dsa_dma_prep_batch(struct dma_chan *c, dma_addr_t dma_batch,
 				int num_descs, unsigned long flags);
+struct dma_async_tx_descriptor *
+__dsa_dma_prep_batch(struct dsa_work_queue *wq, u64 dma_batch,
+				int num_descs, unsigned long flags);
+struct dma_async_tx_descriptor *
+__dsa_dma_prep_memcpy(struct dsa_work_queue *wq, u64 dst,
+			u64 src, size_t len, unsigned long flags);
+
 struct dma_async_tx_descriptor *
 dsa_dma_prep_memcpy(struct dma_chan *c, dma_addr_t dma_dest,
 			   dma_addr_t dma_src, size_t len, unsigned long flags);
@@ -410,6 +428,8 @@ dsa_prep_pq_val(struct dma_chan *chan, dma_addr_t *pq, dma_addr_t *src,
 		  unsigned int src_cnt, const unsigned char *scf, size_t len,
 		  enum sum_check_flags *pqres, unsigned long flags);
 
+int dsa_enqcmds (struct dsa_dma_descriptor *hw, void __iomem * wq_reg);
+
 /* DSA Operation functions */
 irqreturn_t dsa_wq_completion_interrupt(int irq, void *data);
 irqreturn_t dsa_misc_interrupt(int irq, void *data);
@@ -428,6 +448,7 @@ void dsa_misc_cleanup(unsigned long data);
 void dsa_timer_event(unsigned long data);
 int dsa_check_space_lock(struct dsa_work_queue *dsa_chan, int num_descs);
 void dsa_issue_pending(struct dma_chan *chan);
+void __dsa_issue_pending(struct dsa_work_queue *wq);
 void dsa_timer_event(unsigned long data);
 
 /* DSA Init functions */
@@ -439,5 +460,16 @@ void dsa_stop(struct dsa_work_queue *dsa_chan);
 int dsa_alloc_completion_ring(struct dsa_completion_ring *dring, gfp_t flags);
 
 struct dsadma_device * get_dsadma_device (void);
+
+int dsa_wq_set_pasid (struct dsadma_device *dsa, int wq_idx, int pasid,
+				bool privilege);
+int dsa_wq_disable_pasid (struct dsadma_device *dsa, int wq_idx);
+
+void __iomem *dsa_get_wq_reg(struct dsadma_device *dsa, int wq_idx,
+				int msix_idx, bool priv);
+/* Self test routines */
+
+int dsa_dma_self_test (struct dsadma_device *dsa);
+
 
 #endif /* DSADMA_H */

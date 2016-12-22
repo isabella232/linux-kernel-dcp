@@ -31,10 +31,10 @@
 #include <linux/dca.h>
 #include <linux/aer.h>
 #include <linux/fs.h>
+#include <linux/intel-svm.h>
 #include "dma.h"
 #include "registers.h"
 #include "hw.h"
-#include "svm.h"
 
 #include "../dmaengine.h"
 
@@ -67,7 +67,6 @@ static int dsa_init_wq(struct dsadma_device *dsa_dma, int idx);
 static void dsa_enumerate_capabilities(struct dsadma_device *dsa_dma);
 static int dsa_configure_groups(struct dsadma_device *dsa);
 static int dsa_enumerate_work_queues(struct dsadma_device *dsa);
-static int dsa_dma_memcpy_self_test(struct dsadma_device *dsa_dma);
 static int dsa_init_completion_ring(struct dsadma_device *dsa, int ring_idx);
 
 static int dsa_num_dwqs = 0;
@@ -78,6 +77,10 @@ static int dsa_num_swqs = 0;
 module_param(dsa_num_swqs, int, 0644);
 MODULE_PARM_DESC(dsa_num_swqs, "Number of SWQs");
 
+static int dsa_sys_pasid = 1;
+module_param(dsa_sys_pasid, int, 0644);
+MODULE_PARM_DESC(dsa_sys_pasid, "Configure a System Pasid for KVA");
+
 int dsa_pending_level = 4;
 module_param(dsa_pending_level, int, 0644);
 MODULE_PARM_DESC(dsa_pending_level,
@@ -85,278 +88,103 @@ MODULE_PARM_DESC(dsa_pending_level,
 
 struct kmem_cache *dsa_cache;
 
-/*
- * Perform a DSA transaction to verify the HW works.
- */
-#define DSA_TEST_SIZE 2000
-
-static void dsa_dma_test_callback(void *dma_async_param)
+static int dsa_enable_wq (struct dsadma_device *dsa, int wq_offset,
+				struct dsa_work_queue_reg *wqcfg)
 {
-	struct completion *cmp = dma_async_param;
+	int j;
 
-	complete(cmp);
+	wqcfg->d.d_fields.wq_enable = 1;
+
+	writel(wqcfg->d.val, dsa->reg_base + wq_offset + 0xC);
+
+	for (j = 0; j < 200; j++) {
+		wqcfg->d.val = readl(dsa->reg_base + wq_offset + 0xC);
+		if ((wqcfg->d.d_fields.wq_enabled) ||
+				(wqcfg->d.d_fields.wq_err))
+			break;
+	}
+
+	if ((j == 200) || wqcfg->d.d_fields.wq_err)
+		return 1;
+
+	return 0;
 }
 
-static struct completion cmp;
-
-static int dsa_dma_batch_memcpy_self_test(struct dsadma_device *dsa)
+static int dsa_disable_wq (struct dsadma_device *dsa, int wq_offset,
+				struct dsa_work_queue_reg *wqcfg)
 {
-	int i, num_descs;
-	u8 *src;
-	u8 *dest;
-	struct dsa_dma_descriptor *batch;
-	struct dsa_completion_record *comp_rec;
-	struct dma_device *dma = &dsa->dma_dev;
-	struct device *dev = &dsa->pdev->dev;
-	struct dma_chan *dma_chan;
-	struct dma_async_tx_descriptor *tx;
-	dma_addr_t dma_dest, dma_src, dma_batch, dma_compl;
-	dma_cookie_t cookie;
-	int err = 0;
-	unsigned long tmo = 0;
-	unsigned long flags;
-	int order, buf_size, batch_size, cr_size;
+	int j;
 
-	num_descs = dsa->max_batch_size;
+	wqcfg->d.d_fields.wq_enable = 0;
 
-	batch_size = sizeof(struct dsa_dma_descriptor) * num_descs;
-	batch = kzalloc(batch_size, GFP_KERNEL);
-	if (!batch)
-		return -ENOMEM;
+	writel(wqcfg->d.val, dsa->reg_base + wq_offset + 0xC);
 
-	cr_size = sizeof(struct dsa_completion_record) * num_descs;
-	comp_rec = kzalloc(cr_size, GFP_KERNEL);
-	if (!comp_rec) {
-		kfree(batch);
-		return -ENOMEM;
+	for (j = 0; j < 200; j++) {
+		wqcfg->d.val = readl(dsa->reg_base + wq_offset + 0xC);
+		if (!wqcfg->d.d_fields.wq_enabled)
+			break;
 	}
 
-	printk("testing batch test for max batch size %d base %p comp %p\n", num_descs, batch, comp_rec);
-
-	buf_size = num_descs * PAGE_SIZE;
-
-	order = get_order(buf_size);
-	src = (u8 *)__get_free_pages(GFP_KERNEL, order);
-	if (!src) {
-		kfree(batch);
-		kfree(comp_rec);
-		return -ENOMEM;
+	if ((j == 200) || wqcfg->d.d_fields.wq_err) {
+		return 1;
 	}
-
-	dest = (u8 *)__get_free_pages(GFP_KERNEL, order);
-	if (!dest) {
-		kfree(batch);
-		kfree(comp_rec);
-		free_pages((unsigned long)src, order);
-		return -ENOMEM;
-	}
-
-	/* Fill in src buffer */
-	for (i = 0; i < buf_size; i++)
-		src[i] = (u8)i;
-
-	/* Test copy, using each DMA channel */
-	list_for_each_entry(dma_chan, &dma->channels, device_node) {
-		memset(dest, 0, buf_size);
-		memset(comp_rec, 0, cr_size);
-
-		printk("testing memcpy using wq dedicated %d idx %d \n", to_dsa_wq(dma_chan)->dedicated, to_dsa_wq(dma_chan)->idx);
-
-		dma_src = dma_map_single(dev, src, buf_size, DMA_TO_DEVICE);
-		if (dma_mapping_error(dev, dma_src)) {
-			dev_err(dev, "mapping src buffer failed %d\n", i);
-			goto out;
-		}
-		dma_dest = dma_map_single(dev, dest, buf_size, DMA_FROM_DEVICE);
-		if (dma_mapping_error(dev, dma_dest)) {
-			dev_err(dev, "mapping dest buffer failed %d\n", i);
-			goto unmap_src;
-		}
-
-		dma_batch = dma_map_single(dev, batch, batch_size, DMA_TO_DEVICE);
-		if (dma_mapping_error(dev, dma_batch)) {
-			dev_err(dev, "mapping batch buffer failed\n");
-			goto unmap_dest;
-		}
-
-		dma_compl = dma_map_single(dev, comp_rec, cr_size, DMA_FROM_DEVICE);
-		if (dma_mapping_error(dev, dma_compl)) {
-			dev_err(dev, "mapping Comp Rec buffer failed\n");
-			goto unmap_batch;
-		}
-
-		for (i = 0; i < num_descs; i++) {
-			dma_addr_t  compl_addr = dma_compl + (i * sizeof(struct
-					dsa_completion_record));
-			dma_addr_t  dma_src_page = dma_src + (i << PAGE_SHIFT);
-			dma_addr_t  dma_dst_page = dma_dest + (i << PAGE_SHIFT);
-
-			dsa_dma_prep_batch_memcpy(dma_chan, dma_dst_page,
-		      	dma_src_page, &batch[i], compl_addr, PAGE_SIZE, flags);
-		}
-		flags = DMA_PREP_INTERRUPT;
-		tx = dsa_dma_prep_batch(dma_chan, dma_batch, num_descs, flags);
-		if (!tx) {
-			dev_err(dev, "Self-test prep failed, disabling\n");
-			err = -ENODEV;
-			goto unmap_dma;
-		}
-		async_tx_ack(tx);
-		init_completion(&cmp);
-		tx->callback = dsa_dma_test_callback;
-		tx->callback_param = &cmp;
-		cookie = tx->tx_submit(tx);
-		if (cookie < 0) {
-			dev_err(dev, "Self-test setup failed, disabling\n");
-			err = -ENODEV;
-			goto unmap_dma;
-		}
-		dma->device_issue_pending(dma_chan);
-
-		tmo = wait_for_completion_timeout(&cmp, msecs_to_jiffies(1000));
-
-		if (tmo == 0 ||
-	    	dma->device_tx_status(dma_chan, cookie, NULL)
-						!= DMA_COMPLETE) {
-			dev_err(dev, "Self-test copy timed out, disabling\n");
-			err = -ENODEV;
-			goto unmap_dma;
-		}
-		for (i = 0; i < num_descs; i++) {
-			struct dsa_completion_record *comp = &comp_rec[i];
-
-			if (comp->status == DSA_COMP_SUCCESS) {
-				if (memcmp(src + (i << PAGE_SHIFT), dest +
-					(i << PAGE_SHIFT), PAGE_SIZE)) {
-					dev_err(dev, "Self-test Batch copy page %d failed compare, disabling\n", i);
-					err = -ENODEV;
-					goto unmap_dma;
-				}
-			} else if (comp->status) {
-				printk("desc %d operation %d failure %d\n", i, batch[i].opcode, comp->status);
-			} else {
-				printk("desc %d operation %d abandoned\n", i, batch[i].opcode);
-			}
-		}
-unmap_dma:
-		dma_unmap_single(dev, dma_compl, cr_size, DMA_FROM_DEVICE);
-unmap_batch:
-		dma_unmap_single(dev, dma_batch, batch_size, DMA_TO_DEVICE);
-unmap_dest:
-		dma_unmap_single(dev, dma_dest, buf_size, DMA_FROM_DEVICE);
-unmap_src:
-		dma_unmap_single(dev, dma_src, buf_size, DMA_TO_DEVICE);
-	}
-out:
-	free_pages((unsigned long)src, order);
-	free_pages((unsigned long)dest, order);
-	kfree(batch);
-	kfree(comp_rec);
-	return err;
+	return 0;
 }
 
 /**
- * dsa_dma_self_test - Perform a DSA transaction to verify the HW works.
- * @dsa_dma: dma device to be tested
+ * dsa_enable_system_pasid - configure a system PASID for use with kernel
+ * virtual addresses. SWQ does not work without PASID.
+ * @dsa_dma: dsa dma device
  */
-static int dsa_dma_memcpy_self_test(struct dsadma_device *dsa)
+static int dsa_enable_system_pasid(struct dsadma_device *dsa)
 {
-	int i;
-	u8 *src;
-	u8 *dest;
-	struct dma_device *dma = &dsa->dma_dev;
-	struct device *dev = &dsa->pdev->dev;
-	struct dma_chan *dma_chan;
-	struct dma_async_tx_descriptor *tx;
-	dma_addr_t dma_dest, dma_src;
-	dma_cookie_t cookie;
-	int err = 0;
-	struct completion cmp;
-	unsigned long tmo = 0;
-	unsigned long flags;
+	int ret, pasid, flags = 0;
+	struct dsa_context *ctx = &dsa->priv_ctx;
 
-	src = kzalloc(sizeof(u8) * DSA_TEST_SIZE, GFP_KERNEL);
-	if (!src)
-		return -ENOMEM;
-	dest = kzalloc(sizeof(u8) * DSA_TEST_SIZE, GFP_KERNEL);
-	if (!dest) {
-		kfree(src);
-		return -ENOMEM;
+        /* Allocate and bind a PASID */
+	flags |= SVM_FLAG_SUPERVISOR_MODE;
+
+        ret = intel_svm_bind_mm(&dsa->pdev->dev, &pasid, flags, NULL);
+	if (ret) {
+		printk("sys pasid alloc failed %d\n", ret);
+		return ret;
 	}
 
-	/* Fill in src buffer */
-	for (i = 0; i < DSA_TEST_SIZE; i++)
-		src[i] = (u8)i;
+	INIT_LIST_HEAD(&ctx->mm_list);
+	INIT_LIST_HEAD(&ctx->wq_list);
 
-	/* Test copy, using each DMA channel */
-	list_for_each_entry(dma_chan, &dma->channels, device_node) {
-		memset(dest, 0, DSA_TEST_SIZE);
+	ctx->pasid = pasid;
+	ctx->dsa = dsa;
+        ctx->svm_dev = &dsa->pdev->dev;
 
-		printk("testing memcpy using wq dedicated %d idx %d \n", to_dsa_wq(dma_chan)->dedicated, to_dsa_wq(dma_chan)->idx);
+	printk("system pasid %d\n", pasid);
 
-		if (dma->device_alloc_chan_resources(dma_chan) < 1) {
-			dev_err(dev, "selftest cannot allocate chan resource\n");
-			err = -ENODEV;
-			goto out;
-		}
+	dsa->pasid_enabled = true;
+	dsa->system_pasid = pasid;
 
-		dma_src = dma_map_single(dev, src, DSA_TEST_SIZE, DMA_TO_DEVICE);
-		if (dma_mapping_error(dev, dma_src)) {
-			dev_err(dev, "mapping src buffer failed\n");
-			goto free_resources;
-		}
-		dma_dest = dma_map_single(dev, dest, DSA_TEST_SIZE, DMA_FROM_DEVICE);
-		if (dma_mapping_error(dev, dma_dest)) {
-			dev_err(dev, "mapping dest buffer failed\n");
-			goto unmap_src;
-		}
-		flags = DMA_PREP_INTERRUPT;
-		tx = dsa->dma_dev.device_prep_dma_memcpy(dma_chan, dma_dest,
-						      dma_src, DSA_TEST_SIZE,
-						      flags);
-		if (!tx) {
-			dev_err(dev, "Self-test prep failed, disabling\n");
-			err = -ENODEV;
-			goto unmap_dma;
-		}
+	return ret;
+}
 
-		async_tx_ack(tx);
-		init_completion(&cmp);
-		tx->callback = dsa_dma_test_callback;
-		tx->callback_param = &cmp;
-		cookie = tx->tx_submit(tx);
-		if (cookie < 0) {
-			dev_err(dev, "Self-test setup failed, disabling\n");
-			err = -ENODEV;
-			goto unmap_dma;
-		}
-		dma->device_issue_pending(dma_chan);
 
-		tmo = wait_for_completion_timeout(&cmp, msecs_to_jiffies(100));
+static int dsa_disable_system_pasid(struct dsadma_device *dsa)
+{
+	int ret = 0;
+	struct dsa_context *ctx = &dsa->priv_ctx;
 
-		if (tmo == 0 ||
-	    	dma->device_tx_status(dma_chan, cookie, NULL)
-						!= DMA_COMPLETE) {
-			dev_err(dev, "Self-test copy timed out, disabling\n");
-			err = -ENODEV;
-			goto unmap_dma;
+        if (ctx->svm_dev) {
+                /* FIXME: drain the pasid before unbinding it */
+                //dsa_ctx_drain_pasid(ctx);
+
+        	ret = intel_svm_unbind_mm(ctx->svm_dev, ctx->pasid);
+		if (ret) {
+			printk("sys pasid unbind failed %d\n", ret);
+			return ret;
 		}
-		if (memcmp(src, dest, DSA_TEST_SIZE)) {
-			dev_err(dev, "Self-test copy failed compare, disabling\n");
-			err = -ENODEV;
-			goto unmap_dma;
-		}
-unmap_dma:
-		dma_unmap_single(dev, dma_dest, DSA_TEST_SIZE, DMA_FROM_DEVICE);
-unmap_src:
-		dma_unmap_single(dev, dma_src, DSA_TEST_SIZE, DMA_TO_DEVICE);
-free_resources:
-		dma->device_free_chan_resources(dma_chan);
-	}
-out:
-	kfree(src);
-	kfree(dest);
-	return err;
+        }
+
+	dsa->pasid_enabled = false;
+
+	return ret;
 }
 
 /**
@@ -533,6 +361,13 @@ static int dsa_probe(struct dsadma_device *dsa_dma)
 		goto err_completion_pool;
 	}
 
+	if (dsa_sys_pasid) {
+		err = dsa_enable_system_pasid(dsa_dma);
+
+		if (err)
+			goto err_self_test;
+	}
+
 	dsa_enumerate_capabilities(dsa_dma);
 
 	dsa_enumerate_work_queues(dsa_dma);
@@ -550,13 +385,11 @@ static int dsa_probe(struct dsadma_device *dsa_dma)
 		goto err_self_test;
 
 	printk("DSA device enabled successfully\n");
-	err = dsa_dma_memcpy_self_test(dsa_dma);
+
+	err = dsa_dma_self_test(dsa_dma);
 	if (err)
 		goto err_self_test;
 
-	err = dsa_dma_batch_memcpy_self_test(dsa_dma);
-	if (err)
-		goto err_self_test;
 	return 0;
 
 err_self_test:
@@ -583,6 +416,8 @@ static int dsa_register(struct dsadma_device *dsa_dma)
 static void dsa_dma_remove(struct dsadma_device *dsa_dma)
 {
 	struct dma_device *dma = &dsa_dma->dma_dev;
+
+	dsa_disable_system_pasid(dsa);
 
 	dsa_disable_interrupts(dsa_dma);
 
@@ -619,7 +454,7 @@ static void dsa_enumerate_capabilities(struct dsadma_device *dsa_dma)
 
 	dma_cap_set(DMA_PRIVATE, dma->cap_mask);
 
-	printk("opcap %llx\n", dsa_dma->opcap);
+	printk("gencap %llx opcap %llx\n", dsa_dma->gencap, dsa_dma->opcap);
 	if (MEMMOVE_SUPPORT(dsa_dma->opcap))
 		dma_cap_set(DMA_MEMCPY, dma->cap_mask);
 	if (MEMFILL_SUPPORT(dsa_dma->opcap))
@@ -702,14 +537,23 @@ static int dsa_init_wq (struct dsadma_device *dsa, int wq_idx)
 	printk("init wq %d dedicated %d sz %d\n", wq_idx, wq->dedicated, wq->wq_size);
 	wq->dsa = dsa;
 	spin_lock_init(&wq->lock);
+
 	wq->dma_chan.device = dma;
 	dma_cookie_init(&wq->dma_chan);
-	list_add_tail(&wq->dma_chan.device_node, &dma->channels);
 	init_timer(&wq->timer);
 	wq->timer.function = dsa_timer_event;
-        wq->timer.data = data;
-	wq->available = 1;
-	wq->allocated = 0;
+       	wq->timer.data = data;
+	/* Currently, report 1 DWQ only to the kernel to be used by the DMA
+	 * APIs. The rest of the WQs are for SVM clients */
+	if (wq->dedicated && !dsa->num_kern_dwqs) {
+		list_add_tail(&wq->dma_chan.device_node, &dma->channels);
+		dsa->num_kern_dwqs++;
+		wq->available = 0;
+		wq->allocated = 1;
+	} else {
+		wq->available = 1;
+		wq->allocated = 0;
+	}
 
 	/* Each WQCONFIG register is 16 bytes (A, B, C, and D registers) */
 	wq_offset = DSA_WQCFG_OFFSET + wq_idx * 16;
@@ -722,6 +566,12 @@ static int dsa_init_wq (struct dsadma_device *dsa, int wq_idx)
 	wqcfg.c.c_fields.priority = wq->priority;
 	wqcfg.c.c_fields.u_s = 1;
 
+	/* SWQ can only work if PASID is enabled */
+	if (!wq->dedicated && dsa->pasid_enabled)
+		wqcfg.c.c_fields.paside = 1;
+	else 
+		wqcfg.c.c_fields.paside = 0;
+
 	writel(wqcfg.c.val, dsa->reg_base + wq_offset + 8);
 	
 	wqcfg.b.b_fields.threshold = wq->threshold;
@@ -731,6 +581,83 @@ static int dsa_init_wq (struct dsadma_device *dsa, int wq_idx)
 	wqcfg.a.a_fields.wq_size = wq->wq_size;
 
 	writel(wqcfg.a.val, dsa->reg_base + wq_offset);
+
+	return 0;
+}
+
+int dsa_wq_disable_pasid (struct dsadma_device *dsa, int wq_idx)
+{
+	struct dsa_work_queue_reg wqcfg;
+	unsigned int wq_offset;
+
+	memset(&wqcfg, 0, sizeof(wqcfg));
+
+	/* Each WQCONFIG register is 16 bytes (A, B, C, and D registers) */
+	wq_offset = DSA_WQCFG_OFFSET + wq_idx * 16;
+
+	wqcfg.d.val = readl(dsa->reg_base + wq_offset + 0xC);
+
+	/* First disable the WQ */
+	if (dsa_disable_wq(dsa, wq_offset, &wqcfg)) {
+		printk("Error disabling the wq %d %x\n", wq_idx,
+					wqcfg.d.d_fields.wq_err);
+		return -ENODEV;
+	}
+
+	/* Change the PASID */
+	wqcfg.c.val = readl(dsa->reg_base + wq_offset + 8);
+
+	wqcfg.c.c_fields.u_s = 1;
+	wqcfg.c.c_fields.paside = 0;
+	wqcfg.c.c_fields.pasid = 0;
+
+	writel(wqcfg.c.val, dsa->reg_base + wq_offset + 8);
+
+	/* Now re-enable the WQ */
+	if (dsa_enable_wq(dsa, wq_offset, &wqcfg)) {
+		printk("Error re-enabling the wq %d %x\n", wq_idx,
+					wqcfg.d.d_fields.wq_err);
+		return -ENODEV;
+	}
+
+	return 0;
+}
+
+int dsa_wq_set_pasid (struct dsadma_device *dsa, int wq_idx, int pasid,
+				bool privilege)
+{
+	struct dsa_work_queue_reg wqcfg;
+	unsigned int wq_offset;
+
+	memset(&wqcfg, 0, sizeof(wqcfg));
+
+	/* Each WQCONFIG register is 16 bytes (A, B, C, and D registers) */
+	wq_offset = DSA_WQCFG_OFFSET + wq_idx * 16;
+
+	wqcfg.d.val = readl(dsa->reg_base + wq_offset + 0xC);
+
+	/* First disable the WQ */
+	if (dsa_disable_wq(dsa, wq_offset, &wqcfg)) {
+		printk("Error disabling the wq %d %x\n", wq_idx,
+					wqcfg.d.d_fields.wq_err);
+		return -ENODEV;
+	}
+
+	/* Change the PASID */
+	wqcfg.c.val = readl(dsa->reg_base + wq_offset + 8);
+
+	wqcfg.c.c_fields.u_s = privilege;
+	wqcfg.c.c_fields.paside = 1;
+	wqcfg.c.c_fields.pasid = pasid;
+
+	writel(wqcfg.c.val, dsa->reg_base + wq_offset + 8);
+
+	/* Now re-enable the WQ */
+	if (dsa_enable_wq(dsa, wq_offset, &wqcfg)) {
+		printk("Error re-enabling the wq %d %x\n", wq_idx,
+					wqcfg.d.d_fields.wq_err);
+		return -ENODEV;
+	}
 
 	return 0;
 }
@@ -833,7 +760,6 @@ static int dsa_enumerate_work_queues(struct dsadma_device *dsa)
 
 	for (i = 0; i < dsa->num_wqs; i++) {
 		dsa_init_wq(dsa, i);
-		spin_lock_init(&dsa->wqs[i].lock);
 	}
 	return 0;
 }
@@ -993,7 +919,7 @@ static const struct file_operations dsa_fops = {
         .compat_ioctl   = dsa_fops_compat_ioctl,
 #endif
         .mmap           = dsa_fops_mmap,
-	.poll           = dsa_fops_poll,
+	//.poll           = dsa_fops_poll,
 };
 
 static struct miscdevice dsa_dev = {
@@ -1025,6 +951,9 @@ alloc_dsadma(struct pci_dev *pdev, void __iomem * const *iomap)
 	d->reg_base = iomap[DSA_MMIO_BAR];
 	d->wq_reg_base = iomap[DSA_WQ_BAR];
 	d->gwq_reg_base = iomap[DSA_GUEST_WQ_BAR];
+
+	spin_lock_init(&d->cmd_lock);
+
 	return d;
 }
 

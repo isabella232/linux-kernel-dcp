@@ -120,7 +120,7 @@ void dsa_stop(struct dsa_work_queue *dsa_wq)
 #endif
 }
 
-static void __iomem *dsa_get_wq_reg(struct dsadma_device *dsa, int wq_idx,
+void __iomem *dsa_get_wq_reg(struct dsadma_device *dsa, int wq_idx,
 				int msix_idx, bool priv)
 {
 	u32 wq_offset;
@@ -135,10 +135,31 @@ static void __iomem *dsa_get_wq_reg(struct dsadma_device *dsa, int wq_idx,
 	return (dsa->wq_reg_base + wq_offset);
 }
 
-static void __dsa_issue_pending(struct dsa_work_queue *wq)
+int dsa_enqcmds (struct dsa_dma_descriptor *hw, void __iomem * wq_reg)
+{
+        int retry_count = 5;
+
+	retry_count = 0;
+
+	while (retry_count < 5) {
+		if (!enqcmds(hw, wq_reg))
+			break;
+		else
+			printk("received retry\n");
+		retry_count++;
+	}
+	if (retry_count >= 5) {
+		/* FIXME: handle this case */
+		printk("retry returned %p %p\n", hw, wq_reg);
+		return 1;
+	}
+        return 0;
+}
+
+void __dsa_issue_pending(struct dsa_work_queue *wq)
 {
 	struct dsa_completion_ring *dring;
-	int i, pending, retry_count;
+	int i, pending;
 	struct dsa_ring_ent *desc;
 	void __iomem * wq_reg;
 
@@ -153,27 +174,15 @@ static void __dsa_issue_pending(struct dsa_work_queue *wq)
 
 		wq_reg = dsa_get_wq_reg(wq->dsa, wq->idx, dring->idx, 1);
 
-		printk("desc op %x wq_reg %p ded %d compl %llx\n", desc->desc->opcode, wq_reg, wq->dedicated, desc->desc->compl_addr);
+		printk("desc op %x reg %p ded %d c %llx\n", desc->desc->opcode,
+			wq_reg, wq->dedicated, desc->desc->compl_addr);
 
 		if (wq->dedicated) {
 			/* use MOVDIR64B for DWQ */
 			movdir64b(desc->desc, wq_reg);
 		} else {
 			/* use ENQCMDS for SWQ */
-			retry_count = 0;
-
-			while (retry_count < 5) {
-				if (!enqcmds(desc->desc, wq_reg))
-					break;
-				else
-					printk("received retry\n");
-				retry_count++;
-			}
-			if (retry_count >= 5) {
-				/* FIXME: handle this case */
-				printk("retry returned %p %p\n", desc->desc,
-							dring->wq_reg);
-			}
+			dsa_enqcmds(desc->desc, wq_reg);
 		}
 		dring->issued++;
 	}
@@ -655,10 +664,10 @@ void dsa_wq_cleanup(unsigned long data)
 			if (tx->cookie) {
 				dma_cookie_complete(tx);
 				dma_descriptor_unmap(tx);
-				if (tx->callback) {
-					tx->callback(tx->callback_param);
-					tx->callback = NULL;
-				}
+			}
+			if (tx->callback) {
+				tx->callback(tx->callback_param);
+				tx->callback = NULL;
 			}
 			comp->status = 0;
 		} else if (comp->status) {

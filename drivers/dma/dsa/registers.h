@@ -53,7 +53,6 @@
 /* General Capabilities */
 #define DSA_CAP_BLOCK_ON_FAULT			0x0000000000000001
 #define DSA_CAP_DEST_CACHE_FILL			0x0000000000000002
-#define DSA_CAP_DEST_NO_SNOOP			0x0000000000000004
 #define DSA_CAP_IMS				0x0000000000000040
 #define DSA_CAP_DEST_RDBACK			0x0000000000000100
 #define DSA_CAP_DUR_WRITE			0x0000000000000200
@@ -64,8 +63,12 @@
 #define DSA_CAP_MAX_XFER_MASK			0x0000000F00000000
 #define DSA_CAP_MAX_XFER_SHIFT			32
 
-#define DSA_CAP_IMS_MASK			0xFFFF000000000000
-#define DSA_CAP_IMS_SHIFT			16
+#define DSA_CAP_IMS_MASK			0x000003F000000000
+#define DSA_CAP_IMS_SHIFT			36
+
+#define DSA_CAP_USER_MASK  (DSA_CAP_BLOCK_ON_FAULT | DSA_CAP_DEST_CACHE_FILL | \
+			DSA_CAP_DEST_RDBACK | DSA_CAP_DUR_WRITE | \
+			DSA_CAP_MAX_BATCH_MASK | DSA_CAP_MAX_XFER_MASK)
 
 /* Work Queue Capabilities */
 #define DSA_CAP_SWQ				0x0001000000000000
@@ -99,5 +102,22 @@
 #define DSA_INTCAUSE_SWERR		0x2
 #define DSA_INTCAUSE_CMD_COMPLETION	0x4
 #define DSA_INTCAUSE_WQ_OCCUPANCY	0x8
+
+union dsa_command_reg {
+	struct {
+		uint32_t operand:20;
+		uint32_t rci:1;
+		uint32_t rsvd:3;
+#define DRAIN_ALL    1
+#define DRAIN_PASID  2
+#define DRAIN_WQ     3
+#define DRAIN_CMD_TIMEOUT    10000
+		uint32_t cmd:4;
+		uint32_t abort:1;
+		uint32_t rsvd2:2;
+		uint32_t status:1;
+	}fields;
+	uint32_t val;
+};
 
 #endif /* _DSA_REGISTERS_H_ */
