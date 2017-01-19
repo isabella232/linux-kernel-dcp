@@ -172,8 +172,7 @@ static int dsa_disable_system_pasid(struct dsadma_device *dsa)
 	struct dsa_context *ctx = &dsa->priv_ctx;
 
         if (ctx->svm_dev) {
-                /* FIXME: drain the pasid before unbinding it */
-                //dsa_ctx_drain_pasid(ctx);
+                dsa_ctx_drain_pasid(ctx, 0);
 
         	ret = intel_svm_unbind_mm(ctx->svm_dev, ctx->pasid);
 		if (ret) {
@@ -305,6 +304,7 @@ int dsa_dma_setup_interrupts(struct dsadma_device *dsa)
 		data = (unsigned long)dsa_ring;
 
 		if (i == 0) {
+			dsa_ring->dsa = dsa;
 			err = devm_request_irq(dev, msix->vector,
 				       dsa_misc_interrupt, 0,
 				       "dsa-msix", dsa_ring);

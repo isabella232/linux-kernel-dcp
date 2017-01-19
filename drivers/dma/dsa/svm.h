@@ -30,6 +30,6 @@ long dsa_fops_compat_ioctl(struct file *filep,
 int dsa_fops_mmap(struct file *filep, struct vm_area_struct *vma);
 //unsigned int dsa_fops_poll(struct file *file, poll_table * wait);
 
-int dsa_ctx_drain_pasid (struct dsa_context *ctx);
+int dsa_ctx_drain_pasid (struct dsa_context *ctx, bool abort);
 
 #endif

@@ -50,7 +50,7 @@ int dsa_fops_open(struct inode *inode, struct file *filep)
         return 0;
 }
 
-int dsa_ctx_drain_pasid (struct dsa_context *ctx)
+int dsa_ctx_drain_pasid (struct dsa_context *ctx, bool abort)
 {
 	union dsa_command_reg reg;
 	struct dsadma_device *dsa = ctx->dsa;
@@ -58,11 +58,12 @@ int dsa_ctx_drain_pasid (struct dsa_context *ctx)
 
 	memset(&reg, 0, sizeof(union dsa_command_reg));
 
+	printk("draining pasid %d %d\n", ctx->pasid, abort);
 	spin_lock(&dsa->cmd_lock);
 
 	reg.fields.operand = ctx->pasid;
 	reg.fields.cmd = DRAIN_PASID;
-	reg.fields.abort = 1;
+	reg.fields.abort = abort;
 	writel(reg.val, dsa->reg_base + DSA_CMD_OFFSET);
 
 	/* wait for completion */
@@ -78,8 +79,7 @@ int dsa_ctx_drain_pasid (struct dsa_context *ctx)
 		printk("drain pasid time out %d\n", ctx->pasid);
 		/* FIXME: the device likely needs reset to recover from this */
 		return 1;
-	} else 
-		printk("completed drain pasid %d %d\n", i, ctx->pasid);
+	}
 
 	return 0;
 }
@@ -91,8 +91,7 @@ int dsa_fops_release(struct inode *inode, struct file *filep)
         filep->private_data = NULL;
 
 	if (ctx->svm_dev) {
-		/* FIXME: drain the pasid before unbinding it */
-		//dsa_ctx_drain_pasid(ctx);
+		dsa_ctx_drain_pasid(ctx, 1);
 
 		intel_svm_unbind_mm(ctx->svm_dev, ctx->pasid);
 		put_task_struct(ctx->tsk);
@@ -110,7 +109,7 @@ int dsa_fops_release(struct inode *inode, struct file *filep)
 	}
 
 
-	pr_emerg("closed the user context\n");
+	printk("closed the user context\n");
         return 0;
 }
 
@@ -125,7 +124,8 @@ static void dsa_svm_fault_cb(struct device *dev, int pasid, u64 addr,
                               u32 private, int rwxp, int response)
 {
 
-	pr_emerg("page fault: pasid %x addr %llx %x\n", pasid, addr, rwxp);
+	printk("page fault: pasid %x addr %llx priv %x rwxp %x resp %d\n",
+			pasid, addr, private, rwxp, response);
 }
 
 static struct svm_dev_ops dsa_svm_ops = {
@@ -184,6 +184,8 @@ static int dsa_ioctl_wq_alloc (struct dsa_context *ctx, unsigned long arg)
 	}
 
 	printk("wq_alloc: searching wq ded %d\n", req.dedicated);
+
+	/* FIXME: Use proper locks to provide mutual exclusion b/w processes */
 	for (i = 0; i < dsa->num_wqs; i++) {
 		wq = &ctx->dsa->wqs[i];
 		if (req.dedicated == wq->dedicated && wq->available)
@@ -195,8 +197,6 @@ static int dsa_ioctl_wq_alloc (struct dsa_context *ctx, unsigned long arg)
 		return -ENODEV;
 
 	printk("wq_alloc: wq %d dedicated %d\n", wq->idx, wq->dedicated);
-	wq->available = 0;
-	wq->allocated = 1;
 	ctx->wq_idx = wq->idx;
 
 	init_waitqueue_head(&ctx->intr_queue);
@@ -225,6 +225,8 @@ static int dsa_ioctl_wq_alloc (struct dsa_context *ctx, unsigned long arg)
 
 	/* If dedicated queue, configure PASID into WQ PASID register */
 	if (wq->dedicated) {
+		wq->available = 0;
+		wq->allocated = 1;
 		ret = dsa_wq_set_pasid(dsa, ctx->wq_idx, ctx->pasid, 0);
 		if (ret)
 			printk("set_pasid failed\n");
