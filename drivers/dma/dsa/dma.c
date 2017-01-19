@@ -63,20 +63,35 @@ irqreturn_t dsa_misc_interrupt(int irq, void *data)
 
 	int_cause = readl(dsa->reg_base + DSA_INTCAUSE_OFFSET);
 
+	/* Write to clear the int cause register */
+	writel(int_cause, dsa->reg_base + DSA_INTCAUSE_OFFSET);
+
 	printk("INTCAUSE %x\n", int_cause);
 
 	if (int_cause & DSA_INTCAUSE_HWERR) {
 		u16 hwerr;
 		hwerr = readw(dsa->reg_base + DSA_HWERR_OFFSET);
 		printk("HWERR %x\n", hwerr);
-		writew(hwerr, dsa->reg_base + DSA_HWERR_OFFSET);
+		writew(0x3, dsa->reg_base + DSA_HWERR_OFFSET);
 	}
 	if (int_cause & DSA_INTCAUSE_SWERR) {
-		u64 swerr;
-		swerr = readq(dsa->reg_base + DSA_SWERR_OFFSET);
-		printk("SWERR %llx\n", swerr);
-		writeq(swerr, dsa->reg_base + DSA_SWERR_OFFSET);
+		struct dsa_swerr_reg swerr;
+		swerr.qw1.val = readq(dsa->reg_base + DSA_SWERR_OFFSET);
+		printk("SWERR %llx\n", swerr.qw1.val);
+		if (swerr.qw1.qw1_fields.desc_valid &&
+					swerr.qw1.qw1_fields.batch) {
+			swerr.qw2.val =
+				readq(dsa->reg_base + DSA_SWERR_OFFSET + 0x8);
+			printk("batchidx %x\n", swerr.qw2.qw2_fields.batch_idx);
+		}
+		if (swerr.qw1.qw1_fields.err_code == 0x45) {
+			swerr.qw3_address =
+				readq(dsa->reg_base + DSA_SWERR_OFFSET + 0x10);
+			printk("address %llx\n", swerr.qw3_address);
+		}
+		writeq(0x3, dsa->reg_base + DSA_SWERR_OFFSET);
 	}
+
 	tasklet_schedule(&dsa_ring->cleanup_task);
 
 	return IRQ_HANDLED;

@@ -31,7 +31,7 @@
 #define DSA_INTCAUSE_OFFSET			0x68
 #define DSA_CMD_OFFSET				0x70
 #define DSA_SWERR_OFFSET   	        	0x80
-#define DSA_HWERR_OFFSET   	        	0x90
+#define DSA_HWERR_OFFSET   	        	0xA0
 
 #define DSA_GRPCFG_OFFSET			0x1000
 #define DSA_WQCFG_OFFSET			0x2000
@@ -111,13 +111,47 @@ union dsa_command_reg {
 #define DRAIN_ALL    1
 #define DRAIN_PASID  2
 #define DRAIN_WQ     3
-#define DRAIN_CMD_TIMEOUT    10000
+#define DRAIN_CMD_TIMEOUT    100
 		uint32_t cmd:4;
 		uint32_t abort:1;
 		uint32_t rsvd2:2;
 		uint32_t status:1;
 	}fields;
 	uint32_t val;
+};
+
+struct dsa_swerr_reg {
+	union {
+		struct {
+                        u64 valid:1;
+                        u64 overflow:1;
+			u64 desc_valid:1;
+			u64 wqidx_valid:1;
+			u64 batch:1;
+			u64 rw:1;
+			u64 u_s:1;
+			u64 rsvd:1;
+			u64 err_code:8;
+			u64 wq_idx:8;
+			u64 rsvd1:8;
+			u64 op:8;
+			u64 pasid:20;
+			u64 rsvd2:4;
+                }qw1_fields;
+                u64     val;
+        }qw1;
+
+        union {
+                struct {
+                        u64 batch_idx:16;
+                        u64 rsvd3:48;
+                }qw2_fields;
+                u64     val;
+        }qw2;
+
+	u64 qw3_address;
+
+	u64 qw4_rsvd4;
 };
 
 #endif /* _DSA_REGISTERS_H_ */
