@@ -26,25 +26,31 @@
 #include "hw.h"
 #include "dma.h"
 
-void __dsa_dma_prep_batch_memcpy(struct dsa_work_queue *wq, u64 dest,
-			u64 src, struct dsa_dma_descriptor *hw,
-			u64 compl_addr, size_t len, unsigned long flags)
+inline void __dsa_prep_desc_common(struct dsa_dma_descriptor *hw, char opcode,
+			u64 dest, u64 src, size_t len, unsigned long flags)
 {
-	struct dsadma_device *dsa = wq->dsa;
+	hw->flags = flags;
 
-	printk("preparing descr for batch memcpy %p %llx %ld\n", hw, compl_addr, len);
-
-	//hw->u_s = 1;
-	hw->flags = 0;
-	hw->flags |= DSA_OP_FLAG_CRAV | DSA_OP_FLAG_RCR;
-	if (dsa->gencap & DSA_CAP_BLOCK_ON_FAULT)
-		hw->flags |= DSA_OP_FLAG_BOF;
-
-	hw->opcode = DSA_OPCODE_MEMMOVE;
+	hw->opcode = opcode;
 	hw->src_addr = src;
 	hw->dst_addr = dest;
 	hw->xfer_size = len;
+}
+
+void __dsa_prep_batch_memcpy(struct dsa_work_queue *wq, u64 dst, u64 src,
+			struct dsa_dma_descriptor *hw, u64 compl_addr,
+			size_t len, unsigned long flags)
+{
+	unsigned long desc_flags = 0;
+
+	desc_flags |= DSA_OP_FLAG_CRAV | DSA_OP_FLAG_RCR;
+	if (wq->dsa->gencap & DSA_CAP_BLOCK_ON_FAULT)
+		desc_flags |= DSA_OP_FLAG_BOF;
+
 	hw->compl_addr = compl_addr;
+
+	__dsa_prep_desc_common(hw, DSA_OPCODE_MEMMOVE, dst, src, len,
+							desc_flags);
 }
 
 void dsa_dma_prep_batch_memcpy(struct dma_chan *c, dma_addr_t dma_dest,
@@ -54,14 +60,126 @@ void dsa_dma_prep_batch_memcpy(struct dma_chan *c, dma_addr_t dma_dest,
 	struct dsa_work_queue *wq = to_dsa_wq(c);
 	u64 dst = dma_dest;
 	u64 src = dma_src;
-	u64 completion_addr = compl_addr;
+	u64 comp_addr = compl_addr;
 
-	__dsa_dma_prep_batch_memcpy(wq, dst, src, hw, completion_addr, len,
-				flags);
+	__dsa_prep_batch_memcpy(wq, dst, src, hw, comp_addr, len, flags);
+}
+
+void __dsa_prep_batch_memset(struct dsa_work_queue *wq, u64 dst,
+			unsigned long val, struct dsa_dma_descriptor *hw,
+			u64 compl_addr, size_t len, unsigned long flags)
+{
+	unsigned long desc_flags = 0;
+
+	desc_flags |= DSA_OP_FLAG_CRAV | DSA_OP_FLAG_RCR;
+	if (wq->dsa->gencap & DSA_CAP_BLOCK_ON_FAULT)
+		desc_flags |= DSA_OP_FLAG_BOF;
+
+	hw->compl_addr = compl_addr;
+
+	__dsa_prep_desc_common(hw, DSA_OPCODE_MEMFILL, dst, val, len,desc_flags);
+}
+
+void dsa_dma_prep_batch_memset(struct dma_chan *c, dma_addr_t dma_dest,
+			int value, struct dsa_dma_descriptor *hw,
+			dma_addr_t compl_addr, size_t len, unsigned long flags)
+{
+	struct dsa_work_queue *wq = to_dsa_wq(c);
+	u64 dst = dma_dest;
+	u64 val = value;
+	u64 comp_addr = compl_addr;
+
+	__dsa_prep_batch_memset(wq, dst, val, hw, comp_addr, len, flags);
+}
+
+void __dsa_prep_batch_compare(struct dsa_work_queue *wq, u64 src1, u64 src2,
+			struct dsa_dma_descriptor *hw, u64 compl_addr,
+			size_t len, unsigned long flags)
+{
+	unsigned long desc_flags = 0;
+
+	desc_flags |= DSA_OP_FLAG_CRAV | DSA_OP_FLAG_RCR;
+	if (wq->dsa->gencap & DSA_CAP_BLOCK_ON_FAULT)
+		desc_flags |= DSA_OP_FLAG_BOF;
+
+	hw->compl_addr = compl_addr;
+
+	__dsa_prep_desc_common(hw, DSA_OPCODE_COMPARE, src1, src2, len,
+							desc_flags);
+}
+
+void dsa_dma_prep_batch_compare(struct dma_chan *c, dma_addr_t dma_src1,
+			dma_addr_t dma_src2, struct dsa_dma_descriptor *hw,
+			dma_addr_t compl_addr, size_t len, unsigned long flags)
+{
+	struct dsa_work_queue *wq = to_dsa_wq(c);
+	u64 src1 = dma_src1;
+	u64 src2 = dma_src2;
+	u64 comp_addr = compl_addr;
+
+	__dsa_prep_batch_memcpy(wq, src1, src2, hw, comp_addr, len, flags);
+}
+
+void __dsa_prep_batch_compval(struct dsa_work_queue *wq, u64 val, u64 src,
+			struct dsa_dma_descriptor *hw, u64 compl_addr,
+			size_t len, unsigned long flags)
+{
+	unsigned long desc_flags = 0;
+
+	desc_flags |= DSA_OP_FLAG_CRAV | DSA_OP_FLAG_RCR;
+	if (wq->dsa->gencap & DSA_CAP_BLOCK_ON_FAULT)
+		desc_flags |= DSA_OP_FLAG_BOF;
+
+	hw->compl_addr = compl_addr;
+
+	__dsa_prep_desc_common(hw, DSA_OPCODE_COMPVAL, val, src, len,
+							desc_flags);
+}
+
+void dsa_dma_prep_batch_compval(struct dma_chan *c, unsigned long value,
+			dma_addr_t dma_src, struct dsa_dma_descriptor *hw,
+			dma_addr_t compl_addr, size_t len, unsigned long flags)
+{
+	struct dsa_work_queue *wq = to_dsa_wq(c);
+	u64 src = dma_src;
+	u64 comp_addr = compl_addr;
+
+	__dsa_prep_batch_compval(wq, value, src, hw, comp_addr, len, flags);
+}
+
+void __dsa_prep_batch_dualcast(struct dsa_work_queue *wq, u64 dst1, u64 dst2,
+			u64 src, struct dsa_dma_descriptor *hw, u64 compl_addr,
+			size_t len, unsigned long flags)
+{
+	unsigned long desc_flags = 0;
+
+	desc_flags |= DSA_OP_FLAG_CRAV | DSA_OP_FLAG_RCR;
+	if (wq->dsa->gencap & DSA_CAP_BLOCK_ON_FAULT)
+		desc_flags |= DSA_OP_FLAG_BOF;
+
+	hw->compl_addr = compl_addr;
+	hw->op.dcast.dest2 = dst2;
+
+	__dsa_prep_desc_common(hw, DSA_OPCODE_COMPVAL, dst1, src, len,
+							desc_flags);
+}
+
+void dsa_dma_prep_batch_dualcast(struct dma_chan *c, dma_addr_t dest1,
+		dma_addr_t dest2, dma_addr_t dma_src, struct dsa_dma_descriptor
+		*hw, dma_addr_t compl_addr, size_t len, unsigned long flags)
+{
+	struct dsa_work_queue *wq = to_dsa_wq(c);
+	u64 src = dma_src;
+	u64 dst1 = dest1;
+	u64 dst2 = dest2;
+	u64 comp_addr = compl_addr;
+
+	__dsa_prep_batch_dualcast(wq, dst1, dst2, src, hw, comp_addr, len,
+							flags);
 }
 
 struct dma_async_tx_descriptor *
-__dsa_dma_prep_batch(struct dsa_work_queue *wq, u64 batch_addr,
+__dsa_prep_batch(struct dsa_work_queue *wq, u64 batch_addr,
 			   int num_descs, unsigned long flags)
 {
 	struct dsadma_device *dsa = wq->dsa;
@@ -69,9 +187,10 @@ __dsa_dma_prep_batch(struct dsa_work_queue *wq, u64 batch_addr,
 	struct dsa_dma_descriptor *hw;
 	struct dsa_ring_ent *desc;
 	int idx;
+	unsigned long desc_flags;
 
-	if (num_descs > dsa->max_batch_size) {
-		printk("batch size %d > max batch size %d\n", num_descs, dsa->max_batch_size);
+	if (num_descs == 0 || num_descs > dsa->max_batch_size) {
+		printk("invalid batch size %d\n", num_descs);
 		return NULL;
 	}
 
@@ -80,19 +199,16 @@ __dsa_dma_prep_batch(struct dsa_work_queue *wq, u64 batch_addr,
 
 	dring = dsa_get_completion_ring(dsa, wq->idx);
 
-        if (likely(num_descs)) {
-		spin_lock_bh(&dring->cleanup_lock);
-		if (dsa_ring_space(dring)) {
-                	idx = dring->head;
-			dring->head++;
-		} else {
-			goto no_space_unlock;
-		}
-		spin_unlock_bh(&dring->cleanup_lock);
-        } else
-                return NULL;
+	spin_lock_bh(&dring->cleanup_lock);
+	if (dsa_ring_space(dring)) {
+		idx = dring->head;
+		dring->head++;
+	} else {
+		goto no_space_unlock;
+	}
+	spin_unlock_bh(&dring->cleanup_lock);
 
-	printk("preparing batch using %d descs ring %d h:t %d:%d\n", num_descs, dring->idx, idx, dring->tail);
+	//printk("preparing batch using %d descs ring %d h:t %d:%d\n", num_descs, dring->idx, idx, dring->tail);
 
 	desc = dsa_get_ring_ent(dring, idx);
 
@@ -101,23 +217,21 @@ __dsa_dma_prep_batch(struct dsa_work_queue *wq, u64 batch_addr,
 
 	hw = desc->desc;
 
-	hw->u_s = 1;
 	/* Set the PASID and completion addr kva for SWQ */
 	if (wq->dedicated == 0) {
+		hw->u_s = 1;
 		hw->pasid = wq->dsa->system_pasid;
-		hw->compl_addr = (uint64_t) desc->completion;
 	}
-	hw->flags = 0;
-	hw->flags |= DSA_OP_FLAG_CRAV | DSA_OP_FLAG_RCR | DSA_OP_FLAG_RCI;
+	desc_flags = DSA_OP_FLAG_CRAV | DSA_OP_FLAG_RCR | DSA_OP_FLAG_RCI;
+	if (dsa->gencap & DSA_CAP_BLOCK_ON_FAULT)
+		desc_flags |= DSA_OP_FLAG_BOF;
 
-	hw->opcode = DSA_OPCODE_BATCH;
-
-	hw->src_addr = batch_addr;
-	hw->xfer_size = num_descs;
+	__dsa_prep_desc_common(hw, DSA_OPCODE_BATCH, 0, batch_addr, num_descs,
+						desc_flags);
 
 	desc->txd.flags = flags;
 	dma_async_tx_descriptor_init(&desc->txd, &wq->dma_chan);
-	printk("prepared descs h:t %d:%d\n", dring->head, dring->tail);
+	//printk("prepared descs h:t %d:%d\n", dring->head, dring->tail);
 	return &desc->txd;
 
 no_space_unlock:
@@ -132,12 +246,12 @@ dsa_dma_prep_batch(struct dma_chan *c, dma_addr_t dma_batch,
 	struct dsa_work_queue *wq = to_dsa_wq(c);
 	u64 batch_addr = dma_batch;
 
-	return __dsa_dma_prep_batch(wq, batch_addr, num_descs, flags);
+	return __dsa_prep_batch(wq, batch_addr, num_descs, flags);
 }
 
 
 struct dma_async_tx_descriptor *
-__dsa_dma_prep_memcpy(struct dsa_work_queue *wq, u64 dst,
+__dsa_prep_memcpy(struct dsa_work_queue *wq, u64 dst,
 			   u64 src, size_t len, unsigned long flags)
 {
 	struct dsadma_device *dsa = wq->dsa;
@@ -146,27 +260,31 @@ __dsa_dma_prep_memcpy(struct dsa_work_queue *wq, u64 dst,
 	struct dsa_ring_ent *desc;
 	size_t total_len = len;
 	int num_descs, idx, i;
+	unsigned long desc_flags;
 
-	if (test_bit(DSA_WQ_DISABLED, &wq->state))
+	if (test_bit(DSA_WQ_DISABLED, &wq->state) || len == 0)
 		return NULL;
 
 	num_descs = dsa_xferlen_to_descs(wq, len);
 
 	dring = dsa_get_completion_ring(dsa, wq->idx);
 
-        if (likely(num_descs)) {
-		spin_lock_bh(&dring->cleanup_lock);
-		if (num_descs <= dsa_ring_space(dring)) {
-                	idx = dring->head;
-			dring->head += num_descs;
-		} else {
-			goto no_space_unlock;
-		}
-		spin_unlock_bh(&dring->cleanup_lock);
-        } else
-                return NULL;
+	spin_lock_bh(&dring->cleanup_lock);
+	if (num_descs <= dsa_ring_space(dring)) {
+               	idx = dring->head;
+		dring->head += num_descs;
+	} else {
+		goto no_space_unlock;
+	}
+	spin_unlock_bh(&dring->cleanup_lock);
 
-	printk("preparing memcpy using %d descs ring %d h:t %d:%d\n", num_descs, dring->idx, idx, dring->tail);
+	printk("preparing memcpy using %d descs ring %d h:t %d:%d\n",
+				num_descs, dring->idx, idx, dring->tail);
+
+	desc_flags = DSA_OP_FLAG_CRAV | DSA_OP_FLAG_RCR | DSA_OP_FLAG_RCI;
+	if (dsa->gencap & DSA_CAP_BLOCK_ON_FAULT)
+		desc_flags |= DSA_OP_FLAG_BOF;
+
 	i = 0;
 	do {
 		size_t copy = min_t(size_t, len, 1 << dsa->max_xfer_bits);
@@ -178,29 +296,17 @@ __dsa_dma_prep_memcpy(struct dsa_work_queue *wq, u64 dst,
 
 		hw = desc->desc;
 
-		hw->u_s = 1;
-
-		/* Set the PASID and completion addr kva for SWQ */
+		/* Set the PASID and U/S for SWQ */
 		if (wq->dedicated == 0) {
+			hw->u_s = 1;
 			hw->pasid = wq->dsa->system_pasid;
-			hw->compl_addr = (uint64_t) desc->completion;
 		}
 
-		hw->flags = 0;
-		hw->flags |= DSA_OP_FLAG_CRAV | DSA_OP_FLAG_RCR | DSA_OP_FLAG_RCI;
-		if (dsa->gencap & DSA_CAP_BLOCK_ON_FAULT)
-			hw->flags |= DSA_OP_FLAG_BOF;
-
-		hw->opcode = DSA_OPCODE_MEMMOVE;
-
-		hw->src_addr = src;
-		hw->dst_addr = dst;
-		hw->xfer_size = copy;
-
+		__dsa_prep_desc_common(hw, DSA_OPCODE_MEMMOVE, dst, src, copy,
+							desc_flags);
 		len -= copy;
 		dst += copy;
 		src += copy;
-		//dump_desc_dbg(wq, desc);
 	} while (++i < num_descs);
 
 	printk("prepared descs h:t %d:%d\n", dring->head, dring->tail);
@@ -221,17 +327,334 @@ dsa_dma_prep_memcpy(struct dma_chan *c, dma_addr_t dma_dest,
 	u64 dst = dma_dest;
 	u64 src = dma_src;
 
-	return __dsa_dma_prep_memcpy(wq, dst, src, len, flags);
+	return __dsa_prep_memcpy(wq, dst, src, len, flags);
+}
+
+struct dma_async_tx_descriptor *
+__dsa_prep_memset(struct dsa_work_queue *wq, u64 dst,
+			   u64 value, size_t len, unsigned long flags)
+{
+	struct dsadma_device *dsa = wq->dsa;
+	struct dsa_completion_ring *dring;
+	struct dsa_dma_descriptor *hw;
+	struct dsa_ring_ent *desc;
+	size_t total_len = len;
+	int num_descs, idx, i;
+	unsigned long desc_flags;
+
+	if (test_bit(DSA_WQ_DISABLED, &wq->state) || len == 0)
+		return NULL;
+
+	num_descs = dsa_xferlen_to_descs(wq, len);
+
+	dring = dsa_get_completion_ring(dsa, wq->idx);
+
+	spin_lock_bh(&dring->cleanup_lock);
+	if (num_descs <= dsa_ring_space(dring)) {
+		idx = dring->head;
+		dring->head += num_descs;
+	} else {
+		goto no_space_unlock;
+	}
+	spin_unlock_bh(&dring->cleanup_lock);
+
+	printk("preparing memset using %d descs ring %d h:t %d:%d\n",
+			num_descs, dring->idx, idx, dring->tail);
+
+	desc_flags = DSA_OP_FLAG_CRAV | DSA_OP_FLAG_RCR | DSA_OP_FLAG_RCI;
+	if (dsa->gencap & DSA_CAP_BLOCK_ON_FAULT)
+		desc_flags |= DSA_OP_FLAG_BOF;
+
+	i = 0;
+	do {
+		size_t fill = min_t(size_t, len, 1 << dsa->max_xfer_bits);
+
+		desc = dsa_get_ring_ent(dring, idx + i);
+
+		desc->len = total_len;
+		desc->wq = wq;
+
+		hw = desc->desc;
+
+		/* Set the PASID and U/S for SWQ */
+		if (wq->dedicated == 0) {
+			hw->u_s = 1;
+			hw->pasid = wq->dsa->system_pasid;
+		}
+
+		/* src_addr is the location of value for memfill descriptor */
+		__dsa_prep_desc_common(hw, DSA_OPCODE_MEMFILL, dst, value, fill,
+							desc_flags);
+
+		len -= fill;
+		dst += fill;
+	} while (++i < num_descs);
+
+	printk("prepared descs h:t %d:%d\n", dring->head, dring->tail);
+	desc->txd.flags = flags;
+	dma_async_tx_descriptor_init(&desc->txd, &wq->dma_chan);
+	return &desc->txd;
+
+no_space_unlock:
+	spin_unlock_bh(&dring->cleanup_lock);
+	return NULL;
 }
 
 struct dma_async_tx_descriptor *
 dsa_dma_prep_memset(struct dma_chan *c, dma_addr_t dma_dest,
 			   int value, size_t len, unsigned long flags)
 {
-	/* FIXME: */
+	struct dsa_work_queue *wq = to_dsa_wq(c);
+	u64 dst = dma_dest;
+	u64 val = value;
+
+	return __dsa_prep_memset(wq, dst, val, len, flags);
+}
+
+
+struct dma_async_tx_descriptor *
+__dsa_prep_compare(struct dsa_work_queue *wq, u64 src1,
+			   u64 src2, size_t len, unsigned long flags)
+{
+	struct dsadma_device *dsa = wq->dsa;
+	struct dsa_completion_ring *dring;
+	struct dsa_dma_descriptor *hw;
+	struct dsa_ring_ent *desc;
+	size_t total_len = len;
+	int num_descs, idx, i;
+	unsigned long desc_flags;
+
+	if (test_bit(DSA_WQ_DISABLED, &wq->state) || len == 0)
+		return NULL;
+
+	num_descs = dsa_xferlen_to_descs(wq, len);
+
+	dring = dsa_get_completion_ring(dsa, wq->idx);
+
+	spin_lock_bh(&dring->cleanup_lock);
+	if (num_descs <= dsa_ring_space(dring)) {
+		idx = dring->head;
+		dring->head += num_descs;
+	} else {
+		goto no_space_unlock;
+	}
+	spin_unlock_bh(&dring->cleanup_lock);
+
+	printk("preparing compare using %d descs ring %d h:t %d:%d\n",
+			num_descs, dring->idx, idx, dring->tail);
+
+	desc_flags = DSA_OP_FLAG_CRAV | DSA_OP_FLAG_RCR | DSA_OP_FLAG_RCI;
+	if (dsa->gencap & DSA_CAP_BLOCK_ON_FAULT)
+		desc_flags |= DSA_OP_FLAG_BOF;
+
+	i = 0;
+	do {
+		size_t comp = min_t(size_t, len, 1 << dsa->max_xfer_bits);
+
+		desc = dsa_get_ring_ent(dring, idx + i);
+
+		desc->len = total_len;
+		desc->wq = wq;
+
+		hw = desc->desc;
+
+		/* Set the PASID and U/S for SWQ */
+		if (wq->dedicated == 0) {
+			hw->u_s = 1;
+			hw->pasid = wq->dsa->system_pasid;
+		}
+
+		/* src_addr is the location of value for memfill descriptor */
+		__dsa_prep_desc_common(hw, DSA_OPCODE_COMPARE, src1, src2, comp,
+							desc_flags);
+		len -= comp;
+		src1 += comp;
+		src2 += comp;
+	} while (++i < num_descs);
+
+	printk("prepared descs h:t %d:%d\n", dring->head, dring->tail);
+	desc->txd.flags = flags;
+	dma_async_tx_descriptor_init(&desc->txd, &wq->dma_chan);
+	return &desc->txd;
+
+no_space_unlock:
+	spin_unlock_bh(&dring->cleanup_lock);
 	return NULL;
 }
 
+struct dma_async_tx_descriptor *
+dsa_dma_prep_compare(struct dma_chan *c, dma_addr_t source1,
+			   dma_addr_t source2, size_t len, unsigned long flags)
+{
+	struct dsa_work_queue *wq = to_dsa_wq(c);
+	u64 src1 = source1;
+	u64 src2 = source2;
+
+	return __dsa_prep_compare(wq, src1, src2, len, flags);
+}
+
+
+struct dma_async_tx_descriptor *
+__dsa_prep_compval(struct dsa_work_queue *wq, u64 val,
+			   u64 src, size_t len, unsigned long flags)
+{
+	struct dsadma_device *dsa = wq->dsa;
+	struct dsa_completion_ring *dring;
+	struct dsa_dma_descriptor *hw;
+	struct dsa_ring_ent *desc;
+	size_t total_len = len;
+	int num_descs, idx, i;
+	unsigned long desc_flags;
+
+	if (test_bit(DSA_WQ_DISABLED, &wq->state) || len == 0)
+		return NULL;
+
+	num_descs = dsa_xferlen_to_descs(wq, len);
+
+	dring = dsa_get_completion_ring(dsa, wq->idx);
+
+	spin_lock_bh(&dring->cleanup_lock);
+	if (num_descs <= dsa_ring_space(dring)) {
+		idx = dring->head;
+		dring->head += num_descs;
+	} else {
+		goto no_space_unlock;
+	}
+	spin_unlock_bh(&dring->cleanup_lock);
+
+	printk("preparing compare using %d descs ring %d h:t %d:%d\n",
+			num_descs, dring->idx, idx, dring->tail);
+
+	desc_flags = DSA_OP_FLAG_CRAV | DSA_OP_FLAG_RCR | DSA_OP_FLAG_RCI;
+	if (dsa->gencap & DSA_CAP_BLOCK_ON_FAULT)
+		desc_flags |= DSA_OP_FLAG_BOF;
+
+	i = 0;
+	do {
+		size_t comp = min_t(size_t, len, 1 << dsa->max_xfer_bits);
+
+		desc = dsa_get_ring_ent(dring, idx + i);
+
+		desc->len = total_len;
+		desc->wq = wq;
+
+		hw = desc->desc;
+
+		/* Set the PASID and U/S for SWQ */
+		if (wq->dedicated == 0) {
+			hw->u_s = 1;
+			hw->pasid = wq->dsa->system_pasid;
+		}
+
+		/* src_addr is the location of value for memfill descriptor */
+		__dsa_prep_desc_common(hw, DSA_OPCODE_COMPVAL, val, src, comp,
+							desc_flags);
+		len -= comp;
+		src += comp;
+	} while (++i < num_descs);
+
+	printk("prepared descs h:t %d:%d\n", dring->head, dring->tail);
+	desc->txd.flags = flags;
+	dma_async_tx_descriptor_init(&desc->txd, &wq->dma_chan);
+	return &desc->txd;
+
+no_space_unlock:
+	spin_unlock_bh(&dring->cleanup_lock);
+	return NULL;
+}
+
+struct dma_async_tx_descriptor *
+dsa_dma_prep_compval(struct dma_chan *c, unsigned long val,
+			   dma_addr_t source, size_t len, unsigned long flags)
+{
+	struct dsa_work_queue *wq = to_dsa_wq(c);
+	u64 src = source;
+
+	return __dsa_prep_compval(wq, val, src, len, flags);
+}
+
+struct dma_async_tx_descriptor *
+__dsa_prep_dualcast(struct dsa_work_queue *wq, u64 dst1, u64 dst2,
+			   u64 src, size_t len, unsigned long flags)
+{
+	struct dsadma_device *dsa = wq->dsa;
+	struct dsa_completion_ring *dring;
+	struct dsa_dma_descriptor *hw;
+	struct dsa_ring_ent *desc;
+	size_t total_len = len;
+	int num_descs, idx, i;
+	unsigned long desc_flags;
+
+	if (test_bit(DSA_WQ_DISABLED, &wq->state) || len == 0)
+		return NULL;
+
+	num_descs = dsa_xferlen_to_descs(wq, len);
+
+	dring = dsa_get_completion_ring(dsa, wq->idx);
+
+	spin_lock_bh(&dring->cleanup_lock);
+	if (num_descs <= dsa_ring_space(dring)) {
+		idx = dring->head;
+		dring->head += num_descs;
+	} else {
+		goto no_space_unlock;
+	}
+	spin_unlock_bh(&dring->cleanup_lock);
+
+	printk("preparing compare using %d descs ring %d h:t %d:%d\n",
+			num_descs, dring->idx, idx, dring->tail);
+
+	desc_flags = DSA_OP_FLAG_CRAV | DSA_OP_FLAG_RCR | DSA_OP_FLAG_RCI;
+	if (dsa->gencap & DSA_CAP_BLOCK_ON_FAULT)
+		desc_flags |= DSA_OP_FLAG_BOF;
+
+	i = 0;
+	do {
+		size_t copy = min_t(size_t, len, 1 << dsa->max_xfer_bits);
+
+		desc = dsa_get_ring_ent(dring, idx + i);
+
+		desc->len = total_len;
+		desc->wq = wq;
+
+		hw = desc->desc;
+
+		/* Set the PASID and U/S for SWQ */
+		if (wq->dedicated == 0) {
+			hw->u_s = 1;
+			hw->pasid = wq->dsa->system_pasid;
+		}
+
+		__dsa_prep_desc_common(hw, DSA_OPCODE_DUALCAST, dst1, src, copy,
+							desc_flags);
+		hw->op.dcast.dest2 = dst2;
+		len -= copy;
+		dst1 += copy;
+		dst2 += copy;
+		src += copy;
+	} while (++i < num_descs);
+
+	printk("prepared descs h:t %d:%d\n", dring->head, dring->tail);
+	desc->txd.flags = flags;
+	dma_async_tx_descriptor_init(&desc->txd, &wq->dma_chan);
+	return &desc->txd;
+
+no_space_unlock:
+	spin_unlock_bh(&dring->cleanup_lock);
+	return NULL;
+}
+
+struct dma_async_tx_descriptor *
+dsa_dma_prep_dualcast(struct dma_chan *c, dma_addr_t dest1, dma_addr_t dest2,
+			   dma_addr_t source, size_t len, unsigned long flags)
+{
+	struct dsa_work_queue *wq = to_dsa_wq(c);
+	u64 src = source;
+	u64 dst1 = dest1;
+	u64 dst2 = dest2;
+
+	return __dsa_prep_dualcast(wq, dst1, dst2, src, len, flags);
+}
 
 struct dma_async_tx_descriptor *
 dsa_dma_prep_drain (struct dsa_work_queue *wq, unsigned long flags)

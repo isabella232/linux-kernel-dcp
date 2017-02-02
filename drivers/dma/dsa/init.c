@@ -27,7 +27,6 @@
 #include <linux/workqueue.h>
 #include <linux/prefetch.h>
 #include <linux/poll.h>
-#include <linux/miscdevice.h>
 #include <linux/dca.h>
 #include <linux/aer.h>
 #include <linux/fs.h>
@@ -50,14 +49,19 @@ static struct pci_device_id dsa_pci_tbl[] = {
 };
 MODULE_DEVICE_TABLE(pci, dsa_pci_tbl);
 
-/* FIXME: Convert this into a list of DSA devices to handle multiple DSA devices
- * in the platform.
- */
-static struct dsadma_device *dsa;
+/* This is a list of DSA devices in the platform. */
+static struct list_head dsa_devices;
+unsigned int num_dsa_devices = 0;
 
-struct dsadma_device *get_dsadma_device(void)
+struct dsadma_device *get_dsadma_device_by_minor(unsigned int minor)
 {
-	return dsa;
+	struct dsadma_device *dsa;
+
+	list_for_each_entry(dsa, &dsa_devices, list) {
+		if (dsa->misc_dev.minor == minor)
+			return dsa;
+	}
+	return NULL;
 }
 
 
@@ -417,7 +421,7 @@ static void dsa_dma_remove(struct dsadma_device *dsa_dma)
 {
 	struct dma_device *dma = &dsa_dma->dma_dev;
 
-	dsa_disable_system_pasid(dsa);
+	dsa_disable_system_pasid(dsa_dma);
 
 	dsa_disable_interrupts(dsa_dma);
 
@@ -499,6 +503,7 @@ static int dsa_configure_groups(struct dsadma_device *dsa)
 static int dsa_init_completion_ring(struct dsadma_device *dsa, int ring_idx)
 {
 	struct dsa_completion_ring *dring = &dsa->comp_rings[ring_idx];
+	struct dsa_work_queue *wq;
 
 	dring->dsa = dsa;
 
@@ -509,14 +514,17 @@ static int dsa_init_completion_ring(struct dsadma_device *dsa, int ring_idx)
 	dring->dmacount = 0;
 	dring->completed = 0;
 
-	/* FIXME: currently we allocate a completion ring per WQ. If a SWQ, the
+	/* Currently we allocate a completion ring per WQ. If a SWQ, the
 	 * the ring size is (maximum wq size * 2). If a DWQ, the ring size is
 	 * equal to the size of size of WQ.
+	 * FIXME: If the ring is not used by a WQ, we allocate similar to SWQ,
+	 * in case it may be used later for interrupt balancing purpose.
 	 */
-	if (ring_idx > dsa->num_wqs || !dsa->wqs[ring_idx].dedicated)
+	wq = dsa_get_work_queue(dsa, ring_idx);
+	if (ring_idx > dsa->num_wqs || !wq->dedicated)
 		dring->num_entries = dsa->tot_wq_size * 2;
 	else
-		dring->num_entries = dsa->wqs[ring_idx].wq_size;
+		dring->num_entries = wq->wq_size;
 
 	dring->comp_ring_size = dring->num_entries * sizeof(struct dsa_completion_record);
 	dring->desc_ring_size = dring->num_entries * sizeof(struct dsa_dma_descriptor);
@@ -550,6 +558,7 @@ static int dsa_init_wq (struct dsadma_device *dsa, int wq_idx)
 		dsa->num_kern_dwqs++;
 		wq->available = 0;
 		wq->allocated = 1;
+		dsa->system_wq_idx = wq_idx;
 	} else {
 		wq->available = 1;
 		wq->allocated = 0;
@@ -756,7 +765,6 @@ static int dsa_enumerate_work_queues(struct dsadma_device *dsa)
 	}
 
 	INIT_LIST_HEAD(&dma->channels);
-	dma->chancnt = dsa->num_wqs;
 
 	for (i = 0; i < dsa->num_wqs; i++) {
 		dsa_init_wq(dsa, i);
@@ -908,28 +916,6 @@ static const struct pci_error_handlers dsa_err_handler = {
 	.resume = dsa_pcie_error_resume,
 };
 
-static const struct file_operations dsa_fops = {
-        .owner          = THIS_MODULE,
-        .open           = dsa_fops_open,
-        .release        = dsa_fops_release,
-        //.read           = dsa_fops_read,
-        //.write          = dsa_fops_write,
-        .unlocked_ioctl = dsa_fops_unl_ioctl,
-#ifdef CONFIG_COMPAT
-        .compat_ioctl   = dsa_fops_compat_ioctl,
-#endif
-        .mmap           = dsa_fops_mmap,
-	//.poll           = dsa_fops_poll,
-};
-
-static struct miscdevice dsa_dev = {
-        .minor = MISC_DYNAMIC_MINOR,
-        .name = "dsa",
-        .fops = &dsa_fops,
-        .nodename = "dsa",
-        .mode = S_IRUGO | S_IWUGO,
-};
-
 static struct pci_driver dsa_pci_driver = {
 	.name		= DRV_NAME,
 	.id_table	= dsa_pci_tbl,
@@ -992,7 +978,6 @@ static int dsa_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	device = alloc_dsadma(pdev, iomap);
 	if (!device)
 		return -ENOMEM;
-	dsa = device;
 
 	pci_set_master(pdev);
 	pci_set_drvdata(pdev, device);
@@ -1010,11 +995,11 @@ static int dsa_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		return -ENODEV;
 	}
 
-	printk("registering DSA user interface\n");
-	err = misc_register(&dsa_dev);
+	device->index = num_dsa_devices;
+	err = dsa_usr_add(device);
 
-	if (err)
-		printk("misc register failed %d\n", err);
+	list_add(&device->list, &dsa_devices);
+	num_dsa_devices++;
 
 	return 0;
 }
@@ -1031,7 +1016,7 @@ static void dsa_remove(struct pci_dev *pdev)
 	pci_disable_pcie_error_reporting(pdev);
 	dsa_dma_remove(device);
 
-	misc_deregister(&dsa_dev);
+	misc_deregister(&device->misc_dev);
 }
 
 static int __init dsa_init_module(void)
@@ -1045,6 +1030,8 @@ static int __init dsa_init_module(void)
 					0, SLAB_HWCACHE_ALIGN, NULL);
 	if (!dsa_cache)
 		return -ENOMEM;
+
+	INIT_LIST_HEAD(&dsa_devices);
 
 	err = pci_register_driver(&dsa_pci_driver);
 	if (err)

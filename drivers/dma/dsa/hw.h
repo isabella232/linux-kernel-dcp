@@ -44,12 +44,30 @@
 
 /* Opcode */
 
-#define DSA_OPCODE_MEMMOVE   0x3
 #define DSA_OPCODE_BATCH     0x1
+#define DSA_OPCODE_DRAIN     0x2
+#define DSA_OPCODE_MEMMOVE   0x3
+#define DSA_OPCODE_MEMFILL   0x4
+#define DSA_OPCODE_COMPARE   0x5
+#define DSA_OPCODE_COMPVAL   0x6
+#define DSA_OPCODE_CR_DELTA  0x7
+#define DSA_OPCODE_AP_DELTA  0x8
+#define DSA_OPCODE_DUALCAST  0x9
+#define DSA_OPCODE_CRCGEN    0x10
+#define DSA_OPCODE_COPY_CRC  0x11
+#define DSA_OPCODE_DIF_INS   0x12
+#define DSA_OPCODE_DIF_STRP  0x13
+#define DSA_OPCODE_DIF_UPDT  0x14
+#define DSA_OPCODE_CFLUSH    0x20
+
 
 /* Completion record status */
 #define DSA_COMP_SUCCESS         0x1
 #define DSA_COMP_SUCCESS_PRED    0x2
+
+struct dsa_dcast_desc {
+	u64 dest2;
+};
 
 struct dsa_dma_descriptor {
 	uint32_t	pasid:20;
@@ -64,20 +82,16 @@ struct dsa_dma_descriptor {
 	uint16_t	int_handle;
 	union {
 		uint16_t	op_specific[13];
-		//struct dsa_move_desc  memmove;
-		//struct dsa_fill_desc  memfill;
-		//struct dsa_cmp_desc   compare;
-		//struct dsa_cmpimm_desc cmpimmd;
 		//struct dsa_cdelta_desc cdelta;
 		//struct dsa_adelta_desc adelta;
-		//struct dsa_dcast_desc  dcast;
+		struct dsa_dcast_desc  dcast;
 		//struct dsa_crc_desc    crc;
 		//struct dsa_copy_crc_desc cp_crc;
 		//struct dsa_difins_desc  difins;
 		//struct dsa_difstrp_desc difstrp;
 		//struct dsa_difupdt_desc difupdt;
 		//struct dsa_cflush_desc  cflush;
-	};
+	}op;
 };
 
 struct dsa_raw_descriptor {

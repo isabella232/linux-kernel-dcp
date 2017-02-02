@@ -128,10 +128,10 @@ static int dsa_dma_batch_memcpy_self_test_swq (struct dsadma_device *dsa)
 		u8  *src_page = src + (i << PAGE_SHIFT);
 		u8  *dst_page = dest + (i << PAGE_SHIFT);
 
-		__dsa_dma_prep_batch_memcpy(wq, (u64)dst_page, (u64)src_page,
+		__dsa_prep_batch_memcpy(wq, (u64)dst_page, (u64)src_page,
 				&batch[i], (u64)compl_addr, PAGE_SIZE, flags);
 	}
-	tx = __dsa_dma_prep_batch(wq, (u64)batch, num_descs, flags);
+	tx = __dsa_prep_batch(wq, (u64)batch, num_descs, flags);
 	if (!tx) {
 		dev_err(dev, "Self-test prep failed, disabling\n");
 		err = -ENODEV;
@@ -376,7 +376,7 @@ static int dsa_dma_memcpy_self_test_swq (struct dsadma_device *dsa)
 	printk("testing memcpy using wq dedicated %d idx %d \n", wq->dedicated, wq->idx);
 
 	flags = DMA_PREP_INTERRUPT;
-	tx = __dsa_dma_prep_memcpy(wq, (u64)dest, (u64)src, DSA_TEST_SIZE,
+	tx = __dsa_prep_memcpy(wq, (u64)dest, (u64)src, DSA_TEST_SIZE,
 								flags);
 	if (!tx) {
 		dev_err(dev, "Self-test prep failed, disabling\n");

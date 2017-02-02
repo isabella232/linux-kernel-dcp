@@ -24,6 +24,7 @@
 #include <linux/pci_ids.h>
 #include <linux/circ_buf.h>
 #include <linux/interrupt.h>
+#include <linux/miscdevice.h>
 #include "svm.h"
 #include "registers.h"
 #include "hw.h"
@@ -161,14 +162,10 @@ struct dsa_completion_ring {
  * @reg_base: MMIO register space base address
  * @dma_pool: for allocating DMA descriptors
  * @completion_pool: DMA buffers for completion ops
- * @sed_hw_pool: DMA super descriptor pools
  * @dma_dev: embedded struct dma_device
  * @version: version of dsadma device
  * @msix_entries: irq handlers
- * @idx: per channel data
- * @dca: direct cache access context
  * @irq_mode: interrupt mode (INTX, MSI, MSIX)
- * @cap: read DMA capabilities register
  */
 struct dsadma_device {
 	struct pci_dev *pdev;
@@ -178,11 +175,17 @@ struct dsadma_device {
 	struct pci_pool *dma_pool;
 	struct pci_pool *completion_pool;
 	struct dma_device dma_dev;
+	int system_wq_idx;
+
+	struct list_head  list;	/* List of DSA devices in the platform */
+	struct miscdevice misc_dev;
+	char user_name[16];
+	unsigned int index;
+
 	struct dsa_context priv_ctx;
 	bool pasid_enabled;
 	int system_pasid;
 	spinlock_t cmd_lock;
-
 	u32 version;
 	struct msix_entry *msix_entries;
 	struct msix_entry *ims_entries;
@@ -324,7 +327,9 @@ static inline u32 dsa_ring_size(struct dsa_completion_ring *dring)
 }
 
 struct dsa_completion_ring * dsa_get_completion_ring(struct dsadma_device *dsa,
-		int wq_idx);
+		unsigned int wq_idx);
+struct dsa_work_queue * dsa_get_work_queue (struct dsadma_device *dsa,
+		unsigned int ring_idx);
 
 /* count of descriptors in flight with the engine */
 static inline u16 dsa_ring_active(struct dsa_completion_ring *dring)
@@ -391,17 +396,48 @@ void dsa_dma_prep_batch_memcpy(struct dma_chan *c, dma_addr_t dest,
 			dma_addr_t src, struct dsa_dma_descriptor *hw,
 			dma_addr_t compl_addr, size_t len, unsigned long flags);
 
-void __dsa_dma_prep_batch_memcpy(struct dsa_work_queue *wq, u64 dest,
+void __dsa_prep_batch_memcpy(struct dsa_work_queue *wq, u64 dest,
 			u64 src, struct dsa_dma_descriptor *hw,
 			u64 compl_addr, size_t len, unsigned long flags);
+
+void dsa_dma_prep_batch_memset(struct dma_chan *c, dma_addr_t dma_dest,
+		int value, struct dsa_dma_descriptor *hw,
+		dma_addr_t compl_addr, size_t len, unsigned long flags);
+void __dsa_prep_batch_memset(struct dsa_work_queue *wq, u64 dst,
+		unsigned long val, struct dsa_dma_descriptor *hw,
+		u64 compl_addr, size_t len, unsigned long flags);
+
+void __dsa_prep_batch_compare(struct dsa_work_queue *wq, u64 src1, u64 src2,
+		struct dsa_dma_descriptor *hw, u64 compl_addr,
+		size_t len, unsigned long flags);
+void dsa_dma_prep_batch_compare(struct dma_chan *c, dma_addr_t dma_src1,
+		dma_addr_t dma_src2, struct dsa_dma_descriptor *hw,
+		dma_addr_t compl_addr, size_t len, unsigned long flags);
+
+void __dsa_prep_batch_compval(struct dsa_work_queue *wq, u64 val, u64 src,
+		struct dsa_dma_descriptor *hw, u64 compl_addr,
+		size_t len, unsigned long flags);
+void dsa_dma_prep_batch_compval(struct dma_chan *c, unsigned long value,
+		dma_addr_t dma_src, struct dsa_dma_descriptor *hw,
+		dma_addr_t compl_addr, size_t len, unsigned long flags);
+
+void __dsa_prep_batch_dualcast(struct dsa_work_queue *wq, u64 dst1, u64 dst2,
+		u64 src, struct dsa_dma_descriptor *hw, u64 compl_addr,
+		size_t len, unsigned long flags);
+void dsa_dma_prep_batch_dualcast(struct dma_chan *c, dma_addr_t dest1,
+		dma_addr_t dest2, dma_addr_t dma_src, struct dsa_dma_descriptor
+		*hw, dma_addr_t compl_addr, size_t len, unsigned long flags);
+
+struct dma_async_tx_descriptor *
+__dsa_prep_batch(struct dsa_work_queue *wq, u64 dma_batch,
+				int num_descs, unsigned long flags);
+
 struct dma_async_tx_descriptor *
 dsa_dma_prep_batch(struct dma_chan *c, dma_addr_t dma_batch,
 				int num_descs, unsigned long flags);
+
 struct dma_async_tx_descriptor *
-__dsa_dma_prep_batch(struct dsa_work_queue *wq, u64 dma_batch,
-				int num_descs, unsigned long flags);
-struct dma_async_tx_descriptor *
-__dsa_dma_prep_memcpy(struct dsa_work_queue *wq, u64 dst,
+__dsa_prep_memcpy(struct dsa_work_queue *wq, u64 dst,
 			u64 src, size_t len, unsigned long flags);
 
 struct dma_async_tx_descriptor *
@@ -410,6 +446,34 @@ dsa_dma_prep_memcpy(struct dma_chan *c, dma_addr_t dma_dest,
 struct dma_async_tx_descriptor *
 dsa_dma_prep_memset(struct dma_chan *c, dma_addr_t dma_dest,
 			   int value, size_t len, unsigned long flags);
+struct dma_async_tx_descriptor *__dsa_prep_memset(struct dsa_work_queue *wq,
+			u64 dst, u64 value, size_t len, unsigned long flags);
+
+struct dma_async_tx_descriptor *
+__dsa_prep_compare(struct dsa_work_queue *wq, u64 src1,
+			u64 src2, size_t len, unsigned long flags);
+struct dma_async_tx_descriptor *
+dsa_dma_prep_compare(struct dma_chan *c, dma_addr_t source1,
+			dma_addr_t source2, size_t len, unsigned long flags);
+
+struct dma_async_tx_descriptor *
+__dsa_prep_compval(struct dsa_work_queue *wq, u64 val,
+			u64 src, size_t len, unsigned long flags);
+struct dma_async_tx_descriptor *
+dsa_dma_prep_compval(struct dma_chan *c, unsigned long val,
+			dma_addr_t source, size_t len, unsigned long flags);
+
+struct dma_async_tx_descriptor *
+__dsa_prep_dualcast(struct dsa_work_queue *wq, u64 dst1, u64 dst2,
+			u64 src, size_t len, unsigned long flags);
+
+struct dma_async_tx_descriptor *
+dsa_dma_prep_dualcast(struct dma_chan *c, dma_addr_t dest1, dma_addr_t dest2,
+			dma_addr_t source, size_t len, unsigned long flags);
+
+struct dma_async_tx_descriptor *
+dsa_dma_prep_drain (struct dsa_work_queue *wq, unsigned long flags);
+
 struct dma_async_tx_descriptor *
 dsa_prep_interrupt_lock(struct dma_chan *c, unsigned long flags);
 struct dma_async_tx_descriptor *
@@ -459,7 +523,9 @@ void dsa_stop(struct dsa_work_queue *dsa_chan);
 
 int dsa_alloc_completion_ring(struct dsa_completion_ring *dring, gfp_t flags);
 
-struct dsadma_device * get_dsadma_device (void);
+struct dsadma_device * get_dsadma_device_by_minor(unsigned int minor);
+
+int dsa_usr_add(struct dsadma_device *dsa);
 
 int dsa_wq_set_pasid (struct dsadma_device *dsa, int wq_idx, int pasid,
 				bool privilege);

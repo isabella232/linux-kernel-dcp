@@ -17,6 +17,43 @@
 #include "svm.h"
 #include "dsa_ioctl.h"
 
+static const struct file_operations dsa_fops = {
+	.owner          = THIS_MODULE,
+	.open           = dsa_fops_open,
+	.release        = dsa_fops_release,
+	//.read           = dsa_fops_read,
+	//.write          = dsa_fops_write,
+	.unlocked_ioctl = dsa_fops_unl_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl   = dsa_fops_compat_ioctl,
+#endif
+	.mmap           = dsa_fops_mmap,
+	//.poll           = dsa_fops_poll,
+};
+
+int dsa_usr_add(struct dsadma_device *dsa)
+{
+	int rc;
+	struct miscdevice *mdev;
+
+	mdev = &dsa->misc_dev;
+	mdev->minor = MISC_DYNAMIC_MINOR;
+	snprintf(dsa->user_name, sizeof(dsa->user_name), "%s%d",
+			"dsa", dsa->index);
+	mdev->name = dsa->user_name;
+	mdev->nodename = dsa->user_name;
+	mdev->fops = &dsa_fops;
+	mdev->mode = S_IRUGO | S_IWUGO;
+
+	rc = misc_register(mdev);
+	if (rc)
+		dev_err(&dsa->pdev->dev, "%s failed rc %d\n", __func__, rc);
+
+        printk("registered DSA user interface\n");
+
+	return rc;
+}
+
 static void dsa_set_pasid_msr(int pasid)
 {
 	uint32_t val = (1 << 31) | pasid;
@@ -42,7 +79,7 @@ int dsa_fops_open(struct inode *inode, struct file *filep)
         INIT_LIST_HEAD(&ctx->mm_list);
         INIT_LIST_HEAD(&ctx->wq_list);
 
-	ctx->dsa = get_dsadma_device();
+	ctx->dsa = get_dsadma_device_by_minor(iminor(inode));
 	ctx->wq_idx = DSA_WQ_UNALLOCATED;
         filep->private_data = ctx;
 

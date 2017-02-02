@@ -327,7 +327,7 @@ static dma_cookie_t dsa_tx_submit_unlock(struct dma_async_tx_descriptor *tx)
 }
 
 struct dsa_completion_ring * dsa_get_completion_ring(struct dsadma_device *dsa,
-			int wq_idx)
+			unsigned int wq_idx)
 {
 	/* FIXME: return the completion ring based on wq idx for now.
 	 * dsa->comp_rings[0]
@@ -337,12 +337,32 @@ struct dsa_completion_ring * dsa_get_completion_ring(struct dsadma_device *dsa,
 	return &dsa->comp_rings[wq_idx + 1];
 }
 
+struct dsa_work_queue * dsa_get_work_queue (struct dsadma_device *dsa,
+			unsigned int ring_idx)
+{
+	/* FIXME: return the work queue based on ring idx for now.
+	 * dsa->comp_rings[0]
+	 * is not used since it would correspond to MSIX entry 0 which is not
+	 * used for WQ completion interrupts. */
+	BUG_ON(ring_idx == 0);
+
+	return (ring_idx > dsa->num_wqs)? NULL: &dsa->wqs[ring_idx - 1];
+}
+
 static void dsa_init_ring_ent(struct dsa_ring_ent *entry,
 		struct dsa_completion_ring *ring, int desc_idx)
 {
-	entry->desc = ring->desc_ring_buf + desc_idx * sizeof(struct dsa_dma_descriptor);
-	entry->completion = ring->completion_ring_buf + desc_idx * sizeof(struct dsa_completion_record);
-	entry->desc->compl_addr = ring->ring_base + desc_idx * sizeof(struct dsa_completion_record);
+	entry->desc = ring->desc_ring_buf + desc_idx *
+				sizeof(struct dsa_dma_descriptor);
+	entry->completion = ring->completion_ring_buf +
+			desc_idx * sizeof(struct dsa_completion_record);
+
+	if (dsa_get_completion_ring(ring->dsa, ring->dsa->system_wq_idx) ==
+					ring)
+		entry->desc->compl_addr = ring->ring_base + desc_idx *
+					sizeof(struct dsa_completion_record);
+	else
+		entry->desc->compl_addr = (u64)entry->completion;
 
 	entry->txd.tx_submit = dsa_tx_submit_unlock;
 	entry->txd.phys = __pa(entry->desc);
@@ -372,15 +392,23 @@ int dsa_alloc_completion_ring(struct dsa_completion_ring *dring, gfp_t flags)
 		return -ENOMEM;
 	memset(ring, 0, descs * sizeof(*ring));
 
-	dring->completion_ring_buf =
-		pci_alloc_consistent(dev, dring->comp_ring_size, &dring->ring_base);
-
-	printk("allocated completion ring %p %llx\n", dring->completion_ring_buf, dring->ring_base);
+	order = get_order(dring->comp_ring_size);
+	dring->completion_ring_buf = (void *)__get_free_pages(flags, order);
 
 	if (!dring->completion_ring_buf) {
 		kfree(ring);
 		return -ENOMEM;
 	}
+	/* If it is the system wq, map completion ring using DMA APIs.
+	 * Otherwise, normal virtual addresses should be used.
+	 */
+	if (dsa_get_completion_ring(dring->dsa, dring->dsa->system_wq_idx)
+								== dring) {
+		dring->ring_base = pci_map_single(dev,
+				dring->completion_ring_buf,
+				dring->comp_ring_size, PCI_DMA_BIDIRECTIONAL);
+	}
+
 	memset(dring->completion_ring_buf, 0, dring->comp_ring_size);
 
 	order = get_order(dring->desc_ring_size);
@@ -388,7 +416,8 @@ int dsa_alloc_completion_ring(struct dsa_completion_ring *dring, gfp_t flags)
 
 	if (!dring->desc_ring_buf) {
 		kfree(ring);
-		kfree(dring->completion_ring_buf);
+		free_pages((unsigned long)dring->completion_ring_buf,
+					get_order(dring->comp_ring_size));
 		return -ENOMEM;
 	}
 	memset(dring->desc_ring_buf, 0, dring->desc_ring_size);
