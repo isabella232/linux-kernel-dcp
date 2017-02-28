@@ -152,6 +152,15 @@ config INTEL_IOMMU
 	  and include PCI device scope covered by these DMA
 	  remapping devices.
 
+config INTEL_IOMMU_TEST
+	tristate "PCI Intel IOMMU (VT-d) test driver"
+	depends on PCI && INTEL_IOMMU
+	help
+	  Say Y or M here if you want be able to reserve a PCI device
+	  for testing Intel IOMMU.
+
+	  When in doubt, say N.
+
 config INTEL_IOMMU_SVM
 	bool "Support for Shared Virtual Memory with Intel IOMMU"
 	depends on INTEL_IOMMU && X86
