@@ -71,7 +71,6 @@ static int dsa_init_wq(struct dsadma_device *dsa_dma, int idx);
 static void dsa_enumerate_capabilities(struct dsadma_device *dsa_dma);
 static int dsa_configure_groups(struct dsadma_device *dsa);
 static int dsa_enumerate_work_queues(struct dsadma_device *dsa);
-static int dsa_init_completion_ring(struct dsadma_device *dsa, int ring_idx);
 
 static int dsa_num_dwqs = 0;
 module_param(dsa_num_dwqs, int, 0644);
@@ -252,7 +251,7 @@ int dsa_dma_setup_interrupts(struct dsadma_device *dsa)
 	struct pci_dev *pdev = dsa->pdev;
 	struct device *dev = &pdev->dev;
 	struct msix_entry *msix;
-	struct dsa_completion_ring *dsa_ring;
+	struct dsa_irq_entry *irq_entry;
 	int i, j, msixcnt;
 	int err = -EINVAL;
 	u32 genctrl = 0;
@@ -285,48 +284,50 @@ int dsa_dma_setup_interrupts(struct dsadma_device *dsa)
 	}
 
 	/* we implement 1 completion ring per MSI-X entry except for entry 0 */
-	dsa->comp_rings = devm_kzalloc(dev, sizeof(struct dsa_completion_ring) *
-						msixcnt - 1, GFP_KERNEL);
+	dsa->irq_entries = devm_kzalloc(dev, sizeof(struct dsa_irq_entry) *
+						msixcnt, GFP_KERNEL);
 
-	dsa->msixcnt = msixcnt;
-	if (dsa->comp_rings == NULL) {
-		dev_err(dev, "Allocating %d completion rings!\n", msixcnt);
+	printk("msixcnt %d\n", msixcnt);
+	/* first MSI-X entry is not for wq interrupts */
+	dsa->num_wq_irqs = msixcnt - 1;
+	atomic_set(&dsa->irq_wq_next, 0);
+
+	if (dsa->irq_entries == NULL) {
+		dev_err(dev, "Allocating %d irq entries!\n", msixcnt);
 		err = -ENOMEM;
 		goto err_no_irq;
 	}
 
-	/* No need to initialize the first completion ring because MSIX entry 0
-	 * is not used for WQ completion interrupts. MSI-X entry 0 is used for
-	 * other miscellaneous interrupts. */
-	for (i = 1; i < msixcnt; i++)
-		dsa_init_completion_ring(dsa, i);
-
 	for (i = 0; i < msixcnt; i++) {
 		msix = &dsa->msix_entries[i];
-		dsa_ring = &dsa->comp_rings[i];
+		irq_entry = &dsa->irq_entries[i];
 
-		data = (unsigned long)dsa_ring;
+		data = (unsigned long)irq_entry;
+		irq_entry->dsa = dsa;
+		irq_entry->int_src = i;
+		spin_lock_init(&irq_entry->cleanup_lock);
+		INIT_LIST_HEAD(&irq_entry->irq_wait_head);
+		rwlock_init(&irq_entry->irq_wait_lock);
 
 		if (i == 0) {
-			dsa_ring->dsa = dsa;
 			err = devm_request_irq(dev, msix->vector,
 				       dsa_misc_interrupt, 0,
-				       "dsa-msix", dsa_ring);
-			tasklet_init(&dsa_ring->cleanup_task, dsa_misc_cleanup,
+				       "dsa-msix", irq_entry);
+			tasklet_init(&irq_entry->cleanup_task, dsa_misc_cleanup,
 								data);
 		} else {
 			err = devm_request_irq(dev, msix->vector,
 				       dsa_wq_completion_interrupt, 0,
-				       "dsa-msix", dsa_ring);
-			tasklet_init(&dsa_ring->cleanup_task, dsa_wq_cleanup,
+				       "dsa-msix", irq_entry);
+			tasklet_init(&irq_entry->cleanup_task, dsa_wq_cleanup,
 							data);
 		}
 		if (err) {
 			for (j = 0; j < i; j++) {
 				msix = &dsa->msix_entries[j];
-				dsa_ring = &dsa->comp_rings[i];
-				devm_free_irq(dev, msix->vector, dsa_ring);
-				tasklet_kill(&dsa_ring->cleanup_task);
+				irq_entry = &dsa->irq_entries[i];
+				devm_free_irq(dev, msix->vector, irq_entry);
+				tasklet_kill(&irq_entry->cleanup_task);
 			}
 			goto err_no_irq;
 		}
@@ -388,7 +389,7 @@ static int dsa_probe(struct dsadma_device *dsa_dma)
 	if (err)
 		goto err_self_test;
 
-	printk("DSA device enabled successfully\n");
+	printk("DSA device enabled successfully %ld %ld\n", sizeof(struct dsa_dma_descriptor), sizeof(struct dsa_completion_record));
 
 	err = dsa_dma_self_test(dsa_dma);
 	if (err)
@@ -448,6 +449,7 @@ static void dsa_enumerate_capabilities(struct dsadma_device *dsa_dma)
 	max_xfer_bits = (dsa_dma->gencap & DSA_CAP_MAX_XFER_MASK) >> 
 						DSA_CAP_MAX_XFER_SHIFT;
 	dsa_dma->max_xfer_bits = max_xfer_bits + 16;
+	dsa_dma->max_xfer_size = 1 << dsa_dma->max_xfer_bits;
 
 	dsa_dma->max_batch_size = (dsa_dma->gencap & DSA_CAP_MAX_BATCH_MASK) >>
 					DSA_CAP_MAX_BATCH_SHIFT;
@@ -500,35 +502,140 @@ static int dsa_configure_groups(struct dsadma_device *dsa)
 	return 0;
 }
 
-static int dsa_init_completion_ring(struct dsadma_device *dsa, int ring_idx)
+void dsa_wq_free (struct dsa_work_queue *wq)
 {
-	struct dsa_completion_ring *dring = &dsa->comp_rings[ring_idx];
+        /* FIXME: Implement ref counting for SWQ clients */
+	if (wq->dedicated) {
+		wq->available = 1;
+		wq->allocated = 0;
+	}
+}
+
+struct dsa_work_queue *dsa_wq_alloc (struct dsadma_device *dsa, int dedicated)
+{
 	struct dsa_work_queue *wq;
+	int i;
+
+        if (dsa->num_wqs == 0)
+                return NULL;
+
+        /* FIXME: Use proper locks to provide mutual exclusion b/w processes */
+        for (i = 0; i < dsa->num_wqs; i++) {
+                wq = &dsa->wqs[i];
+                if (dedicated == wq->dedicated && wq->available)
+                        break;
+        }
+
+        if (i == dsa->num_wqs)
+                return NULL;
+
+        /* FIXME: Implement ref counting for SWQ clients */
+        if (wq->dedicated) {
+                wq->available = 0;
+                wq->allocated = 1;
+	}
+
+	return wq;
+}
+
+void dsa_free_irq_event(struct dsa_irq_event *ev)
+{
+	struct dsa_irq_entry *irq_entry = ev->irq_entry;
+	unsigned long flags;
+
+	/* delete this completion ring from list of IRQ waiters */
+	write_lock_irqsave(&irq_entry->irq_wait_lock, flags);
+	list_del(&ev->irq_wait_chain);
+	write_unlock_irqrestore(&irq_entry->irq_wait_lock, flags);
+}
+
+void dsa_free_descriptors (struct dsa_completion_ring *dring)
+{
+
+	dsa_free_irq_event(&dring->ev);
+
+	dsa_free_client_buffers(dring);
+
+	if (dring->callback_ring_buf)
+		kfree(dring->callback_ring_buf);
+
+	kfree(dring);
+}
+
+void dsa_setup_irq_event (struct dsa_irq_event *ev, struct dsa_irq_entry
+			*irq_entry, struct dsa_completion_ring *dring,
+			void (*isr_cb)(struct dsa_completion_ring *dring))
+{
+	unsigned long flags;
+
+	memset(ev, 0, sizeof(struct dsa_irq_event));
+
+	ev->dring = dring;
+	ev->irq_entry = irq_entry;
+
+	INIT_LIST_HEAD(&ev->irq_wait_chain);
+	init_waitqueue_head(&ev->waitq);
+
+	if (isr_cb)
+		ev->isr_cb = isr_cb;
+	else
+		ev->use_waitq = 1;
+
+	/* add this completion ring to list of IRQ waiters */
+	write_lock_irqsave(&irq_entry->irq_wait_lock, flags);
+	list_add(&ev->irq_wait_chain, &irq_entry->irq_wait_head);
+	write_unlock_irqrestore(&irq_entry->irq_wait_lock, flags);
+}
+
+static struct dsa_completion_ring *
+dsa_alloc_descriptors (struct dsa_work_queue *wq,
+			void (*isr_cb)(struct dsa_completion_ring *dring))
+{
+	struct dsadma_device *dsa = wq->dsa;
+	struct dsa_completion_ring *dring;
+	struct dsa_irq_entry *irq_entry;
+	u16 msix_idx;
+
+        dring = kzalloc(sizeof(*dring), GFP_KERNEL);
+        if (!dring)
+		return NULL;
 
 	dring->dsa = dsa;
+	dring->wq = wq;
 
-	spin_lock_init(&dring->cleanup_lock);
 	dring->head = 0;
 	dring->tail = 0;
-	dring->idx = ring_idx;
+	dring->issued = 0;
 	dring->dmacount = 0;
 	dring->completed = 0;
+	spin_lock_init(&dring->space_lock);
 
-	/* Currently we allocate a completion ring per WQ. If a SWQ, the
-	 * the ring size is (maximum wq size * 2). If a DWQ, the ring size is
-	 * equal to the size of size of WQ.
-	 * FIXME: If the ring is not used by a WQ, we allocate similar to SWQ,
-	 * in case it may be used later for interrupt balancing purpose.
+	/* If a SWQ, the the completion ring size is (total wq size * 2).
+	 * If a DWQ, the completion size is equal to the size of WQ.
 	 */
-	wq = dsa_get_work_queue(dsa, ring_idx);
-	if (ring_idx > dsa->num_wqs || !wq->dedicated)
-		dring->num_entries = dsa->tot_wq_size * 2;
-	else
+	if (wq->dedicated)
 		dring->num_entries = wq->wq_size;
+	else
+		dring->num_entries = dsa->tot_wq_size * 2;
 
-	dring->comp_ring_size = dring->num_entries * sizeof(struct dsa_completion_record);
-	dring->desc_ring_size = dring->num_entries * sizeof(struct dsa_dma_descriptor);
-	return dsa_alloc_completion_ring(dring, GFP_KERNEL);
+	dring->comp_ring_size = dring->num_entries *
+				sizeof(struct dsa_completion_record);
+
+	if (dsa_alloc_client_buffers(dring, GFP_KERNEL)) {
+		kfree(dring);
+		return NULL;
+	}
+
+	msix_idx = dsa_get_msix_index(dsa);
+
+	/* irq_entry 0 is not used for WQ completion interrupts */
+	irq_entry = &dsa->irq_entries[msix_idx];
+
+	dsa_setup_irq_event(&dring->ev, irq_entry, dring, isr_cb);
+
+	dring->wq_reg = dsa_get_wq_reg(wq->dsa, wq->idx, msix_idx, 1);
+
+	return dring;
 }
 
 
@@ -772,6 +879,28 @@ static int dsa_enumerate_work_queues(struct dsadma_device *dsa)
 	return 0;
 }
 
+struct dsa_completion_ring *dsa_alloc_svm_resources(struct dsa_work_queue *wq)
+{
+	struct dsa_completion_ring *dring;
+
+	dring = dsa_alloc_descriptors(wq, dsa_svm_completion_cleanup);
+
+	if (!dring)
+		return NULL;
+
+        /* allocate the array to hold the callback descriptors */
+        dring->callback_ring_buf = kcalloc(dring->num_entries,
+			sizeof(struct dsa_callback_descriptor), GFP_KERNEL);
+        if (!dring->callback_ring_buf) {
+		dsa_free_descriptors(dring);
+                return NULL;
+	}
+
+	dsa_init_completion_ring(dring);
+
+	return dring;
+}
+
 /**
  * dsa_free_chan_resources - release all the descriptors
  * @chan: the channel to be cleaned
@@ -779,29 +908,53 @@ static int dsa_enumerate_work_queues(struct dsadma_device *dsa)
 static void dsa_free_chan_resources(struct dma_chan *c)
 {
 	struct dsa_work_queue *wq = to_dsa_wq(c);
-	struct dsadma_device *dsa = wq->dsa;
-	struct dsa_completion_ring *dring;
+	struct dsa_completion_ring *dring = wq->dring;
 
-	dring = dsa_get_completion_ring(dsa, wq->idx);
+	if (dring)
+		dsa_free_descriptors(dring);
 
-	/* FIXME: Is there something to be done here? */
+	/* FIXME: Is there something else to be done here? */
 	return;
 }
 
 /* dsa_alloc_chan_resources - allocate/initialize dsa descriptor ring
  * @chan: channel to be initialized
  */
+/* FIXME: We should use Batch descriptors to satisfy DMA APIs */
 static int dsa_alloc_chan_resources(struct dma_chan *c)
 {
 	struct dsa_work_queue *wq = to_dsa_wq(c);
+	struct pci_dev *dev = wq->dsa->pdev;
 	struct dsa_completion_ring *dring;
 
-	dring = dsa_get_completion_ring(wq->dsa, wq->idx);
-	/* have we already been set up? */
-	if (dring)
-		return dring->num_entries;
+	dring = dsa_alloc_descriptors(wq, dsa_dma_completion_cleanup);
 
-	return -EFAULT;
+	if (!dring)
+		return -EFAULT;
+
+	wq->dring = dring;
+
+        /* allocate the array to hold the async tx descriptors */
+        dring->callback_ring_buf = kcalloc(dring->num_entries,
+			sizeof(struct dma_async_tx_descriptor), GFP_KERNEL);
+        if (!dring->callback_ring_buf) {
+		dsa_free_descriptors(dring);
+                return -ENOMEM;
+	}
+
+        /* map completion ring to create DMA addresses.
+         */
+	dring->comp_base = pci_map_single(dev, dring->completion_ring_buf,
+				dring->comp_ring_size, PCI_DMA_FROMDEVICE);
+
+	if (dring->comp_base == 0) {
+		dsa_free_descriptors(dring);
+		return -EFAULT;
+	}
+
+	dsa_init_completion_ring(dring);
+
+	return dring->num_entries;
 }
 
 static int dsa_dma_probe(struct dsadma_device *dsa_dma)

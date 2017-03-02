@@ -62,8 +62,13 @@
 
 
 /* Completion record status */
-#define DSA_COMP_SUCCESS         0x1
-#define DSA_COMP_SUCCESS_PRED    0x2
+#define DSA_COMP_SUCCESS          0x1
+#define DSA_COMP_SUCCESS_PRED     0x2
+#define DSA_COMP_PAGE_FAULT       0x3
+#define DSA_COMP_READBACK_FAIL    0x4
+#define DSA_COMP_BATCH_FAIL       0x5
+#define DSA_COMP_BATCH_PAGE_FAULT 0x6
+#define DSA_COMP_APPLY_DELTA_FAIL 0x7
 
 struct dsa_dcast_desc {
 	u64 dest2;
@@ -80,8 +85,8 @@ struct dsa_dma_descriptor {
 	uint64_t	dst_addr;
 	uint32_t	xfer_size;
 	uint16_t	int_handle;
+	uint16_t	rsvd1;
 	union {
-		uint16_t	op_specific[13];
 		//struct dsa_cdelta_desc cdelta;
 		//struct dsa_adelta_desc adelta;
 		struct dsa_dcast_desc  dcast;
@@ -91,8 +96,9 @@ struct dsa_dma_descriptor {
 		//struct dsa_difstrp_desc difstrp;
 		//struct dsa_difupdt_desc difupdt;
 		//struct dsa_cflush_desc  cflush;
-	}op;
-};
+		uint8_t	op_specific[24];
+	}__attribute__ ((packed));
+} __attribute__((packed));
 
 struct dsa_raw_descriptor {
 	uint64_t        field[8];
@@ -100,7 +106,7 @@ struct dsa_raw_descriptor {
 
 struct dsa_completion_record {
 	uint8_t 	status;
-	uint8_t		fault_code;
+	uint8_t		result;
 	uint8_t		rsvd;
 	uint8_t		idx;
 	uint32_t	bytes_completed;

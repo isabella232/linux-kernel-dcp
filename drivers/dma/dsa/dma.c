@@ -44,19 +44,19 @@
  */
 irqreturn_t dsa_wq_completion_interrupt(int irq, void *data)
 {
-	struct dsa_completion_ring *dsa_ring = data;
+	struct dsa_irq_entry *irq_entry = data;
 
 	printk("received wq completion interrupt\n");
 
-	tasklet_schedule(&dsa_ring->cleanup_task);
+	tasklet_schedule(&irq_entry->cleanup_task);
 
 	return IRQ_HANDLED;
 }
 
 irqreturn_t dsa_misc_interrupt(int irq, void *data)
 {
-	struct dsa_completion_ring *dsa_ring = data;
-	struct dsadma_device *dsa = dsa_ring->dsa;
+	struct dsa_irq_entry *irq_entry = data;
+	struct dsadma_device *dsa = irq_entry->dsa;
 	u32 int_cause;
 
 	printk("received misc completion interrupt\n");
@@ -92,7 +92,7 @@ irqreturn_t dsa_misc_interrupt(int irq, void *data)
 		writeq(0x3, dsa->reg_base + DSA_SWERR_OFFSET);
 	}
 
-	tasklet_schedule(&dsa_ring->cleanup_task);
+	tasklet_schedule(&irq_entry->cleanup_task);
 
 	return IRQ_HANDLED;
 }
@@ -147,6 +147,7 @@ void __iomem *dsa_get_wq_reg(struct dsadma_device *dsa, int wq_idx,
 	}
 	wq_offset = wq_offset << PAGE_SHIFT;
 
+	printk("%d msix_idx %d wq %d wq_offset %x\n", dsa->num_wq_irqs, msix_idx, wq_idx, wq_offset);
 	return (dsa->wq_reg_base + wq_offset);
 }
 
@@ -171,69 +172,38 @@ int dsa_enqcmds (struct dsa_dma_descriptor *hw, void __iomem * wq_reg)
         return 0;
 }
 
-void __dsa_issue_pending(struct dsa_work_queue *wq)
+void dsa_issue_pending(struct dma_chan *c)
 {
-	struct dsa_completion_ring *dring;
+	struct dsa_work_queue *wq = to_dsa_wq(c);
+	struct dsa_completion_ring *dring = wq->dring;
 	int i, pending;
 	struct dsa_ring_ent *desc;
-	void __iomem * wq_reg;
 
-	dring = dsa_get_completion_ring(wq->dsa, wq->idx);
+	spin_lock_bh(&wq->lock);
 
 	pending = dsa_ring_pending(dring);
+	if (!pending)
+		return;
+
 	dring->dmacount += pending;
 
-	printk("Issuing %d descs using wq %d ring %d\n", pending, wq->idx, dring->idx);
+	printk("Issuing %d descs using wq %d\n", pending, wq->idx);
+
+	/* FIXME: If pending descs are more than a threshold, issue them into
+	 * a batch desc, to avoid submitting too many descs using movdir64b */
 	for (i = 0; i < pending; i++) {
-		desc = dsa_get_ring_ent(dring, dring->tail);
+		desc = dsa_get_ring_ent(dring, dring->issued + i);
 
-		wq_reg = dsa_get_wq_reg(wq->dsa, wq->idx, dring->idx, 1);
-
-		printk("desc op %x reg %p ded %d c %llx\n", desc->desc->opcode,
-			wq_reg, wq->dedicated, desc->desc->compl_addr);
-
-		if (wq->dedicated) {
-			/* use MOVDIR64B for DWQ */
-			movdir64b(desc->desc, wq_reg);
-		} else {
-			/* use ENQCMDS for SWQ */
-			dsa_enqcmds(desc->desc, wq_reg);
-		}
-		dring->issued++;
+		/* use MOVDIR64B for DWQ */
+		movdir64b(&desc->hw, dring->wq_reg);
 	}
+	dring->issued = add_dring_idx(dring, dring->issued, pending);
+
+	spin_unlock_bh(&wq->lock);
 	dev_dbg(to_dev(wq),
 		"%s: head: %#x tail: %#x issued: %#x count: %#x\n",
 		__func__, dring->head, dring->tail,
 		dring->issued, dring->dmacount);
-}
-
-void dsa_issue_pending(struct dma_chan *c)
-{
-	struct dsa_work_queue *wq = to_dsa_wq(c);
-	struct dsa_completion_ring *dring;
-
-	dring = dsa_get_completion_ring(wq->dsa, wq->idx);
-
-	if (dsa_ring_pending(dring)) {
-		spin_lock_bh(&wq->lock);
-		__dsa_issue_pending(wq);
-		spin_unlock_bh(&wq->lock);
-	}
-}
-
-/**
- * dsa_update_pending - log pending descriptors
- * @dsa: dsa+ channel
- *
- * Check if the number of unsubmitted descriptors has exceeded the
- * watermark.  Called with prep_lock held
- */
-static void dsa_update_pending(struct dsa_work_queue *wq)
-{
-#if 0
-	if (dsa_ring_pending(dsa_chan) > dsa_pending_level)
-		__dsa_issue_pending(dsa_chan);
-#endif
 }
 
 static void __dsa_restart_wq(struct dsa_work_queue *wq)
@@ -282,23 +252,6 @@ static int dsa_quiesce(struct dsa_work_queue *wq, unsigned long tmo)
 	return err;
 }
 
-static int dsa_reset_sync(struct dsa_work_queue *wq, unsigned long tmo)
-{
-	int err = 0;
-#if 0
-	unsigned long end = jiffies + tmo;
-	dsa_reset(dsa_chan);
-	while (dsa_reset_pending(dsa_chan)) {
-		if (end && time_after(jiffies, end)) {
-			err = -ETIMEDOUT;
-			break;
-		}
-		cpu_relax();
-	}
-#endif
-	return err;
-}
-
 static dma_cookie_t dsa_tx_submit_unlock(struct dma_async_tx_descriptor *tx)
 {
 	struct dma_chan *c = tx->chan;
@@ -326,46 +279,33 @@ static dma_cookie_t dsa_tx_submit_unlock(struct dma_async_tx_descriptor *tx)
 	return cookie;
 }
 
-struct dsa_completion_ring * dsa_get_completion_ring(struct dsadma_device *dsa,
-			unsigned int wq_idx)
-{
-	/* FIXME: return the completion ring based on wq idx for now.
-	 * dsa->comp_rings[0]
-	 * is not used since it would correspond to MSIX entry 0 which is not
-	 * used for WQ completion interrupts. */
-
-	return &dsa->comp_rings[wq_idx + 1];
-}
-
-struct dsa_work_queue * dsa_get_work_queue (struct dsadma_device *dsa,
-			unsigned int ring_idx)
-{
-	/* FIXME: return the work queue based on ring idx for now.
-	 * dsa->comp_rings[0]
-	 * is not used since it would correspond to MSIX entry 0 which is not
-	 * used for WQ completion interrupts. */
-	BUG_ON(ring_idx == 0);
-
-	return (ring_idx > dsa->num_wqs)? NULL: &dsa->wqs[ring_idx - 1];
-}
-
 static void dsa_init_ring_ent(struct dsa_ring_ent *entry,
-		struct dsa_completion_ring *ring, int desc_idx)
+		struct dsa_completion_ring *dring, int desc_idx)
 {
-	entry->desc = ring->desc_ring_buf + desc_idx *
-				sizeof(struct dsa_dma_descriptor);
-	entry->completion = ring->completion_ring_buf +
+	entry->completion = dring->completion_ring_buf +
 			desc_idx * sizeof(struct dsa_completion_record);
 
-	if (dsa_get_completion_ring(ring->dsa, ring->dsa->system_wq_idx) ==
-					ring)
-		entry->desc->compl_addr = ring->ring_base + desc_idx *
+	/* comp_base is setup for DMAEngine contexts. Rest use SVM contexts */
+	if (dring->comp_base) {
+		entry->hw.compl_addr = dring->comp_base + desc_idx *
 					sizeof(struct dsa_completion_record);
-	else
-		entry->desc->compl_addr = (u64)entry->completion;
+		entry->txd = dring->callback_ring_buf + desc_idx *
+					sizeof(struct dma_async_tx_descriptor);
 
-	entry->txd.tx_submit = dsa_tx_submit_unlock;
-	entry->txd.phys = __pa(entry->desc);
+		entry->txd->tx_submit = dsa_tx_submit_unlock;
+		entry->txd->phys = __pa(&entry->hw);
+	} else {
+		entry->hw.compl_addr = (u64)entry->completion;
+		entry->cb_desc = dring->callback_ring_buf + desc_idx *
+					sizeof(struct dsa_callback_descriptor);
+		init_waitqueue_head(&entry->waitq);
+
+		/* Set the PASID and U/S for SWQ */
+		if (dring->wq->dedicated == 0) {
+			entry->hw.u_s = 1;
+			entry->hw.pasid = dring->wq->dsa->system_pasid;
+		}
+	}
 }
 
 void dsa_free_ring_ent(struct dsa_ring_ent *desc, struct dma_chan *chan)
@@ -379,18 +319,24 @@ void dsa_free_ring_ent(struct dsa_ring_ent *desc, struct dma_chan *chan)
 #endif
 }
 
-int dsa_alloc_completion_ring(struct dsa_completion_ring *dring, gfp_t flags)
+void dsa_free_client_buffers (struct dsa_completion_ring *dring)
+{
+
+	free_pages((unsigned long)dring->completion_ring_buf,
+					get_order(dring->comp_ring_size));
+	kfree(dring->ring);
+}
+
+int dsa_alloc_client_buffers (struct dsa_completion_ring *dring, gfp_t flags)
 {
 	struct dsa_ring_ent *ring;
-	int descs = dring->num_entries;
-	int i, order;
-	struct pci_dev *dev = dring->dsa->pdev;
+	int order;
 
 	/* allocate the array to hold the software ring */
-	ring = kcalloc(descs, sizeof(*ring), flags);
+	ring = kcalloc(dring->num_entries, sizeof(*ring), flags);
 	if (!ring)
 		return -ENOMEM;
-	memset(ring, 0, descs * sizeof(*ring));
+	memset(ring, 0, dring->num_entries * sizeof(*ring));
 
 	order = get_order(dring->comp_ring_size);
 	dring->completion_ring_buf = (void *)__get_free_pages(flags, order);
@@ -399,145 +345,23 @@ int dsa_alloc_completion_ring(struct dsa_completion_ring *dring, gfp_t flags)
 		kfree(ring);
 		return -ENOMEM;
 	}
-	/* If it is the system wq, map completion ring using DMA APIs.
-	 * Otherwise, normal virtual addresses should be used.
-	 */
-	if (dsa_get_completion_ring(dring->dsa, dring->dsa->system_wq_idx)
-								== dring) {
-		dring->ring_base = pci_map_single(dev,
-				dring->completion_ring_buf,
-				dring->comp_ring_size, PCI_DMA_BIDIRECTIONAL);
-	}
 
 	memset(dring->completion_ring_buf, 0, dring->comp_ring_size);
 
-	order = get_order(dring->desc_ring_size);
-	dring->desc_ring_buf = (void *)__get_free_pages(flags, order);
-
-	if (!dring->desc_ring_buf) {
-		kfree(ring);
-		free_pages((unsigned long)dring->completion_ring_buf,
-					get_order(dring->comp_ring_size));
-		return -ENOMEM;
-	}
-	memset(dring->desc_ring_buf, 0, dring->desc_ring_size);
-
 	dring->ring = ring;
 
-	for (i = 0; i < descs; i++) {
-		dsa_init_ring_ent(&ring[i], dring, i);
-		set_desc_id(&ring[i], i);
-	}
 	return 0;
 }
 
-static bool reshape_ring(struct dsa_work_queue *wq, int order)
+void dsa_init_completion_ring (struct dsa_completion_ring *dring)
 {
-	/* reshape differs from normal ring allocation in that we want
-	 * to allocate a new software ring while only
-	 * extending/truncating the hardware ring
-	 */
-#if 0
-	struct dma_chan *c = &wq->dma_chan;
-	const u32 curr_size = dsa_ring_size(dsa_chan);
-	const u16 active = dsa_ring_active(dsa_chan);
-	const u32 new_size = 1 << order;
-	struct dsa_ring_ent **ring;
-	u32 i;
+	int i;
+	struct dsa_ring_ent *ring = dring->ring;
 
-	if (order > dsa_get_max_alloc_order())
-		return false;
-
-	/* double check that we have at least 1 free descriptor */
-	if (active == curr_size)
-		return false;
-
-	/* when shrinking, verify that we can hold the current active
-	 * set in the new ring
-	 */
-	if (active >= new_size)
-		return false;
-
-	/* allocate the array to hold the software ring */
-	ring = kcalloc(new_size, sizeof(*ring), GFP_NOWAIT);
-	if (!ring)
-		return false;
-
-	/* allocate/trim descriptors as needed */
-	if (new_size > curr_size) {
-		/* copy current descriptors to the new ring */
-		for (i = 0; i < curr_size; i++) {
-			u16 curr_idx = (dsa_chan->tail+i) & (curr_size-1);
-			u16 new_idx = (dsa_chan->tail+i) & (new_size-1);
-
-			ring[new_idx] = dsa_chan->ring[curr_idx];
-			set_desc_id(ring[new_idx], new_idx);
-		}
-
-		/* add new descriptors to the ring */
-		for (i = curr_size; i < new_size; i++) {
-			u16 new_idx = (dsa_chan->tail+i) & (new_size-1);
-
-			ring[new_idx] = dsa_alloc_ring_ent(c, GFP_NOWAIT);
-			if (!ring[new_idx]) {
-				while (i--) {
-					u16 new_idx = (dsa_chan->tail+i) &
-						       (new_size-1);
-
-					dsa_free_ring_ent(ring[new_idx], c);
-				}
-				kfree(ring);
-				return false;
-			}
-			set_desc_id(ring[new_idx], new_idx);
-		}
-
-		/* hw link new descriptors */
-		for (i = curr_size-1; i < new_size; i++) {
-			u16 new_idx = (dsa_chan->tail+i) & (new_size-1);
-			struct dsa_ring_ent *next =
-				ring[(new_idx+1) & (new_size-1)];
-			struct dsa_dma_descriptor *hw = ring[new_idx]->hw;
-
-			hw->next = next->txd.phys;
-		}
-	} else {
-		struct dsa_dma_descriptor *hw;
-		struct dsa_ring_ent *next;
-
-		/* copy current descriptors to the new ring, dropping the
-		 * removed descriptors
-		 */
-		for (i = 0; i < new_size; i++) {
-			u16 curr_idx = (dsa_chan->tail+i) & (curr_size-1);
-			u16 new_idx = (dsa_chan->tail+i) & (new_size-1);
-
-			ring[new_idx] = dsa_chan->ring[curr_idx];
-			set_desc_id(ring[new_idx], new_idx);
-		}
-
-		/* free deleted descriptors */
-		for (i = new_size; i < curr_size; i++) {
-			struct dsa_ring_ent *ent;
-
-			ent = dsa_get_ring_ent(dsa_chan, dsa_chan->tail+i);
-			dsa_free_ring_ent(ent, c);
-		}
-
-		/* fix up hardware ring */
-		hw = ring[(dsa_chan->tail+new_size-1) & (new_size-1)]->hw;
-		next = ring[(dsa_chan->tail+new_size) & (new_size-1)];
-		hw->next = next->txd.phys;
+	for (i = 0; i < dring->num_entries; i++) {
+		dsa_init_ring_ent(&ring[i], dring, i);
+		set_desc_id(&ring[i], i);
 	}
-
-	dev_dbg(to_dev(dsa_chan), "%s: allocated %d descriptors\n",
-		__func__, new_size);
-
-	kfree(dsa_chan->ring);
-	dsa_chan->ring = ring;
-	dsa_chan->alloc_order = order;
-#endif
-	return true;
 }
 
 /**
@@ -600,58 +424,6 @@ int dsa_check_space_lock(struct dsa_work_queue *wq, int num_descs)
 	return -ENOMEM;
 }
 
-static bool desc_has_ext(struct dsa_ring_ent *desc)
-{
-#if 0
-	struct dsa_dma_descriptor *hw = desc->hw;
-	if (hw->ctl_f.op == DSA_OP_XOR ||
-	    hw->ctl_f.op == DSA_OP_XOR_VAL) {
-		struct dsa_xor_descriptor *xor = desc->xor;
-
-		if (src_cnt_to_sw(xor->ctl_f.src_cnt) > 5)
-			return true;
-	} else if (hw->ctl_f.op == DSA_OP_PQ ||
-		   hw->ctl_f.op == DSA_OP_PQ_VAL) {
-		struct dsa_pq_descriptor *pq = desc->pq;
-
-		if (src_cnt_to_sw(pq->ctl_f.src_cnt) > 3)
-			return true;
-	}
-#endif
-	return false;
-}
-
-static void
-desc_get_errstat(struct dsa_work_queue *wq, struct dsa_ring_ent *desc)
-{
-#if 0
-	struct dsa_dma_descriptor *hw = desc->hw;
-	switch (hw->ctl_f.op) {
-	case DSA_OP_PQ_VAL:
-	case DSA_OP_PQ_VAL_16S:
-	{
-		struct dsa_pq_descriptor *pq = desc->pq;
-
-		/* check if there's error written */
-		if (!pq->dwbes_f.wbes)
-			return;
-
-		/* need to set a chanerr var for checking to clear later */
-
-		if (pq->dwbes_f.p_val_err)
-			*desc->result |= SUM_CHECK_P_RESULT;
-
-		if (pq->dwbes_f.q_val_err)
-			*desc->result |= SUM_CHECK_Q_RESULT;
-
-		return;
-	}
-	default:
-		return;
-	}
-#endif
-}
-
 static void dsa_cleanup(struct dsa_work_queue *wq)
 {
 #if 0
@@ -671,40 +443,76 @@ static void dsa_cleanup(struct dsa_work_queue *wq)
 
 void dsa_wq_cleanup(unsigned long data)
 {
-	struct dsa_completion_ring *dring = (struct dsa_completion_ring *)data;
+	struct dsa_irq_entry *irq_entry = (struct dsa_irq_entry *)data;
+	struct dsa_irq_event *ev;
+
+        /* wake head waiter for each completion ring using this IRQ */
+	read_lock(&irq_entry->irq_wait_lock);
+	list_for_each_entry(ev, &irq_entry->irq_wait_head, irq_wait_chain) {
+		if (ev->isr_cb)
+			ev->isr_cb(ev->dring);
+		else if (ev->use_waitq)
+			wake_up_interruptible(&ev->waitq);
+	}
+	read_unlock(&irq_entry->irq_wait_lock);
+}
+
+void dsa_svm_completion_cleanup(struct dsa_completion_ring *dring)
+{
+	struct dsa_work_queue *wq;
+	struct dsa_completion_record *comp;
+	struct dsa_ring_ent *desc;
+	int idx;
+
+	idx = dring->tail;
+        do {
+                desc = dsa_get_ring_ent(dring, idx);
+                wq = dring->wq;
+
+                comp = desc->completion;
+
+/*
+		if (comp->status == DSA_COMP_SUCCESS) {
+			printk("operation %d success\n", desc->desc->opcode);
+			cbd = desc->cb_desc;
+			if (cbd->callback) {
+				cbd->callback(cbd->callback_param);
+				cbd->callback = NULL;
+			}
+			comp->status = 0;
+		} else
+*/
+		if (comp->status) {
+			dsa_unlock_desc(desc);
+			//printk("operation %d status %d\n", desc->desc->opcode,
+					//comp->status);
+		} else {
+			break;
+		}
+		idx = inc_dring_idx(dring, idx);
+        } while (idx != dring->head);
+
+	printk("svm cleaned completion h:t %d:%d\n", dring->head, dring->tail);
+}
+
+void dsa_dma_completion_cleanup(struct dsa_completion_ring *dring)
+{
 	struct dsa_work_queue *wq;
 	struct dsa_completion_record *comp;
 	struct dma_async_tx_descriptor *tx;
 	struct dsa_ring_ent *desc;
 	int idx;
-/*
-	if (dsa_ring->wq) {
-		if (!list_empty(&dsa_ring->wq->user_ctx_list)) {
-			struct dsa_context *ctx;
-			struct list_head *ptr, *n;
-			list_for_each_safe(ptr, n, dsa_ring->wq->user_ctx_list) {
-				ctx = list_entry(ptr, struct dsa_context, wq_list);
-				wake_up_interruptible(&ctx->intr_queue);
-				list_del(&ctx->wq_list);
-			}
-		} else {
 
-
-		}
-		return;
-	}
-*/
-	printk("cleanup completion ring %d h:t %d:%d\n", dring->idx, dring->head, dring->tail);
 	idx = dring->tail;
+	wq = dring->wq;
         do {
                 desc = dsa_get_ring_ent(dring, idx);
-                wq = desc->wq;
 
                 comp = desc->completion;
 
 		if (comp->status == DSA_COMP_SUCCESS) {
-			printk("operation %d success\n", desc->desc->opcode);
-			tx = &desc->txd;
+			tx = desc->txd;
+
 			if (tx->cookie) {
 				dma_cookie_complete(tx);
 				dma_descriptor_unmap(tx);
@@ -715,25 +523,21 @@ void dsa_wq_cleanup(unsigned long data)
 			}
 			comp->status = 0;
 		} else if (comp->status) {
-			printk("operation %d failure %d\n", desc->desc->opcode, comp->status);
+			printk("operation %d failure %d %llx\n",
+			desc->hw.opcode, comp->status, comp->op_specific[0]);
 		} else {
 			break;
 		}
-		idx++;
+		idx = inc_dring_idx(dring, idx);
+		dring->tail = idx;
                 //dump_desc_dbg(wq, desc);
         } while (idx != dring->head);
 
-	spin_lock_bh(&dring->cleanup_lock);
-	dring->tail = idx;
-	spin_unlock_bh(&dring->cleanup_lock);
-	printk("cleaned up completion ring %d h:t %d:%d\n", dring->idx, dring->head, dring->tail);
+	printk("dma cleaned completion h:t %d:%d\n", dring->head, dring->tail);
 }
 
 void dsa_misc_cleanup(unsigned long data)
 {
-	struct dsa_completion_ring *dring = (struct dsa_completion_ring *)data;
-	struct dsadma_device *dsa = dring->dsa;
-
 	printk("In miscellaneous cleanup\n");
 }
 
@@ -743,31 +547,6 @@ static void dsa_restart_wq(struct dsa_work_queue *wq)
 	dsa_cleanup(wq);
 
 	__dsa_restart_wq(wq);
-}
-
-static void check_active(struct dsa_work_queue *wq)
-{
-#if 0
-	if (dsa_ring_active(dsa_chan)) {
-		mod_timer(&dsa_chan->timer, jiffies + COMPLETION_TIMEOUT);
-		return;
-	}
-
-	if (test_and_clear_bit(DSA_CHAN_ACTIVE, &dsa_chan->state))
-		mod_timer(&dsa_chan->timer, jiffies + IDLE_TIMEOUT);
-	else if (dsa_chan->alloc_order > dsa_get_alloc_order()) {
-		/* if the ring is idle, empty, and oversized try to step
-		 * down the size
-		 */
-		reshape_ring(dsa_chan, dsa_chan->alloc_order - 1);
-
-		/* keep shrinking until we get back to our minimum
-		 * default size
-		 */
-		if (dsa_chan->alloc_order > dsa_get_alloc_order())
-			mod_timer(&dsa_chan->timer, jiffies + IDLE_TIMEOUT);
-	}
-#endif
 }
 
 void dsa_timer_event(unsigned long data)
@@ -836,7 +615,7 @@ void dsa_timer_event(unsigned long data)
 enum dma_status dsa_tx_status(struct dma_chan *c, dma_cookie_t cookie,
 		struct dma_tx_state *txstate)
 {
-	struct dsa_work_queue *wq = to_dsa_wq(c);
+	//struct dsa_work_queue *wq = to_dsa_wq(c);
 	enum dma_status ret;
 
 	ret = dma_cookie_status(c, cookie, txstate);
@@ -846,16 +625,126 @@ enum dma_status dsa_tx_status(struct dma_chan *c, dma_cookie_t cookie,
 	return dma_cookie_status(c, cookie, txstate);
 }
 
+
+void dsa_free_batch_resources (struct dsa_batch *batch)
+{
+	int order;
+
+	order = get_order(sizeof(struct dsa_dma_descriptor) *
+						batch->num_descs);
+	free_pages((unsigned long)batch->descs, order);
+
+	batch->descs = NULL;
+
+	order = get_order(sizeof(struct dsa_completion_record) *
+						batch->num_descs);
+	free_pages((unsigned long)batch->comp, order);
+
+	batch->comp = NULL;
+
+	batch->num_descs = 0;
+}
+
+void dsa_dma_free_batch_resources (struct dsa_batch *batch)
+{
+	struct dsa_work_queue *wq = batch->dring->wq;
+	struct pci_dev *dev = wq->dsa->pdev;
+	int batch_size, comp_size;
+
+	comp_size = batch->num_descs * sizeof (struct dsa_completion_record);
+	pci_unmap_single(dev, batch->dma_compl, comp_size, PCI_DMA_FROMDEVICE);
+
+	batch_size = batch->num_descs * sizeof (struct dsa_dma_descriptor);
+	pci_unmap_single(dev, batch->dma_batch, batch_size, PCI_DMA_TODEVICE);
+
+	dsa_free_batch_resources(batch);
+}
+
+struct dsa_batch *dsa_alloc_batch_resources (struct dsa_completion_ring *dring,
+			int num_descs)
+{
+	struct dsa_batch *batch = &dring->batch;
+	int batch_size, batch_order, cr_size, cr_order, i;
+
+	batch->dring = dring;
+	batch->num_descs = num_descs;
+
+        batch_size = sizeof(struct dsa_dma_descriptor) * num_descs;
+        batch_order = get_order(batch_size);
+	/* batch descriptors need to be 64B aligned */
+        batch->descs = (struct dsa_dma_descriptor *)
+			__get_free_pages(GFP_KERNEL, batch_order);
+        if (!batch->descs)
+                return NULL;
+	memset(batch->descs, 0, batch_size);
+
+        cr_size = sizeof(struct dsa_completion_record) * num_descs;
+        cr_order = get_order(cr_size);
+	/* batch completion records need to be 64B aligned */
+        batch->comp = (struct dsa_completion_record *)
+			__get_free_pages(GFP_KERNEL, cr_order);
+        if (!batch->comp) {
+		free_pages((unsigned long)batch->descs, batch_order);
+                return NULL;
+        }
+	memset(batch->comp, 0, cr_size);
+
+        //printk("batch compl rec %lx desc %lx\n", batch->comp, batch->descs);
+	for (i = 0; i < num_descs; i++)
+		batch->descs[i].compl_addr = (u64)&batch->comp[i];
+
+	return batch;
+}
+
+struct dsa_batch *dsa_dma_alloc_batch_resources (struct dma_chan *dma_chan,
+			int num_descs)
+{
+	struct dsa_work_queue *wq = to_dsa_wq(dma_chan);
+	struct pci_dev *dev = wq->dsa->pdev;
+	struct dsa_completion_ring *dring = wq->dring;
+	struct dsa_batch *batch;
+	int batch_size, comp_size, i;
+
+	batch = dsa_alloc_batch_resources(dring, num_descs);
+
+	comp_size = num_descs * sizeof (struct dsa_completion_record);
+
+        batch->dma_compl = pci_map_single(dev, batch->comp, comp_size,
+						PCI_DMA_FROMDEVICE);
+
+        if (dma_mapping_error(&dev->dev, batch->dma_compl)) {
+                dsa_free_batch_resources(batch);
+		printk("pci map failed\n");
+		return NULL;
+        }
+
+	batch_size = num_descs * sizeof (struct dsa_dma_descriptor);
+        batch->dma_batch = pci_map_single(dev, batch->descs, batch_size,
+						PCI_DMA_TODEVICE);
+        if (dma_mapping_error(&dev->dev, batch->dma_batch)) {
+		pci_unmap_single(dev, batch->dma_compl, comp_size,
+						PCI_DMA_FROMDEVICE);
+                dsa_free_batch_resources(batch);
+		printk("pci map failed\n");
+		return NULL;
+        }
+
+	for (i = 0; i < num_descs; i++)
+		batch->descs[i].compl_addr = (u64)(batch->dma_compl + i *
+				sizeof(struct dsa_completion_record));
+	return batch;
+}
+
 static int dsa_irq_reinit(struct dsadma_device *dsa)
 {
 	struct pci_dev *pdev = dsa->pdev;
-	int irq = pdev->irq, i;
+	int i;
 
-	for (i = 0; i < dsa->msixcnt; i++) {
+	for (i = 0; i < dsa->num_wq_irqs + 1; i++) {
 		struct msix_entry *msix = &dsa->msix_entries[i];
-		struct dsa_completion_ring *dring = &dsa->comp_rings[i];
+		struct dsa_irq_entry *irq_entry = &dsa->irq_entries[i];
 
-		devm_free_irq(&pdev->dev, msix->vector, dring);
+		devm_free_irq(&pdev->dev, msix->vector, irq_entry);
 	}
 
 	pci_disable_msix(pdev);

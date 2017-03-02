@@ -171,33 +171,21 @@ static struct svm_dev_ops dsa_svm_ops = {
 
 static int dsa_ioctl_submit_desc (struct dsa_context *ctx, unsigned long arg)
 {
-	struct dsa_submit_desc_req req;
 	void __user *argp = (void __user *)arg;
-	struct dsadma_device *dsa = ctx->dsa;
-	struct dsa_completion_ring *dring;
-	struct dsa_work_queue *wq;
-	void __iomem * wq_reg;
+	struct dsa_dma_descriptor desc;
 	int ret = 0;
 
-	if ((ret = copy_from_user(&req, argp, sizeof(req)))) {
+	if ((ret = copy_from_user(&desc, argp, sizeof(desc)))) {
 		printk("ioctl SUBMIT_DESC: copy_from_user failed: %d\n", ret);
 		return -EFAULT;
 	}
 
-	if (req.wq_idx >= dsa->num_wqs || ctx->wq_idx != req.wq_idx)
-		return -EINVAL;
+	desc.pasid = ctx->pasid;
+	desc.u_s = 0;
 
-	req.desc.pasid = ctx->pasid;
-	req.desc.u_s = 0;
+	printk("submit_desc: reg %p src %llx\n", ctx->wq_reg, desc.src_addr);
 
-	wq = &dsa->wqs[req.wq_idx];
-
-	dring = dsa_get_completion_ring(wq->dsa, wq->idx);
-
-	wq_reg = dsa_get_wq_reg(wq->dsa, wq->idx, dring->idx, 1);
-	printk("submit_desc: wq %d reg %p src %llx\n", wq->idx, wq_reg, req.desc.src_addr);
-
-	if (dsa_enqcmds(&req.desc, wq_reg))
+	if (dsa_enqcmds(&desc, ctx->wq_reg))
 		return -ENOSPC;
 
 	return ret;
@@ -209,39 +197,31 @@ static int dsa_ioctl_wq_alloc (struct dsa_context *ctx, unsigned long arg)
 	void __user *argp = (void __user *)arg;
 	struct dsadma_device *dsa = ctx->dsa;
 	struct dsa_work_queue *wq;
-	struct dsa_completion_ring *dring;
-	int i, ret = 0;
-
-	if (dsa->num_wqs == 0)
-		return -ENODEV;
+	struct dsa_irq_entry *irq_entry;
+	int ret = 0;
+	u16 msix_idx;
 
 	if ((ret = copy_from_user(&req, argp, sizeof(req)))) {
 		printk("ioctl WQ_ALLOC: copy_from_user failed: %d\n", ret);
 		return -EFAULT;
 	}
 
-	printk("wq_alloc: searching wq ded %d\n", req.dedicated);
+	wq = dsa_wq_alloc (dsa, req.dedicated);
 
-	/* FIXME: Use proper locks to provide mutual exclusion b/w processes */
-	for (i = 0; i < dsa->num_wqs; i++) {
-		wq = &ctx->dsa->wqs[i];
-		if (req.dedicated == wq->dedicated && wq->available)
-			break;
-	}
-
-	/* FIXME: lock to make sure DMA API doesn't use this DWQ anymore */
-	if (i == dsa->num_wqs)
+	if (wq == NULL)
 		return -ENODEV;
 
 	printk("wq_alloc: wq %d dedicated %d\n", wq->idx, wq->dedicated);
 	ctx->wq_idx = wq->idx;
 
-	init_waitqueue_head(&ctx->intr_queue);
-
-	dring = dsa_get_completion_ring(wq->dsa, wq->idx);
-
 	/* reserve the interrupt for this wq */
-	dring->wq = wq;
+	msix_idx = dsa_get_msix_index(dsa);
+
+	irq_entry = &dsa->irq_entries[msix_idx];
+
+	dsa_setup_irq_event(&ctx->ev, irq_entry, NULL, NULL);
+
+	ctx->wq_reg = dsa_get_wq_reg(dsa, wq->idx, msix_idx, 1);
 
 	/* Allocate and bind a PASID */
 	ctx->svm_dev = &dsa->pdev->dev;
@@ -262,8 +242,6 @@ static int dsa_ioctl_wq_alloc (struct dsa_context *ctx, unsigned long arg)
 
 	/* If dedicated queue, configure PASID into WQ PASID register */
 	if (wq->dedicated) {
-		wq->available = 0;
-		wq->allocated = 1;
 		ret = dsa_wq_set_pasid(dsa, ctx->wq_idx, ctx->pasid, 0);
 		if (ret)
 			printk("set_pasid failed\n");

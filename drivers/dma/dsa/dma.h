@@ -33,6 +33,10 @@
 
 #define DSA_DMA_DCA_ANY_CPU		~0
 
+
+#define DSA_WQ_UNALLOCATED  (-1)
+#define IA32_PASID_MSR   0x00000d93
+
 #define to_dsadma_device(dev) container_of(dev, struct dsadma_device, dma_dev)
 #define to_dev(dsa_wq) (&(dsa_wq)->dsa->pdev->dev)
 #define to_pdev(dsa_wq) ((dsa_wq)->dsa->pdev)
@@ -53,9 +57,16 @@
  */
 #define NULL_DESC_BUFFER_SIZE 1
 
+struct dsa_completion_ring;
+
 enum dsa_irq_mode {
 	DSA_NOIRQ = 0,
 	DSA_MSIX
+};
+
+enum desc_flags {
+	desc_locked,
+	desc_in_use,
 };
 
 struct dsa_grpcfg_reg {
@@ -91,6 +102,9 @@ struct dsa_work_queue {
 	struct list_head user_ctx_list;
 	int available;
 	int allocated;
+
+	/* for dedicated wq */
+	struct dsa_completion_ring *dring;
 };
 
 struct dsa_work_queue_reg {
@@ -136,24 +150,80 @@ struct dsa_work_queue_reg {
 	}d;
 };
 
+struct dsa_batch {
+	struct dsa_completion_ring *dring;
+	int num_descs;
+	struct dsa_dma_descriptor *descs;
+	struct dsa_completion_record *comp;
+	dma_addr_t   dma_batch;
+	dma_addr_t   dma_compl;
+};
+
+typedef void (*dsa_desc_callback)(void *param);
+
+struct dsa_callback_descriptor {
+	void *callback_param;
+	dsa_desc_callback callback;
+	struct completion cmpl;
+};
+
+struct dsa_irq_event {
+	wait_queue_head_t waitq;
+	struct dsa_irq_entry *irq_entry;
+	int use_waitq;
+	struct dsa_completion_ring *dring;
+	u32 irq_vector;
+	struct list_head irq_wait_chain;
+	void (*isr_cb)(struct dsa_completion_ring *dring);
+};
+
 struct dsa_completion_ring {
-	u16 num_entries;
-	struct tasklet_struct cleanup_task;
 	struct dsadma_device *dsa;
-	u16 idx;
+	struct dsa_work_queue *wq;
+	struct dsa_ring_ent *ring;
+	struct dsa_batch    batch;
+	spinlock_t 	space_lock;
+	u16 num_entries;
 	u16 head;
 	u16 tail;
 	u16 dmacount;
 	u16 issued;
 	u64 completed; 		/* cumulative number */
 	u32 comp_ring_size;
-	u32 desc_ring_size;
-	spinlock_t 	cleanup_lock;
-	void    *desc_ring_buf;
 	void    *completion_ring_buf;
-	dma_addr_t  ring_base;
-	struct dsa_work_queue *wq;
-	struct dsa_ring_ent *ring;
+	void    *callback_ring_buf;
+	dma_addr_t  comp_base;
+	void __iomem *wq_reg;
+	struct dsa_irq_event ev;
+};
+
+struct dsa_context {
+	int user_handle;
+	int pasid; /* 20 bits */
+#ifdef CONFIG_INTEL_IOMMU_SVM
+	struct device *svm_dev;
+#endif
+	struct dsadma_device *dsa;
+	/* FIXME: Currently only 1 WQ per user context */
+	int wq_idx;
+	int flags;
+	struct list_head mm_list;
+	struct list_head wq_list;
+	struct task_struct *tsk;
+	struct dsa_irq_event ev;
+	void __iomem *wq_reg;
+	int err;
+};
+
+struct dsa_irq_entry {
+	void *arg;
+	cpumask_var_t mask;
+	struct tasklet_struct cleanup_task;
+	spinlock_t 	cleanup_lock;
+	struct list_head irq_wait_head;
+	rwlock_t irq_wait_lock;
+	struct dsadma_device *dsa;
+	int int_src;
 };
 
 /**
@@ -192,11 +262,12 @@ struct dsadma_device {
 	enum dsa_irq_mode irq_mode;
 	struct dsa_work_queue *wqs;
 	struct dsa_grpcfg_reg *grpcfg;
-	struct dsa_completion_ring *comp_rings;
+	struct dsa_irq_entry *irq_entries;
 
 	/* General Capabilities */
 	u64 gencap;
-	u32 max_xfer_bits; /* in bytes */
+	u32 max_xfer_bits;
+	u32 max_xfer_size; /* in bytes */
 	u32 max_batch_size;   /* no. of descriptors in a batch */
 	u32 ims_size;         /* no. of entries in interrupt message storage */
 	/* Work Queue Capabilities */
@@ -209,7 +280,8 @@ struct dsadma_device {
 
 	u16 num_kern_dwqs;
 
-	u16 msixcnt;
+	u16 num_wq_irqs;
+	atomic_t irq_wq_next;
 
 	/* Operational Caps - 256 bits but only first 64 bits are valid */
 	u64 opcap;
@@ -231,18 +303,16 @@ struct dsa_sysfs_entry {
  */
 
 struct dsa_ring_ent {
-	union {
-		struct dsa_dma_descriptor *desc;
-		struct dsa_raw_descriptor *desc_raw;
-	};
+	/* FIXME: Not sure if we need to keep track of submitted descriptor */
+	struct dsa_dma_descriptor hw;
 	union {
 		struct dsa_completion_record *completion;
 		struct dsa_raw_completion_record *comp_raw;
 	};
-	size_t len;
-	struct dsa_work_queue *wq;
-	struct dma_async_tx_descriptor txd;
-	enum sum_check_flags *result;
+	struct dma_async_tx_descriptor *txd;
+	struct dsa_callback_descriptor *cb_desc;
+	wait_queue_head_t waitq;
+	unsigned long flags;
 	#ifdef DEBUG
 	int id;
 	#endif
@@ -288,14 +358,31 @@ __dump_desc_dbg(struct dsa_work_queue *wq, struct dsa_dma_descriptor *hw,
 #define dump_desc_dbg(c, d) \
 	({ if (d) __dump_desc_dbg(c, d->hw, &d->txd, desc_id(d)); 0; })
 
+static inline int add_dring_idx (struct dsa_completion_ring *dring, int idx, int val)
+{
+	idx += val;
+
+	if (idx >= dring->num_entries)
+		idx = idx - dring->num_entries;
+
+	return idx;
+}
+
+static inline int inc_dring_idx (struct dsa_completion_ring *dring, int idx)
+{
+	idx++;
+
+	if (idx >= dring->num_entries)
+		idx = 0;
+
+	return idx;
+}
+
 static inline struct dsa_work_queue *
 dsa_wq_by_index(struct dsadma_device *dsa_dma, int index)
 {
 	return &dsa_dma->wqs[index];
 }
-
-/* Return count in the ring.  */
-#define DSA_CIRC_CNT(head,tail,size) (((head) - (tail)) % (size))
 
 static inline u64 dsa_swerr(struct dsadma_device *dsa)
 {
@@ -326,22 +413,22 @@ static inline u32 dsa_ring_size(struct dsa_completion_ring *dring)
         return dring->num_entries;
 }
 
-struct dsa_completion_ring * dsa_get_completion_ring(struct dsadma_device *dsa,
-		unsigned int wq_idx);
-struct dsa_work_queue * dsa_get_work_queue (struct dsadma_device *dsa,
-		unsigned int ring_idx);
-
 /* count of descriptors in flight with the engine */
 static inline u16 dsa_ring_active(struct dsa_completion_ring *dring)
 {
-        return DSA_CIRC_CNT(dring->head, dring->tail,
-                        dsa_ring_size(dring));
+	if (dring->issued >= dring->tail)
+		return dring->issued - dring->tail;
+	else
+		return dsa_ring_size(dring) - (dring->tail - dring->issued);
 }
 
 /* count of descriptors pending submission to hardware */
 static inline u16 dsa_ring_pending(struct dsa_completion_ring *dring)
 {
-        return DSA_CIRC_CNT(dring->head, dring->issued, dsa_ring_size(dring));
+	if (dring->head >= dring->issued)
+		return dring->head - dring->issued;
+	else
+		return dsa_ring_size(dring) - (dring->issued - dring->head);
 }
 
 static inline u32 dsa_ring_space(struct dsa_completion_ring *dring)
@@ -349,6 +436,36 @@ static inline u32 dsa_ring_space(struct dsa_completion_ring *dring)
         return dsa_ring_size(dring) - dsa_ring_active(dring);
 }
 
+static inline int dsa_get_msix_index (struct dsadma_device *dsa)
+{
+	/* for now just do round-robin assignment */
+	return ((atomic_inc_return(&dsa->irq_wq_next) % dsa->num_wq_irqs) + 1);
+
+}
+
+static inline int dsa_trylock_desc(struct dsa_ring_ent *desc)
+{
+        return (likely(!test_and_set_bit_lock(desc_locked, &desc->flags)));
+}
+
+static inline void dsa_unlock_desc(struct dsa_ring_ent *desc)
+{
+	clear_bit_unlock(desc_locked, &desc->flags);
+	smp_mb__after_atomic();
+	__wake_up_bit(&desc->waitq, &desc->flags, desc_locked);
+}
+
+static inline int dsa_wait_on_desc_timeout(struct dsa_ring_ent *desc,
+			unsigned long timeout)
+{
+	DEFINE_WAIT_BIT(wait, &desc->flags, desc_locked);
+
+	wait.key.timeout = jiffies + timeout;
+	if (!test_bit(desc_locked, &desc->flags))
+		return 0;
+	return __wait_on_bit(&desc->waitq, &wait,
+				bit_wait_io_timeout, TASK_INTERRUPTIBLE);
+}
 
 static inline void dsa_reset(struct dsadma_device *dsa)
 {
@@ -377,95 +494,102 @@ static inline void movdir64b(struct dsa_dma_descriptor *desc,
 }
 
 static inline u16
-dsa_xferlen_to_descs(struct dsa_work_queue *wq, size_t len)
+dsa_xferlen_to_descs(struct dsadma_device *dsa, size_t len)
 {
-        u16 num_descs = len >> wq->dsa->max_xfer_bits;
+        u16 num_descs = len >> dsa->max_xfer_bits;
 
-        num_descs += !!(len & ((1 << wq->dsa->max_xfer_bits) - 1));
+        num_descs += !!(len & ((1 << dsa->max_xfer_bits) - 1));
         return num_descs;
 }
 
 static inline struct dsa_ring_ent *
 dsa_get_ring_ent(struct dsa_completion_ring *dring, u16 idx)
 {
-        return &dring->ring[idx % dring->num_entries];
+        return &dring->ring[idx];
 }
 
+static inline struct dsa_ring_ent *
+dsa_alloc_desc(struct dsa_completion_ring *dring)
+{
+	struct dsa_ring_ent *desc;
+
+        desc = dsa_get_ring_ent(dring, dring->head);
+
+        if (test_bit(desc_in_use, &desc->flags)) {
+                printk("No free descriptors\n");
+                return NULL;
+        }
+	dring->head = inc_dring_idx(dring, dring->head);
+
+        set_bit(desc_in_use, &desc->flags);
+	return desc;
+}
+
+
 /* DSA Prep functions */
-void dsa_dma_prep_batch_memcpy(struct dma_chan *c, dma_addr_t dest,
-			dma_addr_t src, struct dsa_dma_descriptor *hw,
-			dma_addr_t compl_addr, size_t len, unsigned long flags);
+void dsa_dma_prep_batch_memcpy(struct dma_chan *c, int idx, dma_addr_t dma_dest,
+			dma_addr_t dma_src, size_t len, unsigned long flags);
 
-void __dsa_prep_batch_memcpy(struct dsa_work_queue *wq, u64 dest,
-			u64 src, struct dsa_dma_descriptor *hw,
-			u64 compl_addr, size_t len, unsigned long flags);
+void __dsa_prep_batch_memcpy(struct dsa_batch *batch, int desc_idx, u64 dest,
+			u64 src, size_t len, unsigned long flags);
 
-void dsa_dma_prep_batch_memset(struct dma_chan *c, dma_addr_t dma_dest,
-		int value, struct dsa_dma_descriptor *hw,
-		dma_addr_t compl_addr, size_t len, unsigned long flags);
-void __dsa_prep_batch_memset(struct dsa_work_queue *wq, u64 dst,
-		unsigned long val, struct dsa_dma_descriptor *hw,
-		u64 compl_addr, size_t len, unsigned long flags);
+void dsa_dma_prep_batch_memset(struct dma_chan *c, int idx, dma_addr_t dma_dest,
+		int val, size_t len, unsigned long flags);
+void __dsa_prep_batch_memset(struct dsa_batch *batch, int desc_idx, u64 dst,
+		u64 val, size_t len, unsigned long flags);
 
-void __dsa_prep_batch_compare(struct dsa_work_queue *wq, u64 src1, u64 src2,
-		struct dsa_dma_descriptor *hw, u64 compl_addr,
+void __dsa_prep_batch_compare(struct dsa_batch *batch, int idx, u64 src1,
+		u64 src2, size_t len, unsigned long flags);
+void dsa_dma_prep_batch_compare(struct dma_chan *c, int idx,
+		dma_addr_t dma_src1, dma_addr_t dma_src2,
 		size_t len, unsigned long flags);
-void dsa_dma_prep_batch_compare(struct dma_chan *c, dma_addr_t dma_src1,
-		dma_addr_t dma_src2, struct dsa_dma_descriptor *hw,
-		dma_addr_t compl_addr, size_t len, unsigned long flags);
 
-void __dsa_prep_batch_compval(struct dsa_work_queue *wq, u64 val, u64 src,
-		struct dsa_dma_descriptor *hw, u64 compl_addr,
+void __dsa_prep_batch_compval(struct dsa_batch *batch, int idx, u64 val,
+		u64 src, size_t len, unsigned long flags);
+void dsa_dma_prep_batch_compval(struct dma_chan *c, int idx,
+		unsigned long value, dma_addr_t dma_src,
 		size_t len, unsigned long flags);
-void dsa_dma_prep_batch_compval(struct dma_chan *c, unsigned long value,
-		dma_addr_t dma_src, struct dsa_dma_descriptor *hw,
-		dma_addr_t compl_addr, size_t len, unsigned long flags);
 
-void __dsa_prep_batch_dualcast(struct dsa_work_queue *wq, u64 dst1, u64 dst2,
-		u64 src, struct dsa_dma_descriptor *hw, u64 compl_addr,
+void __dsa_prep_batch_dualcast(struct dsa_batch *batch, int idx, u64 dst1,
+		u64 dst2, u64 src, size_t len, unsigned long flags);
+void dsa_dma_prep_batch_dualcast(struct dma_chan *c, int idx, dma_addr_t dest1,
+		dma_addr_t dest2, dma_addr_t dma_src,
 		size_t len, unsigned long flags);
-void dsa_dma_prep_batch_dualcast(struct dma_chan *c, dma_addr_t dest1,
-		dma_addr_t dest2, dma_addr_t dma_src, struct dsa_dma_descriptor
-		*hw, dma_addr_t compl_addr, size_t len, unsigned long flags);
 
-struct dma_async_tx_descriptor *
-__dsa_prep_batch(struct dsa_work_queue *wq, u64 dma_batch,
-				int num_descs, unsigned long flags);
+struct dsa_ring_ent *__dsa_prep_batch(struct dsa_completion_ring *dring,
+	u64 batch_addr, int num_descs, unsigned long flags);
 
 struct dma_async_tx_descriptor *
 dsa_dma_prep_batch(struct dma_chan *c, dma_addr_t dma_batch,
 				int num_descs, unsigned long flags);
 
-struct dma_async_tx_descriptor *
-__dsa_prep_memcpy(struct dsa_work_queue *wq, u64 dst,
-			u64 src, size_t len, unsigned long flags);
-
+struct dsa_ring_ent *__dsa_prep_memcpy(struct dsa_completion_ring *dring,
+		u64 dst, u64 src, size_t len, unsigned long flags);
 struct dma_async_tx_descriptor *
 dsa_dma_prep_memcpy(struct dma_chan *c, dma_addr_t dma_dest,
 			   dma_addr_t dma_src, size_t len, unsigned long flags);
+
+struct dsa_ring_ent *__dsa_prep_memset(struct dsa_completion_ring *dring,
+	u64 dst, u64 value, size_t len, unsigned long flags);
 struct dma_async_tx_descriptor *
 dsa_dma_prep_memset(struct dma_chan *c, dma_addr_t dma_dest,
 			   int value, size_t len, unsigned long flags);
-struct dma_async_tx_descriptor *__dsa_prep_memset(struct dsa_work_queue *wq,
-			u64 dst, u64 value, size_t len, unsigned long flags);
 
-struct dma_async_tx_descriptor *
-__dsa_prep_compare(struct dsa_work_queue *wq, u64 src1,
-			u64 src2, size_t len, unsigned long flags);
+struct dsa_ring_ent *__dsa_prep_compare(struct dsa_completion_ring *dring,
+	u64 src1, u64 src2, size_t len, unsigned long flags);
 struct dma_async_tx_descriptor *
 dsa_dma_prep_compare(struct dma_chan *c, dma_addr_t source1,
 			dma_addr_t source2, size_t len, unsigned long flags);
 
-struct dma_async_tx_descriptor *
-__dsa_prep_compval(struct dsa_work_queue *wq, u64 val,
-			u64 src, size_t len, unsigned long flags);
+struct dsa_ring_ent *__dsa_prep_compval(struct dsa_completion_ring *dring,
+	u64 val, u64 src, size_t len, unsigned long flags);
 struct dma_async_tx_descriptor *
 dsa_dma_prep_compval(struct dma_chan *c, unsigned long val,
 			dma_addr_t source, size_t len, unsigned long flags);
 
-struct dma_async_tx_descriptor *
-__dsa_prep_dualcast(struct dsa_work_queue *wq, u64 dst1, u64 dst2,
-			u64 src, size_t len, unsigned long flags);
+struct dsa_ring_ent *__dsa_prep_dualcast(struct dsa_completion_ring *dring,
+			u64 dst1, u64 dst2, u64 src, size_t len,
+			unsigned long flags);
 
 struct dma_async_tx_descriptor *
 dsa_dma_prep_dualcast(struct dma_chan *c, dma_addr_t dest1, dma_addr_t dest2,
@@ -473,6 +597,9 @@ dsa_dma_prep_dualcast(struct dma_chan *c, dma_addr_t dest1, dma_addr_t dest2,
 
 struct dma_async_tx_descriptor *
 dsa_dma_prep_drain (struct dsa_work_queue *wq, unsigned long flags);
+
+void dsa_free_desc(struct dsa_completion_ring *dring,
+				struct dsa_ring_ent *desc);
 
 struct dma_async_tx_descriptor *
 dsa_prep_interrupt_lock(struct dma_chan *c, unsigned long flags);
@@ -509,11 +636,15 @@ dsa_tx_status(struct dma_chan *c, dma_cookie_t cookie,
 void dsa_wq_cleanup(unsigned long data);
 void dsa_misc_cleanup(unsigned long data);
 
+void dsa_completion_cleanup(struct dsa_completion_ring *dring);
+
 void dsa_timer_event(unsigned long data);
 int dsa_check_space_lock(struct dsa_work_queue *dsa_chan, int num_descs);
 void dsa_issue_pending(struct dma_chan *chan);
-void __dsa_issue_pending(struct dsa_work_queue *wq);
 void dsa_timer_event(unsigned long data);
+struct dsa_work_queue *dsa_wq_alloc (struct dsadma_device *dsa, int dedicated);
+void dsa_wq_free (struct dsa_work_queue *wq);
+
 
 /* DSA Init functions */
 void dsa_kobject_add(struct dsadma_device *dsa_dma, struct kobj_type *type);
@@ -521,7 +652,9 @@ void dsa_kobject_del(struct dsadma_device *dsa_dma);
 int dsa_dma_setup_interrupts(struct dsadma_device *dsa_dma);
 void dsa_stop(struct dsa_work_queue *dsa_chan);
 
-int dsa_alloc_completion_ring(struct dsa_completion_ring *dring, gfp_t flags);
+int dsa_alloc_client_buffers (struct dsa_completion_ring *dring, gfp_t flags);
+void dsa_free_client_buffers (struct dsa_completion_ring *dring);
+void dsa_init_completion_ring(struct dsa_completion_ring *dring);
 
 struct dsadma_device * get_dsadma_device_by_minor(unsigned int minor);
 
@@ -533,6 +666,25 @@ int dsa_wq_disable_pasid (struct dsadma_device *dsa, int wq_idx);
 
 void __iomem *dsa_get_wq_reg(struct dsadma_device *dsa, int wq_idx,
 				int msix_idx, bool priv);
+void dsa_setup_irq_event (struct dsa_irq_event *ev, struct dsa_irq_entry
+			*irq_entry, struct dsa_completion_ring *dring,
+			void (*isr_cb)(struct dsa_completion_ring *dring));
+
+int dsa_ctx_drain_pasid (struct dsa_context *ctx, bool abort);
+
+struct dsa_completion_ring *dsa_alloc_svm_resources(struct dsa_work_queue *wq);
+void dsa_free_descriptors (struct dsa_completion_ring *dring);
+
+struct dsa_batch *dsa_alloc_batch_resources (struct dsa_completion_ring *dring,
+		int num_descs);
+void dsa_free_batch_resources (struct dsa_batch *batch);
+struct dsa_batch *dsa_dma_alloc_batch_resources(struct dma_chan
+		*dma_chan, int num_descs);
+void dsa_dma_free_batch_resources (struct dsa_batch *batch);
+
+void dsa_svm_completion_cleanup(struct dsa_completion_ring *dring);
+void dsa_dma_completion_cleanup(struct dsa_completion_ring *dring);
+
 /* Self test routines */
 
 int dsa_dma_self_test (struct dsadma_device *dsa);
