@@ -141,8 +141,7 @@ int dsa_fops_release(struct inode *inode, struct file *filep)
 		} else {
 			dsa_disable_pasid_msr();
 		}
-		wq->available = 1;
-		wq->allocated = 0;
+		dsa_wq_free(wq);
 	}
 
 
@@ -214,7 +213,7 @@ static int dsa_ioctl_wq_alloc (struct dsa_context *ctx, unsigned long arg)
 	printk("wq_alloc: wq %d dedicated %d\n", wq->idx, wq->dedicated);
 	ctx->wq_idx = wq->idx;
 
-	/* reserve the interrupt for this wq */
+	/* allocate an interrupt for this wq */
 	msix_idx = dsa_get_msix_index(dsa);
 
 	irq_entry = &dsa->irq_entries[msix_idx];
@@ -240,7 +239,8 @@ static int dsa_ioctl_wq_alloc (struct dsa_context *ctx, unsigned long arg)
 
 	printk("pasid %d\n", ctx->pasid);
 
-	/* If dedicated queue, configure PASID into WQ PASID register */
+	/* If dedicated queue, configure the PASID into WQ PASID register, else
+	 * configure the PASID in IA_PASID_MSR */
 	if (wq->dedicated) {
 		ret = dsa_wq_set_pasid(dsa, ctx->wq_idx, ctx->pasid, 0);
 		if (ret)

@@ -147,7 +147,6 @@ void __iomem *dsa_get_wq_reg(struct dsadma_device *dsa, int wq_idx,
 	}
 	wq_offset = wq_offset << PAGE_SHIFT;
 
-	printk("%d msix_idx %d wq %d wq_offset %x\n", dsa->num_wq_irqs, msix_idx, wq_idx, wq_offset);
 	return (dsa->wq_reg_base + wq_offset);
 }
 

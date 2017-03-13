@@ -84,10 +84,9 @@ static int dsa_sys_pasid = 1;
 module_param(dsa_sys_pasid, int, 0644);
 MODULE_PARM_DESC(dsa_sys_pasid, "Configure a System Pasid for KVA");
 
-int dsa_pending_level = 4;
-module_param(dsa_pending_level, int, 0644);
-MODULE_PARM_DESC(dsa_pending_level,
-		 "high-water mark for pushing dsa descriptors (default: 4)");
+static int selftest = 0;
+module_param(selftest, int, 0644);
+MODULE_PARM_DESC(selftest, "Perform Selftest");
 
 struct kmem_cache *dsa_cache;
 
@@ -287,7 +286,6 @@ int dsa_dma_setup_interrupts(struct dsadma_device *dsa)
 	dsa->irq_entries = devm_kzalloc(dev, sizeof(struct dsa_irq_entry) *
 						msixcnt, GFP_KERNEL);
 
-	printk("msixcnt %d\n", msixcnt);
 	/* first MSI-X entry is not for wq interrupts */
 	dsa->num_wq_irqs = msixcnt - 1;
 	atomic_set(&dsa->irq_wq_next, 0);
@@ -391,10 +389,11 @@ static int dsa_probe(struct dsadma_device *dsa_dma)
 
 	printk("DSA device enabled successfully %ld %ld\n", sizeof(struct dsa_dma_descriptor), sizeof(struct dsa_completion_record));
 
-	err = dsa_dma_self_test(dsa_dma);
-	if (err)
-		goto err_self_test;
-
+	if (selftest) {
+		err = dsa_dma_self_test(dsa_dma);
+		if (err)
+			goto err_self_test;
+	}
 	return 0;
 
 err_self_test:
@@ -498,7 +497,7 @@ static int dsa_configure_groups(struct dsadma_device *dsa)
 					dsa->reg_base + grp_offset + j * 8);
 		writeq(dsa->grpcfg[i].eng_bits, dsa->reg_base + grp_offset+32);
 	}
-	/* FIXME: need to configure VCs */
+	/* FIXME: need to configure VCs, bandwidth tokens, etc. */
 	return 0;
 }
 
