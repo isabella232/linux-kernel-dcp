@@ -11,6 +11,7 @@
 #include <linux/prefetch.h>
 #include <linux/poll.h>
 #include <linux/intel-svm.h>
+#include <linux/sched/task.h>
 #include "dma.h"
 #include "registers.h"
 #include "hw.h"
@@ -300,8 +301,9 @@ long dsa_fops_compat_ioctl(struct file *filep,
 }
 #endif  /* CONFIG_COMPAT */
 
-static int dsa_wq_reg_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
+static int dsa_wq_reg_fault(struct vm_fault *vmf)
 {
+	struct vm_area_struct *vma = vmf->vma;
 	struct dsa_context *ctx = vma->vm_private_data;
 	struct dsadma_device *dsa = ctx->dsa;
 	struct pci_dev *dev = dsa->pdev;
