@@ -80,10 +80,6 @@ static int dsa_num_swqs = 0;
 module_param(dsa_num_swqs, int, 0644);
 MODULE_PARM_DESC(dsa_num_swqs, "Number of SWQs");
 
-static int dsa_sys_pasid = 1;
-module_param(dsa_sys_pasid, int, 0644);
-MODULE_PARM_DESC(dsa_sys_pasid, "Configure a System Pasid for KVA");
-
 static int selftest = 0;
 module_param(selftest, int, 0644);
 MODULE_PARM_DESC(selftest, "Perform Selftest");
@@ -138,7 +134,7 @@ static int dsa_disable_wq (struct dsadma_device *dsa, int wq_offset,
  * virtual addresses. SWQ does not work without PASID.
  * @dsa_dma: dsa dma device
  */
-static int dsa_enable_system_pasid(struct dsadma_device *dsa)
+static void dsa_enable_system_pasid(struct dsadma_device *dsa)
 {
 	int ret, pasid, flags = 0;
 	struct dsa_context *ctx = &dsa->priv_ctx;
@@ -148,8 +144,9 @@ static int dsa_enable_system_pasid(struct dsadma_device *dsa)
 
         ret = intel_svm_bind_mm(&dsa->pdev->dev, &pasid, flags, NULL);
 	if (ret) {
-		printk("sys pasid alloc failed %d\n", ret);
-		return ret;
+		printk("sys pasid alloc failed %d: can't use SWQs\n", ret);
+		dsa->pasid_enabled = false;
+		return;
 	}
 
 	INIT_LIST_HEAD(&ctx->mm_list);
@@ -163,8 +160,6 @@ static int dsa_enable_system_pasid(struct dsadma_device *dsa)
 
 	dsa->pasid_enabled = true;
 	dsa->system_pasid = pasid;
-
-	return ret;
 }
 
 
@@ -364,12 +359,7 @@ static int dsa_probe(struct dsadma_device *dsa_dma)
 		goto err_completion_pool;
 	}
 
-	if (dsa_sys_pasid) {
-		err = dsa_enable_system_pasid(dsa_dma);
-
-		if (err)
-			goto err_self_test;
-	}
+	dsa_enable_system_pasid(dsa_dma);
 
 	dsa_enumerate_capabilities(dsa_dma);
 
@@ -648,7 +638,8 @@ static int dsa_init_wq (struct dsadma_device *dsa, int wq_idx)
 
 	memset(&wqcfg, 0, sizeof(wqcfg));
 
-	printk("init wq %d dedicated %d sz %d\n", wq_idx, wq->dedicated, wq->wq_size);
+	printk("init wq %d dedicated %d sz %d\n", wq_idx, wq->dedicated,
+							wq->wq_size);
 	wq->dsa = dsa;
 	spin_lock_init(&wq->lock);
 
@@ -786,7 +777,7 @@ static int dsa_enumerate_work_queues(struct dsadma_device *dsa)
 	struct device *dev = &dsa->pdev->dev;
 	struct dma_device *dma = &dsa->dma_dev;
 	int i ;
-	unsigned int dwq_size, allocated_size;
+	unsigned int wq_size, allocated_size;
 
 	dsa->wqcap = readq(dsa->reg_base + DSA_WQCAP_OFFSET);
 
@@ -812,6 +803,10 @@ static int dsa_enumerate_work_queues(struct dsadma_device *dsa)
 		return -ENOMEM;
 	}
 
+	/* We can't use SWQs if PASID was not enabled */
+	if (!dsa->pasid_enabled)
+		dsa_num_swqs = 0;
+
 	if (dsa_num_dwqs)
 		dsa->num_wqs += dsa_num_dwqs;
 	if (dsa_num_swqs)
@@ -825,20 +820,22 @@ static int dsa_enumerate_work_queues(struct dsadma_device *dsa)
 	/* by default #WQs = #Engines, and #DWQs = #SWQs */
 	if (dsa->num_wqs == 0) {
 		dsa->num_wqs = dsa->max_engs;
-		dsa_num_dwqs = dsa->max_engs/2;
-		dsa_num_swqs = dsa->max_engs - dsa_num_dwqs;
+		dsa_num_swqs = dsa->max_engs/2;
+		if (!dsa->pasid_enabled)
+			dsa_num_swqs = 0;
+		dsa_num_dwqs = dsa->max_engs - dsa_num_swqs;
 	}
 
 	/* The current logic is to divide the total WQ size such that each SWQ
 	 * has twice the size of each DWQ. All SWQs are equal in size and all
 	 * DWQs are equal in size. */
 
-	dwq_size = dsa->tot_wq_size/(dsa_num_swqs * 2 + dsa_num_dwqs);
+	wq_size = dsa->tot_wq_size/(dsa_num_swqs * 2 + dsa_num_dwqs);
 	allocated_size = 0;
 
-	if (dsa->num_wqs > dsa->max_engs) {
-		dev_err(dev, "[%d:%d] Num WQs > Num Engines\n", dsa->num_wqs,
-							dsa->max_engs);
+	if (dsa->num_wqs > dsa->max_wqs) {
+		dev_err(dev, "[%d:%d] Num WQs > MAX WQs\n", dsa->num_wqs,
+							dsa->max_wqs);
 		return -EINVAL;
 	}
 
@@ -847,22 +844,29 @@ static int dsa_enumerate_work_queues(struct dsadma_device *dsa)
 		for (i = 0; i < dsa_num_dwqs; i++) {
 			dsa->wqs[i].grp_id = dsa->num_grps;
 			dsa->wqs[i].dedicated = 1;
-			dsa->wqs[i].wq_size = dwq_size;
+			dsa->wqs[i].wq_size = wq_size;
 			dsa->wqs[i].idx = i;
 			dsa->wqs[i].threshold = (dsa->wqs[i].wq_size * 8)/10;
-			allocated_size += dwq_size;
+			allocated_size += wq_size;
 		}
 		dsa->num_grps++;
+		if (dsa_num_swqs == 0) {
+			/* readjust last WQ to account for integer arithmatic */
+			dsa->wqs[i-1].wq_size += dsa->tot_wq_size -
+							allocated_size;
+			dsa->wqs[i-1].threshold = (dsa->wqs[i - 1].wq_size * 8)/
+							10;
+		}
 	}
 	if (dsa_num_swqs > 0) {	
 		for (i = dsa_num_dwqs; i < dsa->num_wqs; i++) {
 			dsa->wqs[i].grp_id = dsa->num_grps;
 			dsa->wqs[i].dedicated = 0;
-			dsa->wqs[i].wq_size = dwq_size * 2;
+			dsa->wqs[i].wq_size = wq_size * 2;
 			dsa->wqs[i].threshold = (dsa->wqs[i].wq_size * 8)/10;
 			dsa->wqs[i].priority = i;
 			dsa->wqs[i].idx = i;
-			allocated_size += (dwq_size * 2);
+			allocated_size += (wq_size * 2);
 		}
 		/* readjust the last SWQ to account for integer arithmatic */
 		dsa->wqs[i-1].wq_size += dsa->tot_wq_size - allocated_size;
@@ -1148,12 +1152,15 @@ static int dsa_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	}
 
 	device->index = num_dsa_devices;
-	err = dsa_usr_add(device);
+
+	/* Create user interface only if PASID is enabled */
+	if (device->pasid_enabled)
+		err = dsa_usr_add(device);
 
 	list_add(&device->list, &dsa_devices);
 	num_dsa_devices++;
 
-	return 0;
+	return err;
 }
 
 static void dsa_remove(struct pci_dev *pdev)
@@ -1168,7 +1175,8 @@ static void dsa_remove(struct pci_dev *pdev)
 	pci_disable_pcie_error_reporting(pdev);
 	dsa_dma_remove(device);
 
-	misc_deregister(&device->misc_dev);
+	if (device->pasid_enabled)
+		misc_deregister(&device->misc_dev);
 }
 
 static int __init dsa_init_module(void)

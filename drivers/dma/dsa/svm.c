@@ -49,8 +49,8 @@ int dsa_usr_add(struct dsadma_device *dsa)
 	rc = misc_register(mdev);
 	if (rc)
 		dev_err(&dsa->pdev->dev, "%s failed rc %d\n", __func__, rc);
-
-        printk("registered DSA user interface\n");
+	else
+	        printk("registered DSA user interface\n");
 
 	return rc;
 }
