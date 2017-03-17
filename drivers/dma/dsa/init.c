@@ -184,6 +184,33 @@ static int dsa_disable_system_pasid(struct dsadma_device *dsa)
 }
 
 /**
+ * dsa_disable_device - disable the device and its work queues
+ * @dsa_dma: dsa dma device
+ */
+static int dsa_disable_device(struct dsadma_device *dsa)
+{
+	int i, err = 0;
+	u32 enabled = 0;
+	struct device *dev = &dsa->pdev->dev;
+
+	writel(0, dsa->reg_base + DSA_ENABLE_OFFSET);
+
+	for (i = 0; i < 200000; i++) {
+		enabled = readl(dsa->reg_base + DSA_ENABLE_OFFSET);
+		if (!(enabled & DSA_ENABLED_BIT) || (enabled & DSA_ERR_BITS))
+			break;
+	}
+
+	if ((i == 200000) || (enabled & DSA_ERR_BITS)) {
+		dev_err(dev, "Error disabling the device %d %x\n", i,
+						enabled & DSA_ERR_BITS);
+		err = -ENODEV;
+	}
+
+	return err;
+}
+
+/**
  * dsa_enable_device - enable the device and its work queues
  * @dsa_dma: dsa dma device
  */
@@ -363,9 +390,15 @@ static int dsa_probe(struct dsadma_device *dsa_dma)
 
 	dsa_enumerate_capabilities(dsa_dma);
 
-	dsa_enumerate_work_queues(dsa_dma);
+	err = dsa_enumerate_work_queues(dsa_dma);
 
-	dsa_configure_groups(dsa_dma);
+	if (err)
+		goto err_enable_pasid;
+
+	err = dsa_configure_groups(dsa_dma);
+
+	if (err)
+		goto err_enable_pasid;
 
 	dma->dev = &pdev->dev;
 
@@ -377,7 +410,7 @@ static int dsa_probe(struct dsadma_device *dsa_dma)
 	if (err)
 		goto err_self_test;
 
-	printk("DSA device enabled successfully %ld %ld\n", sizeof(struct dsa_dma_descriptor), sizeof(struct dsa_completion_record));
+	printk("DSA device enabled successfully\n");
 
 	if (selftest) {
 		err = dsa_dma_self_test(dsa_dma);
@@ -388,6 +421,8 @@ static int dsa_probe(struct dsadma_device *dsa_dma)
 
 err_self_test:
 	dsa_disable_interrupts(dsa_dma);
+err_enable_pasid:
+	dsa_disable_system_pasid(dsa_dma);
 err_setup_interrupts:
 	pci_pool_destroy(dsa_dma->completion_pool);
 err_completion_pool:
@@ -412,6 +447,9 @@ static void dsa_dma_remove(struct dsadma_device *dsa_dma)
 	struct dma_device *dma = &dsa_dma->dma_dev;
 
 	dsa_disable_system_pasid(dsa_dma);
+
+	/* disable DSA and all the WQs */
+	dsa_disable_device(dsa_dma);
 
 	dsa_disable_interrupts(dsa_dma);
 
@@ -638,6 +676,16 @@ static int dsa_init_wq (struct dsadma_device *dsa, int wq_idx)
 
 	memset(&wqcfg, 0, sizeof(wqcfg));
 
+	/* Each WQCONFIG register is 16 bytes (A, B, C, and D registers) */
+	wq_offset = DSA_WQCFG_OFFSET + wq_idx * 16;
+
+	wqcfg.a.a_fields.wq_size = wq->wq_size;
+	writel(wqcfg.a.val, dsa->reg_base + wq_offset);
+
+	/* If the WQ size is 0, there is nothing else to do */
+	if (wq->wq_size == 0)
+		return 0;
+
 	printk("init wq %d dedicated %d sz %d\n", wq_idx, wq->dedicated,
 							wq->wq_size);
 	wq->dsa = dsa;
@@ -661,8 +709,8 @@ static int dsa_init_wq (struct dsadma_device *dsa, int wq_idx)
 		wq->allocated = 0;
 	}
 
-	/* Each WQCONFIG register is 16 bytes (A, B, C, and D registers) */
-	wq_offset = DSA_WQCFG_OFFSET + wq_idx * 16;
+	wqcfg.b.b_fields.threshold = wq->threshold;
+	writel(wqcfg.b.val, dsa->reg_base + wq_offset + 4);
 
 	wqcfg.c.c_fields.mode = wq->dedicated ? 1 : 0;
 	/* Enable the BOF if it is supported */
@@ -680,14 +728,6 @@ static int dsa_init_wq (struct dsadma_device *dsa, int wq_idx)
 
 	writel(wqcfg.c.val, dsa->reg_base + wq_offset + 8);
 	
-	wqcfg.b.b_fields.threshold = wq->threshold;
-
-	writel(wqcfg.b.val, dsa->reg_base + wq_offset + 4);
-
-	wqcfg.a.a_fields.wq_size = wq->wq_size;
-
-	writel(wqcfg.a.val, dsa->reg_base + wq_offset);
-
 	return 0;
 }
 
@@ -812,11 +852,6 @@ static int dsa_enumerate_work_queues(struct dsadma_device *dsa)
 	if (dsa_num_swqs)
 		dsa->num_wqs += dsa_num_swqs;
 
-	if (dsa->num_wqs > dsa->max_wqs) {
-		dev_err(dev, "Can't config more than %d WQs.\n", dsa->max_wqs);
-		return -EINVAL;
-	}
-
 	/* by default #WQs = #Engines, and #DWQs = #SWQs */
 	if (dsa->num_wqs == 0) {
 		dsa->num_wqs = dsa->max_engs;
@@ -876,7 +911,7 @@ static int dsa_enumerate_work_queues(struct dsadma_device *dsa)
 
 	INIT_LIST_HEAD(&dma->channels);
 
-	for (i = 0; i < dsa->num_wqs; i++) {
+	for (i = 0; i < dsa->max_wqs; i++) {
 		dsa_init_wq(dsa, i);
 	}
 	return 0;
@@ -1173,10 +1208,11 @@ static void dsa_remove(struct pci_dev *pdev)
 	dev_err(&pdev->dev, "Removing dma services\n");
 
 	pci_disable_pcie_error_reporting(pdev);
-	dsa_dma_remove(device);
 
 	if (device->pasid_enabled)
 		misc_deregister(&device->misc_dev);
+
+	dsa_dma_remove(device);
 }
 
 static int __init dsa_init_module(void)
