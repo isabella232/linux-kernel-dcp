@@ -25,6 +25,7 @@
  * Authors:
  *    Xiao Zheng <xiao.zheng@intel.com>
  *    Kevin Tian <kevin.tian@intel.com>
+ *    Sanjay Kumar <sanjay.k.kumar@intel.com>
  */
 
 #include <linux/init.h>
@@ -44,81 +45,327 @@
 #include <linux/mdev.h>
 
 #include "dma.h"
-/************* BELOW CODE NEED MOVE TO HEADER FILE **********************/
+#include "dsa_vdcm.h"
 
-/* VDCM model, should move to dsa_vdcm.h */
-struct vdcm_dsa_type {
-	char name[16];
-	unsigned int avail_instance;
-};
+struct mutex mdev_list_lock;
+struct list_head dsa_mdevs_list;
 
-#define VDSA_MAX_CFG_SPACE_SZ 256
-#define VDSA_MAX_BAR_NUM 4
-
-struct vdcm_dsa_pci_bar {
-	u64 size;
-	bool tracked;
-};
-
-struct vdcm_dsa_cfg_space {
-	unsigned char virtual_cfg_space[VDSA_MAX_CFG_SPACE_SZ];
-	struct vdcm_dsa_pci_bar bar[VDSA_MAX_BAR_NUM];
-};
-
-/* VDCM model, should move to dsa_vdcm.h */
-struct vdcm_dsa {
-	unsigned long handle;
-	u64 pasid[8];
-	u64 bar0_offset;
-	u64 bar0_size;
-	u64 bar1_offset;
-	u64 bar1_size;
-	u64 bar2_offset;	/* guest bar2 mapping to host bar4 */
-	u64 bar2_size;		/* guest bar2 mapping to host bar4 */
-	struct vdcm_dsa_cfg_space cfg_space;
-	/* ... */
-
-	struct {
-		struct mdev_device *mdev;
-		struct vfio_region *region;
-		int num_regions;
-		struct eventfd_ctx *intx_trigger;
-		struct eventfd_ctx *msi_trigger;
-		struct rb_root cache;
-		struct mutex cache_lock;
-		struct notifier_block iommu_notifier;
-		struct notifier_block group_notifier;
-		struct kvm *kvm;
-		struct work_struct release_work;
-		atomic_t released;
-	} vdev;
-};
-
-/* VDCM model, should move to dsa_vdcm.h */
-struct vdsa_ops {
-	int (*emulate_cfg_read)(struct vdcm_dsa *, unsigned int, void *,
-				unsigned int);
-	int (*emulate_cfg_write)(struct vdcm_dsa *, unsigned int, void *,
-				unsigned int);
-	int (*emulate_mmio_read)(struct vdcm_dsa *, u64, void *,
-				unsigned int);
-	int (*emulate_mmio_write)(struct vdcm_dsa *, u64, void *,
-				unsigned int);
-	struct vdcm_dsa *(*vdsa_create) (struct vdcm_dsa_type *);
-	void (*vdsa_destroy)(struct vdcm_dsa *);
-	void (*vdsa_reset)(struct vdcm_dsa *);
-};
-
-/* VDCM model, should move to dsa_vdcm.h */
-static inline struct vdcm_dsa *kdev_to_dsa(struct device *kdev)
+static u64 get_reg_val (void *buf, int size)
 {
-	/* container_of(dev, struct dsadma_device, vdsa); */
-	return dev_get_drvdata(kdev);
+	u64 val = 0;
+
+	switch(size) {
+		case 8:
+			val = *(uint64_t *)buf;
+		break;
+		case 4:
+			val = *(uint32_t *)buf;
+		break;
+		case 2:
+			val = *(uint16_t *)buf;
+		break;
+		case 1:
+			val = *(uint8_t *)buf;
+		break;
+	}
+	return val;
 }
 
-/************* ABOVE CODE NEED MOVE TO HEADER FILE **********************/
+static uint64_t dsa_pci_config[] = {
+	0x001000006f308086ULL,
+	0x0080000008800000ULL,
+	0x0000000000000004ULL,
+	0x0000000000000004ULL,
+	0x0000000000000004ULL,
+	0x2010808600000000ULL,
+	0x0000004000000000ULL,
+	0x000000ff00000000ULL,
+	0x0000600000005011ULL, // MSI-X capability
+	0x0000700000000000ULL,
+	0x0000000000910010ULL, // PCIe capability
+	0x0000000000000000ULL,
+	0x0000000000000000ULL,
+	0x0000000000000000ULL,
+	0x0000001000000000ULL,
+	0x0000000000000000ULL,
+};
 
-static const struct vdsa_ops *dsa_ops;
+static uint64_t dsa_pci_ext_cap[] = {
+	0x000000611101000fULL, // ATS capability
+	0x0000000000000000ULL,
+	0x0100000012010013ULL, // Page Request capability
+	0x0000000000000001ULL,
+	0x000014040001001bULL, // PASID capability
+	0x0000000000000000ULL,
+};
+
+static uint64_t dsa_cap_ctrl_reg[] = {
+	// These values support 8 WQs, 4 engines,
+	// 128 Guest Portals, 16 IMS entries,
+	// Block on Fault, Dedicated Mode,
+	// and all defined operation types.
+	0x0000000000000100ULL,
+	0x0000000000000000ULL,
+	0x0000000500400001ULL,
+	0x0000000000000000ULL,
+	0x0006000000000040ULL,
+	0x0000000000000000ULL,
+	0x000000000011f3ffULL,
+};
+
+struct vdcm_dsa * vdcm_vdsa_create (struct dsadma_device *dsa,
+			struct vdcm_dsa_type *type)
+{
+	struct vdcm_dsa *vdsa;
+
+	vdsa = kzalloc(sizeof(struct vdcm_dsa), GFP_KERNEL);
+	if (vdsa == NULL)
+		return NULL;
+
+	vdsa->dsa = dsa;
+
+	vdsa->id = dsa->vdev_id++;
+
+	memcpy(vdsa->cfg, dsa_pci_config, sizeof(dsa_pci_config));
+	memcpy(vdsa->cfg + 0x100, dsa_pci_ext_cap, sizeof(dsa_pci_ext_cap));
+
+	printk("vdsa_create: %llx %llx\n", *(u64*)&vdsa->cfg[0],  *(u64*)&vdsa->cfg[0x100]);
+	memcpy(vdsa->bar0.cap_ctrl_regs, dsa_cap_ctrl_reg,
+						sizeof(dsa_cap_ctrl_reg));
+
+	switch (type->type) {
+		case DSA_MDEV_TYPE_1_DWQ_0_SWQ:
+			vdsa->wqs[0] = dsa_wq_alloc(dsa, 1);
+
+			if (vdsa->wqs[0] == NULL) {
+				kfree(vdsa);
+				return NULL;
+			}
+
+			vdsa->num_wqs = 1;
+
+			/* allocate a IMS entry */
+			vdsa->ims_index[0] = dsa_get_ims_index(dsa);
+
+			/* Set the MSI-X table size */
+			vdsa->cfg[VDSA_MSIX_TBL_SZ_OFFSET] = 1;
+
+			/* Configure the GRPs and ENGs */
+
+			/* Configure the WQs */
+		break;
+		case DSA_MDEV_TYPE_0_DWQ_1_SWQ:
+			vdsa->wqs[0] = dsa_wq_alloc(dsa, 0);
+			if (vdsa->wqs[0] == NULL) {
+				kfree(vdsa);
+				return NULL;
+			}
+
+			vdsa->num_wqs = 1;
+
+			/* allocate a IMS entry */
+			vdsa->ims_index[0] = dsa_get_ims_index(dsa);
+			/* Set the MSI-X table size */
+			vdsa->cfg[VDSA_MSIX_TBL_SZ_OFFSET] = 1;
+
+
+			/* Configure the GRPs and ENGs */
+
+			/* Configure the WQs */
+		break;
+	}
+
+	vdsa->bar_size[0] = VDSA_BAR0_SIZE;
+	vdsa->bar_size[1] = VDSA_BAR2_SIZE;
+	vdsa->bar_size[2] = 0;
+
+	return vdsa;
+}
+
+static inline u8 vdsa_state (u8 *bar0)
+{
+	return bar0[DSA_ENABLE_OFFSET] & 0x3;
+}
+
+static int vdcm_vdsa_cfg_read(struct vdcm_dsa *vdsa, unsigned int pos,
+		void *buf, unsigned int count)
+{
+	uint32_t offset = pos & 0xfff;
+
+	memcpy(buf, &vdsa->cfg[offset], count);
+
+	printk("dsa pci R %d %x %x %x: %llx\n", vdsa->id, pos, count, offset, get_reg_val(buf, count));
+
+	return 0;
+}
+
+static int vdcm_vdsa_cfg_write(struct vdcm_dsa *vdsa, unsigned int pos,
+		void *buf, unsigned int size)
+{
+	u32 offset = pos & 0xfff;
+	u64 val;
+	u8 *cfg = vdsa->cfg;
+	u8 *bar0 = vdsa->bar0.cap_ctrl_regs;
+
+	printk("dsa pci W %d %x %x %x: %llx\n", vdsa->id, pos, size, offset, get_reg_val(buf, size));
+
+	switch (offset) {
+		case 0x04: { /* device control */
+			bool bme;
+			memcpy(&cfg[offset], buf, size);
+			bme = cfg[offset] & (1u << 2);
+			if (!bme && ((*(u32 *)&bar0[DSA_ENABLE_OFFSET]) & 0x3) != 0) {
+				*(u32 *)(&bar0[DSA_ENABLE_OFFSET]) = 8u << 8;
+			}
+			if (size < 4)
+				break;
+			offset += 2;
+			buf = buf + 2;
+			size -= 2;
+			/* fall through */
+        	}
+
+        	case 0x6: { /* device status */
+			u16 nval = get_reg_val(buf, size) << (offset & 1) * 8;
+			nval &= 0xf900;
+			*(u16 *)&cfg[offset] = *((u16 *)&cfg[offset]) & ~nval;
+			break;
+		}
+
+		case 0x0c:
+		case 0x3c:
+			memcpy(&cfg[offset], buf, size);
+			break;
+
+		case 0x10: /* BAR0 */
+		case 0x14: /* BAR1 */
+		case 0x18: /* BAR2 */
+		case 0x1c: /* BAR3 */
+		case 0x20: /* BAR4 */
+		case 0x24: /* BAR5 */ {
+			unsigned int bar_id, bar_offset;
+			u64 bar, bar_size;
+
+			bar_id = (offset - 0x10) / 8;
+			bar_size = vdsa->bar_size[bar_id];
+			bar_offset = 0x10 + bar_id * 8;
+
+			val = get_reg_val(buf, size);
+			bar = *(u64 *)&cfg[bar_offset];
+			memcpy((u8 *)&bar + (offset & 0x7), buf, size);
+			bar &= ~(bar_size - 1);
+
+			*(u64 *)&cfg[bar_offset] = bar | 4;
+
+			if (val == -1U || val == -1ULL)
+				break;
+			if (bar == 0 || bar == -1ULL - -1U)
+				break;
+			if (bar == (-1U & ~(bar_size - 1)))
+				break;
+			if (bar == (-1ULL & ~(bar_size - 1)))
+				break;
+			if (bar == vdsa->bar_val[bar_id])
+				break;
+
+			vdsa->bar_val[bar_id] = bar;
+			break;
+		}
+
+		case VDSA_ATS_OFFSET + 4:
+			if (size < 4)
+				break;
+			offset += 2;
+			buf = buf + 2;
+			size -= 2;
+			/* fall through */
+
+		case VDSA_ATS_OFFSET + 6:
+			memcpy(&cfg[offset], buf, size);
+			break;
+        	case VDSA_PRS_OFFSET + 4: {
+			u8 old_val, new_val;
+
+			val = get_reg_val(buf, 1);
+			old_val = cfg[VDSA_PRS_OFFSET + 4];
+			new_val = val & 1;
+
+			cfg[offset] = new_val;
+			if (old_val == 0 && new_val == 1) {
+				/* clear Stopped, Response Failure,
+				and Unexpected Response. */
+				*(u16 *)&cfg[VDSA_PRS_OFFSET + 6] &=
+							~(u16)(0x0103);
+			}
+			if (val == 2) {
+				/* FIXME: Reset page requests */
+			}
+			if (size < 4)
+				break;
+			offset += 2;
+			buf = (u8 *)buf + 2;
+			size -= 2;
+			/* fall through */
+		}
+		case VDSA_PRS_OFFSET + 6:
+			cfg[offset] &= ~(get_reg_val(buf, 1) & 3);
+			break;
+		case VDSA_PRS_OFFSET + 12 ... VDSA_PRS_OFFSET + 15:
+			memcpy(&cfg[offset], buf, size);
+			break;
+
+		case VDSA_PASID_OFFSET + 4:
+			if (size < 4)
+				break;
+			offset += 2;
+			buf = buf + 2;
+			size -= 2;
+			/* fall through */
+		case VDSA_PASID_OFFSET + 6:
+			cfg[offset] = get_reg_val(buf, 1) & 5;
+			break;
+	}
+
+	return 0;
+}
+
+static int vdcm_vdsa_mmio_read(struct vdcm_dsa *vdsa, u64 pos, void *buf,
+                                unsigned int count)
+{
+	printk("vdcm_vdsa_mmio_read\n");
+
+	
+	return 0;
+}
+
+static int vdcm_vdsa_mmio_write(struct vdcm_dsa *vdsa, u64 pos, void *buf,
+                                unsigned int count)
+{
+	printk("vdcm_vdsa_mmio_write\n");
+
+	return 0;
+}
+
+static void vdcm_vdsa_remove(struct vdcm_dsa *vdsa)
+{
+	printk("vdcm_vdsa_remove %d\n", vdsa->id);
+}
+
+static void vdcm_vdsa_reset(struct vdcm_dsa *vdsa)
+{
+	printk("vdcm_vdsa_reset %d\n", vdsa->id);
+}
+
+static const struct vdsa_ops dsa_ops = {
+	.emulate_cfg_read       = vdcm_vdsa_cfg_read,
+	.emulate_cfg_write      = vdcm_vdsa_cfg_write,
+	.emulate_mmio_read      = vdcm_vdsa_mmio_read,
+	.emulate_mmio_write     = vdcm_vdsa_mmio_write,
+
+        .vdsa_create            = vdcm_vdsa_create,
+        .vdsa_destroy           = vdcm_vdsa_remove,
+	.vdsa_reset             = vdcm_vdsa_reset,
+};
 
 /* helper macros copied from vfio-pci */
 #define VFIO_PCI_OFFSET_SHIFT   40
@@ -144,51 +391,104 @@ static inline bool handle_valid(unsigned long handle)
 	return !!(handle & ~0xff);
 }
 
-#define NR_TYPES 2
-static struct attribute_group *vdcm_dsa_type_groups[] = {
-	[0 ... NR_TYPES -1] = NULL,
-};
-
 
 static void vdcm_dsa_release_work(struct work_struct *work);
 static int kvmdsa_guest_init(struct mdev_device *mdev);
 static bool kvmdsa_guest_exit(unsigned long handle);
 
+struct vdcm_dsa_type mdev_types[DSA_MDEV_TYPES];
+
+static struct attribute_group *dsa_mdev_type_groups[] = {
+		[0 ... DSA_MDEV_TYPES-1] = NULL,
+};
+
 static struct vdcm_dsa_type *vdcm_dsa_find_vdsa_type(struct dsadma_device *dsa,
 		const char *name)
 {
 	int i;
-	struct vdcm_dsa_type *t;
-	const char *driver_name = dev_driver_string(
-			&dsa->pdev->dev);
 
-	for (i = 0; i < NR_TYPES; i++) {
-		/* TODO: Get types from DSA */
-		BUG();
-
-		if (!strncmp(t->name, name + strlen(driver_name) + 1,
-			sizeof(t->name)))
-			return t;
+	for (i = 0; i < DSA_MDEV_TYPES; i++) {
+		if (!strncmp(name, mdev_types[i].name, DSA_MDEV_NAME_LEN))
+			return &mdev_types[i];
 	}
 
 	return NULL;
 }
 
-static ssize_t available_instances_show(struct kobject *kobj,
-					struct device *dev, char *buf)
+static ssize_t
+dsa_dev_show(struct device *dev, struct device_attribute *attr,
+		char *buf)
 {
-	struct vdcm_dsa_type *type;
-	unsigned int num = 0;
-	void *dsa = kdev_to_dsa(dev);
-
-	type = vdcm_dsa_find_vdsa_type(dsa, kobject_name(kobj));
-	if (!type)
-		num = 0;
-	else
-		num = type->avail_instance;
-
-	return sprintf(buf, "%u\n", num);
+	return sprintf(buf, "Data Streaming Accelerator (DSA)\n");
 }
+
+static DEVICE_ATTR_RO(dsa_dev);
+
+static struct attribute *dsa_dev_attrs[] = {
+        &dev_attr_dsa_dev.attr,
+        NULL,
+};
+
+static const struct attribute_group dsa_dev_group = {
+        .name  = "dsa_dev",
+        .attrs = dsa_dev_attrs,
+};
+
+const struct attribute_group *dsa_dev_groups[] = {
+        &dsa_dev_group,
+        NULL,
+};
+
+static ssize_t
+name_show(struct kobject *kobj, struct device *dev, char *buf)
+{
+	int i;
+
+	for (i = 0; i < DSA_MDEV_TYPES; i++) {
+		if (!strcmp(kobj->name, mdev_types[i].name))
+			return sprintf(buf, "%s\n", mdev_types[i].description);
+	}
+
+	return -EINVAL;
+}
+
+MDEV_TYPE_ATTR_RO(name);
+
+static ssize_t
+available_instances_show(struct kobject *kobj, struct device *dev, char *buf)
+{
+	int i;
+	int dwqs = 0, swqs = 0;
+	struct vdcm_dsa *vdsa;
+	struct dsadma_device *dsa = dev_get_drvdata(dev);
+
+	for (i = 0; i < DSA_MDEV_TYPES; i++) {
+		if (!strcmp(kobj->name, mdev_types[i].name))
+			break;
+	}
+
+	if (i == DSA_MDEV_TYPES)
+		return -EINVAL;
+
+	list_for_each_entry(vdsa, &dsa_mdevs_list, next) {
+		for (i = 0; i < vdsa->num_wqs; i++) {
+			if (vdsa->wqs[i]->dedicated)
+				dwqs += 1;
+			else
+				swqs += 1;
+		}
+	}
+
+	switch (mdev_types[i].type) {
+		case DSA_MDEV_TYPE_1_DWQ_0_SWQ:
+			return sprintf(buf, "%d\n", (dsa->num_dwqs - dwqs));
+		case DSA_MDEV_TYPE_0_DWQ_1_SWQ:
+			return sprintf(buf, "%d\n", (dsa->virt_swqs - swqs));
+	}
+	return -EINVAL;
+}
+
+MDEV_TYPE_ATTR_RO(available_instances);
 
 static ssize_t device_api_show(struct kobject *kobj, struct device *dev,
 		char *buf)
@@ -196,27 +496,12 @@ static ssize_t device_api_show(struct kobject *kobj, struct device *dev,
 	return sprintf(buf, "%s\n", VFIO_DEVICE_API_PCI_STRING);
 }
 
-static ssize_t description_show(struct kobject *kobj, struct device *dev,
-		char *buf)
-{
-	struct vdcm_dsa_type *type;
-	void *dsa = kdev_to_dsa(dev);
+MDEV_TYPE_ATTR_RO(device_api);
 
-	type = vdcm_dsa_find_vdsa_type(dsa, kobject_name(kobj));
-	if (!type)
-		return 0;
-
-	return sprintf(buf, "%s\n", type->name);
-}
-
-static MDEV_TYPE_ATTR_RO(available_instances);
-static MDEV_TYPE_ATTR_RO(device_api);
-static MDEV_TYPE_ATTR_RO(description);
-
-static struct attribute *type_attrs[] = {
-	&mdev_type_attr_available_instances.attr,
+static struct attribute *dsa_mdev_types_attrs[] = {
+	&mdev_type_attr_name.attr,
 	&mdev_type_attr_device_api.attr,
-	&mdev_type_attr_description.attr,
+	&mdev_type_attr_available_instances.attr,
 	NULL,
 };
 
@@ -225,27 +510,44 @@ static bool vdcm_dsa_init_type_groups(struct dsadma_device *dsa)
 	int i, j;
 	struct vdcm_dsa_type *type;
 	struct attribute_group *group;
+	struct device *dev = &dsa->pdev->dev;
 
-	for (i = 0; i < NR_TYPES; i++) {
-		dsa = dsa;
-
-		/*TODO: initial type from DSA */
-		BUG();
+	for (i = 0; i < DSA_MDEV_TYPES; i++) {
+		type = &mdev_types[i];
 
 		group = kzalloc(sizeof(struct attribute_group), GFP_KERNEL);
 		if (WARN_ON(!group))
 			goto unwind;
 
-		group->name = type->name;
-		group->attrs = type_attrs;
-		vdcm_dsa_type_groups[i] = group;
+		switch (i) {
+			case DSA_MDEV_TYPE_1_DWQ_0_SWQ:
+				sprintf(type->name, "%s-%s",
+					dev_driver_string(dev), "1dwq");
+				strncpy(type->description,
+					"DSA MDEV w/ 1 dedicated work queue",
+					DSA_MDEV_DESCRIPTION_LEN);
+				type->type = i;
+				group->name = "1dwq";
+			break;
+			case DSA_MDEV_TYPE_0_DWQ_1_SWQ:
+				sprintf(type->name, "%s-%s",
+					dev_driver_string(dev), "1swq");
+				strncpy(type->description,
+					"DSA MDEV w/ 1 shared work queue",
+					DSA_MDEV_DESCRIPTION_LEN);
+				type->type = i;
+				group->name = "1swq";
+			break;
+		}
+		group->attrs = dsa_mdev_types_attrs;
+		dsa_mdev_type_groups[i] = group;
 	}
 
 	return true;
 
 unwind:
 	for (j = 0; j < i; j++) {
-		group = vdcm_dsa_type_groups[j];
+		group = dsa_mdev_type_groups[j];
 		kfree(group);
 	}
 
@@ -257,8 +559,8 @@ static void vdcm_dsa_cleanup_type_groups(struct dsadma_device *dsa)
 	int i;
 	struct attribute_group *group;
 
-	for (i = 0; i < NR_TYPES; i++) {
-		group = vdcm_dsa_type_groups[i];
+	for (i = 0; i < DSA_MDEV_TYPES; i++) {
+		group = dsa_mdev_type_groups[i];
 		kfree(group);
 	}
 }
@@ -269,11 +571,11 @@ static int vdcm_dsa_create(struct kobject *kobj, struct mdev_device *mdev)
 	struct vdcm_dsa *vdsa;
 	struct vdcm_dsa_type *type;
 	struct device *pdev;
-	void *dsa;
+	struct dsadma_device *dsa;
 	int ret;
 
 	pdev = mdev_parent_dev(mdev);
-	dsa = kdev_to_dsa(pdev);
+	dsa = dev_get_drvdata(pdev);
 
 	type = vdcm_dsa_find_vdsa_type(dsa, kobject_name(kobj));
 	if (!type) {
@@ -283,7 +585,7 @@ static int vdcm_dsa_create(struct kobject *kobj, struct mdev_device *mdev)
 		goto out;
 	}
 
-	vdsa = dsa_ops->vdsa_create(type);
+	vdsa = dsa_ops.vdsa_create(dsa, type);
 	if (IS_ERR_OR_NULL(vdsa)) {
 		ret = vdsa == NULL ? -EFAULT : PTR_ERR(vdsa);
 		pr_err("failed to create intel vdsa: %d\n", ret);
@@ -295,7 +597,13 @@ static int vdcm_dsa_create(struct kobject *kobj, struct mdev_device *mdev)
 	vdsa->vdev.mdev = mdev;
 	mdev_set_drvdata(mdev, vdsa);
 
-	pr_debug("vdcm_dsa_create succeeded for mdev: %s\n",
+	vdsa->type = type;
+
+	mutex_lock(&mdev_list_lock);
+	list_add(&vdsa->next, &dsa_mdevs_list);
+	mutex_unlock(&mdev_list_lock);
+
+	pr_info("vdcm_dsa_create succeeded for mdev: %s\n",
 		     dev_name(mdev_dev(mdev)));
 	ret = 0;
 
@@ -310,7 +618,7 @@ static int vdcm_dsa_remove(struct mdev_device *mdev)
 	if (handle_valid(vdsa->handle))
 		return -EBUSY;
 
-	dsa_ops->vdsa_destroy(vdsa);
+	dsa_ops.vdsa_destroy(vdsa);
 	return 0;
 }
 
@@ -442,15 +750,14 @@ static uint64_t vdcm_dsa_get_bar0_addr(struct vdcm_dsa *vdsa)
 	u32 mem_type;
 	int pos = PCI_BASE_ADDRESS_0;
 
-	start_lo = (*(u32 *)(vdsa->cfg_space.virtual_cfg_space + pos)) &
+	start_lo = (*(u32 *)(vdsa->cfg + pos)) &
 			PCI_BASE_ADDRESS_MEM_MASK;
-	mem_type = (*(u32 *)(vdsa->cfg_space.virtual_cfg_space + pos)) &
+	mem_type = (*(u32 *)(vdsa->cfg + pos)) &
 			PCI_BASE_ADDRESS_MEM_TYPE_MASK;
 
 	switch (mem_type) {
 	case PCI_BASE_ADDRESS_MEM_TYPE_64:
-		start_hi = (*(u32 *)(vdsa->cfg_space.virtual_cfg_space
-						+ pos + 4));
+		start_hi = (*(u32 *)(vdsa->cfg + pos + 4));
 		break;
 	case PCI_BASE_ADDRESS_MEM_TYPE_32:
 	case PCI_BASE_ADDRESS_MEM_TYPE_1M:
@@ -481,10 +788,10 @@ static ssize_t vdcm_dsa_rw(struct mdev_device *mdev, char *buf,
 	switch (index) {
 	case VFIO_PCI_CONFIG_REGION_INDEX:
 		if (is_write)
-			ret = dsa_ops->emulate_cfg_write(vdsa, pos,
+			ret = dsa_ops.emulate_cfg_write(vdsa, pos,
 						buf, count);
 		else
-			ret = dsa_ops->emulate_cfg_read(vdsa, pos,
+			ret = dsa_ops.emulate_cfg_read(vdsa, pos,
 						buf, count);
 		break;
 	case VFIO_PCI_BAR0_REGION_INDEX:
@@ -492,12 +799,12 @@ static ssize_t vdcm_dsa_rw(struct mdev_device *mdev, char *buf,
 		if (is_write) {
 			uint64_t bar0_start = vdcm_dsa_get_bar0_addr(vdsa);
 
-			ret = dsa_ops->emulate_mmio_write(vdsa,
+			ret = dsa_ops.emulate_mmio_write(vdsa,
 						bar0_start + pos, buf, count);
 		} else {
 			uint64_t bar0_start = vdcm_dsa_get_bar0_addr(vdsa);
 
-			ret = dsa_ops->emulate_mmio_read(vdsa,
+			ret = dsa_ops.emulate_mmio_read(vdsa,
 						bar0_start + pos, buf, count);
 		}
 		break;
@@ -523,7 +830,19 @@ static ssize_t vdcm_dsa_read(struct mdev_device *mdev, char __user *buf,
 	while (count) {
 		size_t filled;
 
-		if (count >= 4 && !(*ppos % 4)) {
+		if (count >= 8 && !(*ppos % 8)) {
+			u64 val;
+
+			ret = vdcm_dsa_rw(mdev, (char *)&val, sizeof(val),
+					ppos, false);
+			if (ret <= 0)
+				goto read_err;
+
+			if (copy_to_user(buf, &val, sizeof(val)))
+				goto read_err;
+
+			filled = 8;
+		} else if (count >= 4 && !(*ppos % 4)) {
 			u32 val;
 
 			ret = vdcm_dsa_rw(mdev, (char *)&val, sizeof(val),
@@ -583,7 +902,19 @@ static ssize_t vdcm_dsa_write(struct mdev_device *mdev,
 	while (count) {
 		size_t filled;
 
-		if (count >= 4 && !(*ppos % 4)) {
+		if (count >= 8 && !(*ppos % 8)) {
+			u64 val;
+
+			if (copy_from_user(&val, buf, sizeof(val)))
+				goto write_err;
+
+			ret = vdcm_dsa_rw(mdev, (char *)&val, sizeof(val),
+					ppos, true);
+			if (ret <= 0)
+				goto write_err;
+
+			filled = 8;
+		} else if (count >= 4 && !(*ppos % 4)) {
 			u32 val;
 
 			if (copy_from_user(&val, buf, sizeof(val)))
@@ -634,13 +965,19 @@ write_err:
 
 static int vdcm_dsa_mmap(struct mdev_device *mdev, struct vm_area_struct *vma)
 {
-	unsigned int index;
+	unsigned int index, offset;
 	u64 virtaddr;
 	unsigned long req_size, pgoff = 0;
 	pgprot_t pg_prot;
 	struct vdcm_dsa *vdsa = mdev_get_drvdata(mdev);
+	struct dsadma_device *dsa = vdsa->dsa;
+	struct dsa_work_queue *wq;
+	phys_addr_t base;
 
 	index = vma->vm_pgoff >> (VFIO_PCI_OFFSET_SHIFT - PAGE_SHIFT);
+	offset = (vma->vm_pgoff << PAGE_SHIFT) & 
+				((1ULL << VFIO_PCI_OFFSET_SHIFT) - 1);
+
 	if (index >= VFIO_PCI_ROM_REGION_INDEX)
 		return -EINVAL;
 
@@ -654,9 +991,37 @@ static int vdcm_dsa_mmap(struct mdev_device *mdev, struct vm_area_struct *vma)
 	pg_prot = vma->vm_page_prot;
 	virtaddr = vma->vm_start;
 	req_size = vma->vm_end - vma->vm_start;
-	/* TODO: check with DSA driver Guest bar2 mapping to host bar4 offset */
-	pgoff = vdsa->bar2_offset >> PAGE_SHIFT;
 
+	if (req_size != PAGE_SIZE) {
+		printk("mmap not page size %lx\n", req_size);
+		return -EINVAL;
+	}
+
+	if (offset < VDSA_BAR2_WQ_P_OFFSET) {
+		/* mapping a non-privileged portal */
+		int idx = (offset - VDSA_BAR2_WQ_NP_OFFSET) >> PAGE_SHIFT;
+		wq = vdsa->wqs[idx];
+
+		if (wq == NULL) {
+			printk("wq null %x\n", offset);
+			return -EINVAL;
+		}
+		base = pci_resource_start(dsa->pdev, DSA_WQ_BAR);
+		pgoff = (base + (wq->idx << PAGE_SHIFT)) >> PAGE_SHIFT;
+	} else {
+		/* mapping a privileged portal to a guest WQ portal */
+		int idx = (offset - VDSA_BAR2_WQ_P_OFFSET) >> PAGE_SHIFT;
+		wq = vdsa->wqs[idx];
+
+		if (wq == NULL) {
+			printk("p wq null %x\n", offset);
+			return -EINVAL;
+		}
+
+		offset = vdsa->ims_index[idx] * dsa->max_wqs + wq->idx;
+		base = pci_resource_start(dsa->pdev, DSA_GUEST_WQ_BAR);
+		pgoff = (base + (offset << PAGE_SHIFT)) >> PAGE_SHIFT;
+	}
 	return remap_pfn_range(vma, virtaddr, pgoff, req_size, pg_prot);
 }
 
@@ -804,7 +1169,7 @@ static long vdcm_dsa_ioctl(struct mdev_device *mdev, unsigned int cmd,
 			break;
 		case VFIO_PCI_BAR0_REGION_INDEX:
 			info.offset = VFIO_PCI_INDEX_TO_OFFSET(info.index);
-			info.size = vdsa->cfg_space.bar[info.index].size;
+			info.size = vdsa->bar_size[info.index];
 			if (!info.size) {
 				info.flags = 0;
 				break;
@@ -824,8 +1189,11 @@ static long vdcm_dsa_ioctl(struct mdev_device *mdev, unsigned int cmd,
 					VFIO_REGION_INFO_FLAG_MMAP |
 					VFIO_REGION_INFO_FLAG_READ |
 					VFIO_REGION_INFO_FLAG_WRITE;
-			/*TODO: Get DSA real mapping info here */
-			info.size = vdsa->bar2_size;
+			info.size = vdsa->bar_size[1];
+
+			/* Every WQ has two areas for non-privileged and
+			 * privileged portals */
+			nr_areas = vdsa->num_wqs * 2;
 
 			size = sizeof(*sparse) +
 					(nr_areas * sizeof(*sparse->areas));
@@ -836,10 +1204,15 @@ static long vdcm_dsa_ioctl(struct mdev_device *mdev, unsigned int cmd,
 			sparse->nr_areas = nr_areas;
 			cap_type_id = VFIO_REGION_INFO_CAP_SPARSE_MMAP;
 
-			/*TODO: Get DSA real mapping info here */
-			sparse->areas[0].offset =
-					PAGE_ALIGN(vdsa->bar2_offset);
-			sparse->areas[0].size = vdsa->bar2_size;
+			for (i = 0; i < vdsa->num_wqs; i++) {
+				sparse->areas[0].offset = VDSA_BAR2_WQ_NP_OFFSET
+					+ PAGE_SIZE * i;
+				sparse->areas[0].size = PAGE_SIZE;
+
+				sparse->areas[1].offset = VDSA_BAR2_WQ_P_OFFSET
+					+ PAGE_SIZE * i;
+				sparse->areas[1].size = PAGE_SIZE;
+			}
 			break;
 
 		case VFIO_PCI_BAR3_REGION_INDEX ... VFIO_PCI_BAR5_REGION_INDEX:
@@ -980,7 +1353,7 @@ static long vdcm_dsa_ioctl(struct mdev_device *mdev, unsigned int cmd,
 
 		return ret;
 	} else if (cmd == VFIO_DEVICE_RESET) {
-		dsa_ops->vdsa_reset(vdsa);
+		dsa_ops.vdsa_reset(vdsa);
 		return 0;
 	}
 
@@ -988,7 +1361,7 @@ static long vdcm_dsa_ioctl(struct mdev_device *mdev, unsigned int cmd,
 }
 
 static const struct mdev_parent_ops vdcm_dsa_ops = {
-	.supported_type_groups	= vdcm_dsa_type_groups,
+	.supported_type_groups	= dsa_mdev_type_groups,
 	.create			= vdcm_dsa_create,
 	.remove			= vdcm_dsa_remove,
 
@@ -1012,10 +1385,10 @@ static int kvmdsa_guest_init(struct mdev_device *mdev)
 		return -EEXIST;
 
 	kvm = vdsa->vdev.kvm;
-	if (!kvm || kvm->mm != current->mm) {
-		pr_err("KVM is required to use Intel vGPU\n");
-		return -ESRCH;
-	}
+	//if (!kvm || kvm->mm != current->mm) {
+		//pr_err("KVM is required to use Intel vGPU\n");
+		//return -ESRCH;
+	//}
 
 	info = vzalloc(sizeof(struct kvmdsa_guest_info));
 	if (!info)
@@ -1040,36 +1413,25 @@ static bool kvmdsa_guest_exit(unsigned long handle)
 	return true;
 }
 
-int kvmdsa_host_init(struct device *dev, void *dsa, const void *ops)
+int dsa_host_init(struct dsadma_device *dsa)
 {
+	struct device *dev = &dsa->pdev->dev;
+
 	if (!vdcm_dsa_init_type_groups(dsa))
 		return -EFAULT;
 
-	dsa_ops = ops;
+	mutex_init(&mdev_list_lock);
+	INIT_LIST_HEAD(&dsa_mdevs_list);
 
 	return mdev_register_device(dev, &vdcm_dsa_ops);
 }
-EXPORT_SYMBOL_GPL(kvmdsa_host_init);
 
-static void kvmdsa_host_exit(struct device *dev, void *vdsa)
+void dsa_host_exit(struct dsadma_device *dsa)
 {
-	vdcm_dsa_cleanup_type_groups(vdsa);
+	struct device *dev = &dsa->pdev->dev;
+
 	mdev_unregister_device(dev);
-}
-EXPORT_SYMBOL_GPL(kvmdsa_host_exit);
 
-static int __init kvmdsa_init(void)
-{
-	pr_info("kvmdsa module initialized.\n");
-	return 0;
+	vdcm_dsa_cleanup_type_groups(dsa);
 }
 
-static void __exit kvmdsa_exit(void)
-{
-}
-
-module_init(kvmdsa_init);
-module_exit(kvmdsa_exit);
-
-MODULE_LICENSE("GPL and additional rights");
-MODULE_AUTHOR("Intel Corporation");

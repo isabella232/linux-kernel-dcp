@@ -251,6 +251,9 @@ struct dsadma_device {
 	struct miscdevice misc_dev;
 	char user_name[16];
 	unsigned int index;
+	int virt_dwqs;
+	int virt_swqs;
+	int vdev_id;
 
 	struct dsa_context priv_ctx;
 	bool pasid_enabled;
@@ -276,12 +279,15 @@ struct dsadma_device {
 	u16 max_wqs;
 	u16 max_engs;
 	u16 num_wqs;
+	u16 num_dwqs;
+	u16 num_virt_swqs;
 	u16 num_grps;
 
 	u16 num_kern_dwqs;
 
 	u16 num_wq_irqs;
 	atomic_t irq_wq_next;
+	atomic_t irq_ims_next;
 
 	/* Operational Caps - 256 bits but only first 64 bits are valid */
 	u64 opcap;
@@ -434,6 +440,14 @@ static inline u16 dsa_ring_pending(struct dsa_completion_ring *dring)
 static inline u32 dsa_ring_space(struct dsa_completion_ring *dring)
 {
         return dsa_ring_size(dring) - dsa_ring_active(dring);
+}
+
+static inline int dsa_get_ims_index (struct dsadma_device *dsa)
+{
+	/* for now just do round-robin assignment */
+	/* FIXME: This increment may become negative on overflow */
+	return ((atomic_inc_return(&dsa->irq_ims_next) % dsa->ims_size));
+
 }
 
 static inline int dsa_get_msix_index (struct dsadma_device *dsa)
@@ -689,5 +703,8 @@ void dsa_dma_completion_cleanup(struct dsa_completion_ring *dring);
 
 int dsa_dma_self_test (struct dsadma_device *dsa);
 
+
+int dsa_host_init(struct dsadma_device *dsa);
+void dsa_host_exit(struct dsadma_device *dsa);
 
 #endif /* DSADMA_H */

@@ -311,6 +311,7 @@ int dsa_dma_setup_interrupts(struct dsadma_device *dsa)
 	/* first MSI-X entry is not for wq interrupts */
 	dsa->num_wq_irqs = msixcnt - 1;
 	atomic_set(&dsa->irq_wq_next, 0);
+	atomic_set(&dsa->irq_ims_next, -1);
 
 	if (dsa->irq_entries == NULL) {
 		dev_err(dev, "Allocating %d irq entries!\n", msixcnt);
@@ -892,6 +893,7 @@ static int dsa_enumerate_work_queues(struct dsadma_device *dsa)
 			dsa->wqs[i-1].threshold = (dsa->wqs[i - 1].wq_size * 8)/
 							10;
 		}
+		dsa->num_dwqs = dsa_num_dwqs;
 	}
 	if (dsa_num_swqs > 0) {	
 		for (i = dsa_num_dwqs; i < dsa->num_wqs; i++) {
@@ -1192,6 +1194,8 @@ static int dsa_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (device->pasid_enabled)
 		err = dsa_usr_add(device);
 
+	dsa_host_init(device);
+
 	list_add(&device->list, &dsa_devices);
 	num_dsa_devices++;
 
@@ -1208,6 +1212,8 @@ static void dsa_remove(struct pci_dev *pdev)
 	dev_err(&pdev->dev, "Removing dma services\n");
 
 	pci_disable_pcie_error_reporting(pdev);
+
+	dsa_host_exit(device);
 
 	if (device->pasid_enabled)
 		misc_deregister(&device->misc_dev);
