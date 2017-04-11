@@ -282,6 +282,7 @@ struct dsadma_device {
 	u16 num_dwqs;
 	u16 num_virt_swqs;
 	u16 num_grps;
+	bool wq_cfg_support;
 
 	u16 num_kern_dwqs;
 
@@ -685,6 +686,7 @@ void dsa_setup_irq_event (struct dsa_irq_event *ev, struct dsa_irq_entry
 			void (*isr_cb)(struct dsa_completion_ring *dring));
 
 int dsa_ctx_drain_pasid (struct dsa_context *ctx, bool abort);
+int dsa_drain_pasid (struct dsadma_device *dsa, int pasid, bool abort);
 
 struct dsa_completion_ring *dsa_alloc_svm_resources(struct dsa_work_queue *wq);
 void dsa_free_descriptors (struct dsa_completion_ring *dring);

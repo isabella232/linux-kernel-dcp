@@ -41,6 +41,8 @@ MODULE_VERSION(DSA_DMA_VERSION);
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_AUTHOR("Intel Corporation");
 
+#define DRV_NAME "dsa"
+
 static struct pci_device_id dsa_pci_tbl[] = {
 	/* DSA vr1.0 platforms */
 	{ PCI_VDEVICE(INTEL, PCI_DEVICE_ID_INTEL_DSA_SPR0) },
@@ -83,6 +85,10 @@ MODULE_PARM_DESC(dsa_num_swqs, "Number of SWQs");
 static int selftest = 0;
 module_param(selftest, int, 0644);
 MODULE_PARM_DESC(selftest, "Perform Selftest");
+
+static int dmachan = 1;
+module_param(dmachan, int, 0644);
+MODULE_PARM_DESC(dmachan, "Allocate a WQ for DMAEngine APIs");
 
 struct kmem_cache *dsa_cache;
 
@@ -298,6 +304,7 @@ int dsa_dma_setup_interrupts(struct dsadma_device *dsa)
 	for (i = 0; i < msixcnt; i++)
 		dsa->msix_entries[i].entry = i;
 
+	printk("enabling %x msi-x entries\n", msixcnt);
 	err = pci_enable_msix_exact(pdev, dsa->msix_entries, msixcnt);
 	if (err) {
 		dev_err(dev, "Enabling %d MSI-X entries!\n", msixcnt);
@@ -391,6 +398,22 @@ static int dsa_probe(struct dsadma_device *dsa_dma)
 
 	dsa_enumerate_capabilities(dsa_dma);
 
+	/* If IMS and Guest Portals supported, map them */
+	if (dsa_dma->gencap & DSA_CAP_IMS) {
+		void __iomem * const *iomap;
+		int msk = (1 << DSA_GUEST_WQ_BAR);
+
+		err = pcim_iomap_regions(pdev, msk, DRV_NAME);
+		if (err)
+			goto err_enable_pasid;
+
+		iomap = pcim_iomap_table(pdev);
+		if (!iomap)
+			goto err_enable_pasid;
+
+		dsa_dma->gwq_reg_base = iomap[DSA_GUEST_WQ_BAR];
+	}
+
 	err = dsa_enumerate_work_queues(dsa_dma);
 
 	if (err)
@@ -481,6 +504,7 @@ static void dsa_enumerate_capabilities(struct dsadma_device *dsa_dma)
 
 	dsa_dma->max_batch_size = (dsa_dma->gencap & DSA_CAP_MAX_BATCH_MASK) >>
 					DSA_CAP_MAX_BATCH_SHIFT;
+
 	dsa_dma->ims_size = (dsa_dma->gencap & DSA_CAP_IMS_MASK) >>
 					DSA_CAP_IMS_SHIFT;
 
@@ -500,6 +524,11 @@ static int dsa_configure_groups(struct dsadma_device *dsa)
 	struct dsa_work_queue *wq;
 	int grp_offset;
 	int i;
+
+	if (dsa->wq_cfg_support == 0) {
+		/* can't configure the GRPs. grpcfg has already been read */
+		return 0;
+	}
 
 	for (i = 0; i < dsa->num_wqs; i++) {
 		wq = &dsa->wqs[i];
@@ -671,8 +700,6 @@ static int dsa_init_wq (struct dsadma_device *dsa, int wq_idx)
 {
 	struct dsa_work_queue *wq = &dsa->wqs[wq_idx];
 	struct dsa_work_queue_reg wqcfg;
-	struct dma_device *dma = &dsa->dma_dev;
-	unsigned long data = (unsigned long) wq;
 	unsigned int wq_offset;
 
 	memset(&wqcfg, 0, sizeof(wqcfg));
@@ -687,28 +714,8 @@ static int dsa_init_wq (struct dsadma_device *dsa, int wq_idx)
 	if (wq->wq_size == 0)
 		return 0;
 
-	printk("init wq %d dedicated %d sz %d\n", wq_idx, wq->dedicated,
-							wq->wq_size);
-	wq->dsa = dsa;
-	spin_lock_init(&wq->lock);
-
-	wq->dma_chan.device = dma;
-	dma_cookie_init(&wq->dma_chan);
-	init_timer(&wq->timer);
-	wq->timer.function = dsa_timer_event;
-       	wq->timer.data = data;
-	/* Currently, report 1 DWQ only to the kernel to be used by the DMA
-	 * APIs. The rest of the WQs are for SVM clients */
-	if (wq->dedicated && !dsa->num_kern_dwqs) {
-		list_add_tail(&wq->dma_chan.device_node, &dma->channels);
-		dsa->num_kern_dwqs++;
-		wq->available = 0;
-		wq->allocated = 1;
-		dsa->system_wq_idx = wq_idx;
-	} else {
-		wq->available = 1;
-		wq->allocated = 0;
-	}
+	printk("init wq %d dedicated %d sz %d grp %d\n", wq_idx, wq->dedicated,
+						wq->wq_size, wq->grp_id);
 
 	wqcfg.b.b_fields.threshold = wq->threshold;
 	writel(wqcfg.b.val, dsa->reg_base + wq_offset + 4);
@@ -809,6 +816,62 @@ int dsa_wq_set_pasid (struct dsadma_device *dsa, int wq_idx, int pasid,
 	return 0;
 }
 
+static void dsa_get_wq_grp_config(struct dsadma_device *dsa)
+{
+	struct dsa_work_queue_reg wqcfg;
+	struct dsa_work_queue *wq;
+	unsigned int wq_offset;
+	unsigned int grp_offset;
+	int i, j;
+
+	memset(&wqcfg, 0, sizeof(wqcfg));
+
+	dsa->num_wqs = dsa->max_wqs;
+
+	for (i = 0; i < dsa->max_engs; i++) {
+		int j;
+
+		grp_offset = DSA_GRPCFG_OFFSET + i * 64;
+		for (j = 0; j < 4; j++)
+			dsa->grpcfg[i].wq_bits[j] =
+				readq(dsa->reg_base + grp_offset + j * 8);
+
+		if (dsa->grpcfg[i].wq_bits[0] || dsa->grpcfg[i].wq_bits[1] ||
+			dsa->grpcfg[i].wq_bits[2] || dsa->grpcfg[i].wq_bits[3]) 
+			dsa->num_grps++;
+
+		dsa->grpcfg[i].eng_bits = readq(dsa->reg_base + grp_offset +32);
+	}
+
+	for (i = 0; i < dsa->num_wqs; i++) {
+		wq = &dsa->wqs[i];
+
+		/* Each WQCONFIG reg is 16 bytes (A, B, C, and D registers) */
+		wq_offset = DSA_WQCFG_OFFSET + i * 16;
+
+		wqcfg.a.val = readl(dsa->reg_base + wq_offset);
+		wqcfg.b.val = readl(dsa->reg_base + wq_offset + 4);
+		wqcfg.c.val = readl(dsa->reg_base + wq_offset + 8);
+
+		for (j = 0; j < 4; j++)
+			if (dsa->grpcfg[j].wq_bits[i / BITS_PER_LONG] &
+						(1 << (i % BITS_PER_LONG)))
+				wq->grp_id = j;
+
+		wq->dedicated = wqcfg.c.c_fields.mode;
+		wq->wq_size = wqcfg.a.a_fields.wq_size;
+		wq->threshold = wqcfg.b.b_fields.threshold;
+		wq->priority = wqcfg.c.c_fields.priority;
+		wq->idx = i;
+
+		if (dsa->wqs[i].dedicated)
+			dsa->num_dwqs++;
+
+		printk("init wq %d dedicated %d sz %d grp %d\n", i,
+				wq->dedicated, wq->wq_size, wq->grp_id);
+	}
+}
+
 /**
  * dsa_enumerate_work_queues - configure the device's work queues
  * @dsa_dma: the dsa dma device to be enumerated
@@ -824,10 +887,13 @@ static int dsa_enumerate_work_queues(struct dsadma_device *dsa)
 
 	dsa->tot_wq_size = (dsa->wqcap & DSA_CAP_WQ_SIZE_MASK);
 
-	dsa->max_wqs = (dsa-> wqcap & DSA_CAP_MAX_WQ_MASK) >>
+	dsa->max_wqs = (dsa->wqcap & DSA_CAP_MAX_WQ_MASK) >>
 						DSA_CAP_MAX_WQ_SHIFT;
-	dsa->max_engs = (dsa-> wqcap & DSA_CAP_MAX_ENG_MASK) >>
+	dsa->max_engs = (dsa->wqcap & DSA_CAP_MAX_ENG_MASK) >>
 						DSA_CAP_MAX_ENG_SHIFT;
+
+	dsa->wq_cfg_support = (dsa->wqcap & DSA_CAP_WQ_CFG_MASK) >>
+				DSA_CAP_WQ_CFG_SHIFT;
 
 	dsa->wqs = devm_kzalloc(dev, sizeof(struct dsa_work_queue) *
 						dsa->max_wqs, GFP_KERNEL);
@@ -844,6 +910,12 @@ static int dsa_enumerate_work_queues(struct dsadma_device *dsa)
 		return -ENOMEM;
 	}
 
+	if (dsa->wq_cfg_support == 0) {
+		/* can't configure the WQs. so read the WQ config */
+		dsa_get_wq_grp_config(dsa);
+
+		goto skip_wq_config;
+	}
 	/* We can't use SWQs if PASID was not enabled */
 	if (!dsa->pasid_enabled)
 		dsa_num_swqs = 0;
@@ -911,11 +983,39 @@ static int dsa_enumerate_work_queues(struct dsadma_device *dsa)
 		dsa->num_grps++;
 	}
 
-	INIT_LIST_HEAD(&dma->channels);
-
 	for (i = 0; i < dsa->max_wqs; i++) {
 		dsa_init_wq(dsa, i);
 	}
+
+skip_wq_config:
+	INIT_LIST_HEAD(&dma->channels);
+
+	/* Currently, report first DWQ only to the kernel to be used by the DMA
+	 * APIs. The rest of the WQs are for SVM clients */
+	for (i = 0; i < dsa->max_wqs; i++) {
+		struct dsa_work_queue *wq = &dsa->wqs[i];
+
+		wq->dsa = dsa;
+		spin_lock_init(&wq->lock);
+
+		wq->dma_chan.device = dma;
+		dma_cookie_init(&wq->dma_chan);
+		init_timer(&wq->timer);
+		wq->timer.function = dsa_timer_event;
+       		wq->timer.data = (unsigned long)wq;
+
+		if (wq->dedicated && !dsa->num_kern_dwqs && dmachan) {
+			list_add_tail(&wq->dma_chan.device_node,&dma->channels);
+			dsa->num_kern_dwqs++;
+			wq->available = 0;
+			wq->allocated = 1;
+			dsa->system_wq_idx = i;
+		} else {
+			wq->available = 1;
+			wq->allocated = 0;
+		}
+	}
+
 	return 0;
 }
 
@@ -1053,8 +1153,6 @@ void dsa_resume(struct dsadma_device *dsa)
 	}
 }
 
-#define DRV_NAME "dsadma"
-
 static pci_ers_result_t dsa_pcie_error_detected(struct pci_dev *pdev,
 						 enum pci_channel_state error)
 {
@@ -1129,7 +1227,6 @@ alloc_dsadma(struct pci_dev *pdev, void __iomem * const *iomap)
 	d->pdev = pdev;
 	d->reg_base = iomap[DSA_MMIO_BAR];
 	d->wq_reg_base = iomap[DSA_WQ_BAR];
-	d->gwq_reg_base = iomap[DSA_GUEST_WQ_BAR];
 
 	spin_lock_init(&d->cmd_lock);
 
@@ -1148,7 +1245,7 @@ static int dsa_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (err)
 		return err;
 
-	msk = (1 << DSA_MMIO_BAR) | (1 << DSA_WQ_BAR) | (1 << DSA_GUEST_WQ_BAR);
+	msk = (1 << DSA_MMIO_BAR) | (1 << DSA_WQ_BAR);
 	err = pcim_iomap_regions(pdev, msk, DRV_NAME);
 	if (err)
 		return err;

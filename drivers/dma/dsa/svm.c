@@ -90,16 +90,21 @@ int dsa_fops_open(struct inode *inode, struct file *filep)
 
 int dsa_ctx_drain_pasid (struct dsa_context *ctx, bool abort)
 {
+
+	return dsa_drain_pasid(ctx->dsa, ctx->pasid, abort);
+}
+
+int dsa_drain_pasid (struct dsadma_device *dsa, int pasid, bool abort)
+{
 	union dsa_command_reg reg;
-	struct dsadma_device *dsa = ctx->dsa;
 	int i;
 
 	memset(&reg, 0, sizeof(union dsa_command_reg));
 
-	printk("draining pasid %d %d\n", ctx->pasid, abort);
+	printk("draining pasid %d %d\n", pasid, abort);
 	spin_lock(&dsa->cmd_lock);
 
-	reg.fields.operand = ctx->pasid;
+	reg.fields.operand = pasid;
 	reg.fields.cmd = DRAIN_PASID;
 	reg.fields.abort = abort;
 	writel(reg.val, dsa->reg_base + DSA_CMD_OFFSET);
@@ -114,7 +119,7 @@ int dsa_ctx_drain_pasid (struct dsa_context *ctx, bool abort)
 	spin_unlock(&dsa->cmd_lock);
 
 	if (i == DRAIN_CMD_TIMEOUT) {
-		printk("drain pasid time out %d\n", ctx->pasid);
+		printk("drain pasid time out %d\n", pasid);
 		/* FIXME: the device likely needs reset to recover from this */
 		return 1;
 	}

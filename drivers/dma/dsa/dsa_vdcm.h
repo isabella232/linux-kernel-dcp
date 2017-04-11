@@ -1,6 +1,10 @@
 #ifndef __DSA_VDCM_H__
 #define __DSA_VDCM_H__
 
+
+/* MMIO bits */
+#define DSA_CMD_INT_MASK  0x100000
+
 #define DSA_MDEV_NAME_LEN  16
 #define DSA_MDEV_DESCRIPTION_LEN  64
 
@@ -48,6 +52,7 @@ struct vdcm_dsa_pci_bar0 {
 	u8 wq_ctrl_regs[VDSA_WQ_CTRL_SZ];
 	u8 wq_ocpy_int_regs[VDSA_WQ_OCPY_INT_SZ];
 	u8 msix_table[VDSA_MSIX_TBL_SZ];
+	u16 msix_pba;
 };
 
 struct dsa_vdev {
@@ -56,6 +61,7 @@ struct dsa_vdev {
 	int num_regions;
 	struct eventfd_ctx *intx_trigger;
 	struct eventfd_ctx *msi_trigger;
+	struct eventfd_ctx *msix_trigger;
 	struct rb_root cache;
 	struct mutex cache_lock;
 	struct notifier_block iommu_notifier;
@@ -100,7 +106,6 @@ struct vdsa_ops {
 	void (*vdsa_destroy)(struct vdcm_dsa *);
 	void (*vdsa_reset)(struct vdcm_dsa *);
 };
-
 
 #endif
 

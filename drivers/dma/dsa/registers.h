@@ -37,9 +37,9 @@
 #define DSA_WQCFG_OFFSET			0x2000
 #define DSA_PERF_OFFSET	        		0x4000
 
-#define DSA_MSIX_TABLE_OFFSET	       		0x2000
-#define DSA_MSIX_PBA_OFFSET	       		0x3000
-#define DSA_IMS_OFFSET   	       		0x4000
+#define DSA_MSIX_TABLE_OFFSET	       		0x6000
+#define DSA_MSIX_PBA_OFFSET	       		0x7000
+#define DSA_IMS_OFFSET   	       		0x8000
 
 #define DSA_VER_MAJOR_MASK			0xF0
 #define DSA_VER_MINOR_MASK			0x0F
@@ -82,6 +82,9 @@
 
 #define DSA_CAP_MAX_ENG_MASK			0x00000000FF000000
 #define DSA_CAP_MAX_ENG_SHIFT			24
+
+#define DSA_CAP_WQ_CFG_MASK			0x0004000000000000
+#define DSA_CAP_WQ_CFG_SHIFT			50
 
 #define DSA_ENABLE_BIT			0x1
 #define DSA_ENABLED_BIT			0x2
