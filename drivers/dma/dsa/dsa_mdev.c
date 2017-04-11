@@ -187,15 +187,12 @@ struct vdcm_dsa * vdcm_vdsa_create (struct dsadma_device *dsa,
 
 			vdsa->num_wqs = 1;
 
-			/* allocate a IMS entry */
+			/* allocate IMS entries */
 			vdsa->ims_index[0] = dsa_get_ims_index(dsa);
 
 			/* Set the MSI-X table size */
 			vdsa->cfg[VDSA_MSIX_TBL_SZ_OFFSET] = vdsa->num_wqs;
 
-			/* Configure the GRPs and ENGs */
-
-			/* Configure the WQs */
 		break;
 		case DSA_MDEV_TYPE_0_DWQ_1_SWQ:
 			vdsa->wqs[0] = dsa_wq_alloc(dsa, 0);
@@ -206,15 +203,11 @@ struct vdcm_dsa * vdcm_vdsa_create (struct dsadma_device *dsa,
 
 			vdsa->num_wqs = 1;
 
-			/* allocate a IMS entry */
+			/* allocate IMS entries */
 			vdsa->ims_index[0] = dsa_get_ims_index(dsa);
 			/* Set the MSI-X table size */
 			vdsa->cfg[VDSA_MSIX_TBL_SZ_OFFSET] = vdsa->num_wqs;
 
-
-			/* Configure the GRPs and ENGs */
-
-			/* Configure the WQs */
 		break;
 	}
 
@@ -1562,13 +1555,13 @@ static long vdcm_dsa_ioctl(struct mdev_device *mdev, unsigned int cmd,
 			cap_type_id = VFIO_REGION_INFO_CAP_SPARSE_MMAP;
 
 			for (i = 0; i < vdsa->num_wqs; i++) {
-				sparse->areas[0].offset = VDSA_BAR2_WQ_NP_OFFSET
-					+ PAGE_SIZE * i;
-				sparse->areas[0].size = PAGE_SIZE;
+				sparse->areas[2 * i].offset =
+					VDSA_BAR2_WQ_NP_OFFSET + PAGE_SIZE * i;
+				sparse->areas[2 * i].size = PAGE_SIZE;
 
-				sparse->areas[1].offset = VDSA_BAR2_WQ_P_OFFSET
-					+ PAGE_SIZE * i;
-				sparse->areas[1].size = PAGE_SIZE;
+				sparse->areas[2 * i + 1].offset =
+					VDSA_BAR2_WQ_P_OFFSET + PAGE_SIZE * i;
+				sparse->areas[2 * i + 1].size = PAGE_SIZE;
 			}
 			break;
 
@@ -1754,6 +1747,8 @@ static int kvmdsa_guest_init(struct mdev_device *mdev)
 	vdsa->handle = (unsigned long)info;
 	info->vdsa = vdsa;
 	info->kvm = kvm;
+
+	/* FIXME: Setup Scalable IOV IOMMU for translation */
 
 	return 0;
 }
