@@ -94,6 +94,10 @@ int ms_to = 10000;
 module_param(ms_to, int, 0644);
 MODULE_PARM_DESC(ms_to, "Timeout in milliseconds for various ops");
 
+static int enable_vdsa = 0;
+module_param(enable_vdsa, int, 0644);
+MODULE_PARM_DESC(enable_vdsa, "Set to 1 if dsa driver support virtualization");
+
 struct kmem_cache *dsa_cache;
 
 static int dsa_enable_wq (struct dsadma_device *dsa, int wq_offset,
@@ -1310,7 +1314,9 @@ static int dsa_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (device->pasid_enabled)
 		err = dsa_usr_add(device);
 
-	dsa_host_init(device);
+	if (enable_vdsa) {
+		dsa_host_init(device);
+	}
 
 	list_add(&device->list, &dsa_devices);
 	num_dsa_devices++;
