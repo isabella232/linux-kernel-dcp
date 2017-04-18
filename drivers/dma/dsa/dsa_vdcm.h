@@ -45,6 +45,13 @@ enum {
 	VDSA_PASID_OFFSET = 0x120,
 };
 
+struct dsa_ims_entry {
+	u64 address;
+	u32 data;
+	u32 mask:1;
+	u32 rsvd:31;
+};
+
 #define VDSA_MSIX_TBL_SZ_OFFSET  0x42
 struct vdcm_dsa_pci_bar0 {
 	u8 cap_ctrl_regs[VDSA_CAP_CTRL_SZ];
@@ -55,13 +62,13 @@ struct vdcm_dsa_pci_bar0 {
 	u16 msix_pba;
 };
 
+#define VDSA_MAX_MSIX_ENTRIES  (VDSA_MSIX_TBL_SZ/0x10)
+
 struct dsa_vdev {
 	struct mdev_device *mdev;
 	struct vfio_region *region;
 	int num_regions;
-	struct eventfd_ctx *intx_trigger;
-	struct eventfd_ctx *msi_trigger;
-	struct eventfd_ctx *msix_trigger;
+	struct eventfd_ctx *msix_trigger[VDSA_MAX_MSIX_ENTRIES];
 	struct rb_root cache;
 	struct mutex cache_lock;
 	struct notifier_block iommu_notifier;
@@ -82,6 +89,7 @@ struct vdcm_dsa {
 	unsigned long handle;
 	u64 pasid[8];
 	u64 ims_index[VDSA_MAX_WQS];
+	struct dsa_ims_entry ims_entries[VDSA_MAX_WQS];
 
 	u64 bar_val[VDSA_MAX_BARS];
 	u64 bar_size[VDSA_MAX_BARS];

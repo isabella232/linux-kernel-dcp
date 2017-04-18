@@ -304,7 +304,7 @@ int dsa_dma_setup_interrupts(struct dsadma_device *dsa)
 	for (i = 0; i < msixcnt; i++)
 		dsa->msix_entries[i].entry = i;
 
-	printk("enabling %x msi-x entries\n", msixcnt);
+	printk("enabling %x msi-x entries %s\n", msixcnt, dev_name(dev));
 	err = pci_enable_msix_exact(pdev, dsa->msix_entries, msixcnt);
 	if (err) {
 		dev_err(dev, "Enabling %d MSI-X entries!\n", msixcnt);

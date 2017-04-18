@@ -152,7 +152,6 @@ static void vdsa_mmio_init (struct vdcm_dsa *vdsa)
 	wq_cap = (u64 *)&bar0->cap_ctrl_regs[DSA_WQCAP_OFFSET];
 	*wq_cap = (sm << 48) | (dm << 49) | (((u64)dsa->max_engs & 0xFF) << 24)
 		|(((u64)vdsa->num_wqs & 0xFF) << 16) | (total_wq_size & 0xffff);
-	printk("vdsa wq_cap %llx\n", *wq_cap);
 }
 
 
@@ -218,6 +217,25 @@ struct vdcm_dsa * vdcm_vdsa_create (struct dsadma_device *dsa,
 	vdsa_mmio_init(vdsa);
 
 	return vdsa;
+}
+
+static int vdsa_send_interrupt(struct vdcm_dsa *vdsa, int msix_idx)
+{
+	int ret = -1;
+
+	if (!vdsa->vdev.msix_trigger[msix_idx]) {
+		pr_info("%s: Intr evtfd not found %d\n", __func__, msix_idx);
+		return -EINVAL;
+	}
+
+	ret = eventfd_signal(vdsa->vdev.msix_trigger[msix_idx], 1);
+
+	pr_info("interrupt triggered %d\n", msix_idx);
+
+	if (ret != 1)
+		pr_err("%s: eventfd signal failed (%d)\n", __func__, ret);
+
+	return ret;
 }
 
 static inline u8 vdsa_state (struct vdcm_dsa *vdsa)
@@ -551,8 +569,7 @@ static int vdcm_vdsa_mmio_write(struct vdcm_dsa *vdsa, u64 pos, void *buf,
 					bar0->cap_ctrl_regs[DSA_INTCAUSE_OFFSET]
 							|= 4U;
 
-					//msix_entry = bar0->msix_table[0];
-					//send_interrupt(msix_entry.address, msix_entry.data);
+					vdsa_send_interrupt(vdsa, 0);
 				}
 			}
 			break;
@@ -652,7 +669,7 @@ static int vdcm_vdsa_mmio_write(struct vdcm_dsa *vdsa, u64 pos, void *buf,
 			if ((msix_entry[12] & 1) == 0 &&
 					(bar0->msix_pba & (1ULL << index))) {
 				bar0->msix_pba &= ~(1ull << index);
-				//send_interrupt(msix_entry.address, msix_entry.data);
+				vdsa_send_interrupt(vdsa, index);
 			}
 			break;
 		}
@@ -1350,44 +1367,48 @@ static int vdcm_dsa_get_irq_count(struct vdcm_dsa *vdsa, int type)
 	return 0;
 }
 
-static int vdcm_dsa_set_intx_mask(struct vdcm_dsa *vdsa,
-			unsigned int index, unsigned int start,
-			unsigned int count, uint32_t flags,
-			void *data)
+irqreturn_t dsa_guest_wq_completion_interrupt(int irq, void *data)
 {
+        struct vdcm_dsa *vdsa = data;
+	int msix_idx = 1;
+
+        printk("received guest wq completion interrupt\n");
+
+	//msix_idx = irq_to_msix_idx(vdsa, irq);
+
+	vdsa_send_interrupt(vdsa, msix_idx);
+
+        return IRQ_HANDLED;
+}
+
+static int vdsa_setup_ims_entry (struct vdcm_dsa *vdsa, int ims_idx)
+{
+/*
+	struct msix_entry msix_entry;
+	struct dsadma_device *dsa = vdsa->dsa;
+	struct pci_dev *pdev = dsa->pdev;
+	int ims_offset;
+	u64 address;
+	u32 data;
+
+	pci_alloc_msix_vector(pdev, &address, &data);
+
+	vdsa->ims_entry[ims_idx].address = address;
+	vdsa->ims_entry[ims_idx].data = data;
+
+	ims_offset = DSA_IMS_OFFSET + vdsa->ims_index[ims_idx] * 0x10;
+
+	printk("writing %llx:%x ims entry %d:%lld to offset %x\n", address, data,
+				ims_idx, vdsa->ims_index[ims_idx], ims_offset);
+
+	writeq(address, dsa->reg_base + ims_offset);
+	writel(data, dsa->reg_base + ims_offset + 8);
+*/
 	return 0;
 }
 
-static int vdcm_dsa_set_intx_unmask(struct vdcm_dsa *vdsa,
-			unsigned int index, unsigned int start,
-			unsigned int count, uint32_t flags, void *data)
+static int vdsa_free_ims_entry (struct vdcm_dsa *vdsa, int ims_idx)
 {
-	return 0;
-}
-
-static int vdcm_dsa_set_intx_trigger(struct vdcm_dsa *vdsa,
-		unsigned int index, unsigned int start, unsigned int count,
-		uint32_t flags, void *data)
-{
-	return 0;
-}
-
-static int vdcm_dsa_set_msi_trigger(struct vdcm_dsa *vdsa,
-		unsigned int index, unsigned int start, unsigned int count,
-		uint32_t flags, void *data)
-{
-	struct eventfd_ctx *trigger;
-
-	if (flags & VFIO_IRQ_SET_DATA_EVENTFD) {
-		int fd = *(int *)data;
-
-		trigger = eventfd_ctx_fdget(fd);
-		if (IS_ERR(trigger)) {
-			pr_err("eventfd_ctx_fdget failed\n");
-			return PTR_ERR(trigger);
-		}
-		vdsa->vdev.msi_trigger = trigger;
-	}
 
 	return 0;
 }
@@ -1397,19 +1418,60 @@ static int vdcm_dsa_set_msix_trigger(struct vdcm_dsa *vdsa,
 		uint32_t flags, void *data)
 {
 	struct eventfd_ctx *trigger;
+	int i, ret = 0;
 
-	if (flags & VFIO_IRQ_SET_DATA_EVENTFD) {
-		int fd = *(int *)data;
+	if (count == 0 && (flags & VFIO_IRQ_SET_DATA_NONE)) {
+		/* Disable all MSIX entries */
+		i = 0;
+		for (i = 0; i < VDSA_MAX_MSIX_ENTRIES; i++) {
+			if (vdsa->vdev.msix_trigger[i]) {
+				pr_info("disable MSIX entry %d\n", i);
+				eventfd_ctx_put(vdsa->vdev.msix_trigger[i]);
+				vdsa->vdev.msix_trigger[i] = 0;
 
-		trigger = eventfd_ctx_fdget(fd);
-		if (IS_ERR(trigger)) {
-			pr_err("eventfd_ctx_fdget failed\n");
-			return PTR_ERR(trigger);
+				if (i) {
+					ret = vdsa_free_ims_entry(vdsa, i - 1);
+					if (ret)
+						return ret;
+				}
+			}
 		}
-		vdsa->vdev.msix_trigger = trigger;
+		return 0;
 	}
 
-	return 0;
+	for (i = 0; i < count; i++) {
+		if (flags & VFIO_IRQ_SET_DATA_EVENTFD) {
+			u32 fd = *(u32 *)(data + i * sizeof(u32));
+
+			pr_info("enable MSIX entry %d\n", i);
+			trigger = eventfd_ctx_fdget(fd);
+			if (IS_ERR(trigger)) {
+				pr_err("eventfd_ctx_fdget failed %d\n", i);
+				return PTR_ERR(trigger);
+			}
+			vdsa->vdev.msix_trigger[i] = trigger;
+			/* allocate a vector from the OS and set in the IMS
+			 * entry
+			 */
+			if (i) {
+				ret = vdsa_setup_ims_entry(vdsa, i - 1);
+				if (ret)
+					return ret;
+			}
+			fd++;
+		} else if (flags & VFIO_IRQ_SET_DATA_NONE) {
+			pr_info("disable MSIX entry %d\n", i);
+			eventfd_ctx_put(vdsa->vdev.msix_trigger[i]);
+			vdsa->vdev.msix_trigger[i] = 0;
+
+			if (i) {
+				ret = vdsa_free_ims_entry(vdsa, i - 1);
+				if (ret)
+					return ret;
+			}
+		}
+	}
+	return ret;
 }
 
 static int vdcm_dsa_set_irqs(struct vdcm_dsa *vdsa, uint32_t flags,
@@ -1423,17 +1485,6 @@ static int vdcm_dsa_set_irqs(struct vdcm_dsa *vdsa, uint32_t flags,
 	switch (index) {
 	case VFIO_PCI_INTX_IRQ_INDEX:
 		printk("intx interrupts not supported \n");
-		switch (flags & VFIO_IRQ_SET_ACTION_TYPE_MASK) {
-		case VFIO_IRQ_SET_ACTION_MASK:
-			func = vdcm_dsa_set_intx_mask;
-			break;
-		case VFIO_IRQ_SET_ACTION_UNMASK:
-			func = vdcm_dsa_set_intx_unmask;
-			break;
-		case VFIO_IRQ_SET_ACTION_TRIGGER:
-			func = vdcm_dsa_set_intx_trigger;
-			break;
-		}
 		break;
 	case VFIO_PCI_MSI_IRQ_INDEX:
 		printk("msi interrupt \n");
@@ -1443,7 +1494,7 @@ static int vdcm_dsa_set_irqs(struct vdcm_dsa *vdsa, uint32_t flags,
 			/* XXX Need masking support exported */
 			break;
 		case VFIO_IRQ_SET_ACTION_TRIGGER:
-			func = vdcm_dsa_set_msi_trigger;
+			func = vdcm_dsa_set_msix_trigger;
 			break;
 		}
 		break;
@@ -1649,23 +1700,20 @@ static long vdcm_dsa_ioctl(struct mdev_device *mdev, unsigned int cmd,
 		if (info.argsz < minsz || info.index >= VFIO_PCI_NUM_IRQS)
 			return -EINVAL;
 
+		printk("get_irq_info %d\n", info.index);
 		switch (info.index) {
-		case VFIO_PCI_INTX_IRQ_INDEX:
-		case VFIO_PCI_MSI_IRQ_INDEX:
-			break;
-		default:
-			return -EINVAL;
+			case VFIO_PCI_MSI_IRQ_INDEX:
+			case VFIO_PCI_MSIX_IRQ_INDEX:
+				break;
+			default:
+				return -EINVAL;
 		}
 
 		info.flags = VFIO_IRQ_INFO_EVENTFD;
 
 		info.count = vdcm_dsa_get_irq_count(vdsa, info.index);
 
-		if (info.index == VFIO_PCI_INTX_IRQ_INDEX)
-			info.flags |= (VFIO_IRQ_INFO_MASKABLE |
-				       VFIO_IRQ_INFO_AUTOMASKED);
-		else
-			info.flags |= VFIO_IRQ_INFO_NORESIZE;
+		info.flags |= VFIO_IRQ_INFO_NORESIZE;
 
 		return copy_to_user((void __user *)arg, &info, minsz) ?
 			-EFAULT : 0;
@@ -1697,6 +1745,7 @@ static long vdcm_dsa_ioctl(struct mdev_device *mdev, unsigned int cmd,
 			}
 		}
 
+		pr_info("set_irq_info %x %d %d %d\n", hdr.flags, hdr.index, hdr.start, hdr.count);
 		ret = vdcm_dsa_set_irqs(vdsa, hdr.flags, hdr.index,
 					hdr.start, hdr.count, data);
 		kfree(data);
