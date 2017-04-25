@@ -42,7 +42,9 @@
 #include <linux/vmalloc.h>
 #include <linux/kvm_host.h>
 #include <linux/vfio.h>
+#include <linux/pci.h>
 #include <linux/mdev.h>
+#include <linux/msi.h>
 
 #include "dma.h"
 #include "dsa_vdcm.h"
@@ -108,6 +110,140 @@ static uint64_t dsa_cap_ctrl_reg[] = {
 	0x0000000000000000ULL,
 	0x000000000011f3ffULL,
 };
+
+static int vdsa_send_interrupt(struct vdcm_dsa *vdsa, int msix_idx);
+
+irqreturn_t dsa_guest_wq_completion_interrupt(int irq, void *data)
+{
+	struct ims_irq_entry *irq_entry = data;
+        struct vdcm_dsa *vdsa = irq_entry->vdsa;
+	int msix_idx = irq_entry->int_src;
+
+        printk("received guest wq completion interrupt %d\n", msix_idx);
+
+	vdsa_send_interrupt(vdsa, msix_idx + 1);
+
+        return IRQ_HANDLED;
+}
+
+static unsigned int dsa_ims_irq_mask (struct msi_desc *entry)
+{
+	printk("dsa irq mask not implemented yet\n");
+	return 0;
+}
+
+static unsigned int dsa_ims_irq_unmask (struct msi_desc *entry)
+{
+	printk("dsa irq unmask not implemented yet\n");
+	return 0;
+}
+
+static void dsa_ims_write_msg (struct msi_desc *desc, struct msi_msg *msg)
+{
+	int ims_offset;
+	struct device *dev = desc->dev;
+	struct mdev_device *mdev = mdev_from_dev(dev);
+	struct vdcm_dsa *vdsa = mdev_get_drvdata(mdev);
+	struct dsadma_device *dsa = vdsa->dsa;
+	void __iomem *base;
+
+	printk("ims_write: %d\n", desc->devims.ims_index);
+
+	ims_offset = DSA_IMS_OFFSET + vdsa->ims_index[desc->devims.ims_index]
+						* 0x10;
+
+	base = dsa->reg_base + ims_offset;
+
+	writel(msg->address_lo, base + PCI_MSIX_ENTRY_LOWER_ADDR);
+	writel(msg->address_hi, base + PCI_MSIX_ENTRY_UPPER_ADDR);
+	writel(msg->data, base + PCI_MSIX_ENTRY_DATA);
+}
+
+struct dev_ims_ops dsa_ims_ops  = {
+	.irq_mask		= dsa_ims_irq_mask,
+	.irq_unmask		= dsa_ims_irq_unmask,
+	.irq_write_msi_msg	= dsa_ims_write_msg,
+};
+
+static int vdsa_setup_ims_entries (struct vdcm_dsa *vdsa)
+
+{
+	struct msix_entry *msix_entry;
+	struct dsadma_device *dsa = vdsa->dsa;
+	struct ims_irq_entry *irq_entry;
+	struct mdev_device *mdev = vdsa->vdev.mdev;
+	struct device *dev = mdev_dev(mdev);
+	struct msi_desc *desc;
+	int i, err;
+
+	msix_entry = vdsa->ims_entries;
+
+	for (i = 0; i < vdsa->num_wqs; i++) {
+		vdsa->ims_index[i] = dsa_get_ims_index(dsa);
+	}
+
+	printk("enabling %d ims entries\n", vdsa->num_wqs);
+
+	err = dev_ims_alloc_irqs(dev, vdsa->num_wqs, &dsa_ims_ops);
+
+	if (err < 0) {
+		printk("Enabling IMS entry! %d\n", err);
+		return err;
+	}
+/*
+	for (i = 0; i < vdsa->num_wqs; i++) {
+		irq_entry = &vdsa->irq_entries[i];
+		irq_entry->vdsa = vdsa;
+		irq_entry->int_src = i;
+
+		err = devm_request_irq(dev, msix_entry[i].vector,
+					dsa_guest_wq_completion_interrupt, 0,
+					"dsa-ims", irq_entry);
+
+		if (err) {
+			int j;
+			printk("requesting IMS irq! %d\n", err);
+			for (j = 0; j < i; j++) {
+				irq_entry = &vdsa->irq_entries[j];
+				devm_free_irq(dev, msix_entry[i].vector,
+							irq_entry);
+			}
+			return err;
+		}
+	}
+*/
+	i = 0;
+	for_each_msi_entry(desc, dev) {
+		irq_entry = &vdsa->irq_entries[i];
+		irq_entry->vdsa = vdsa;
+		irq_entry->int_src = i;
+
+		err = devm_request_irq(dev, desc->irq,
+				dsa_guest_wq_completion_interrupt, 0,
+				"dsa-ims", irq_entry);
+		if (err) {
+			break;
+		}
+		i++;
+	}
+
+	if (err) {
+		/* free allocated MSI interrupts above */
+		i = 0;
+		for_each_msi_entry(desc, dev) {
+			irq_entry = &vdsa->irq_entries[i];
+			devm_free_irq(dev, desc->irq, irq_entry);
+			i++;
+		}
+	}
+	return 0;
+}
+
+static int vdsa_free_ims_entry (struct vdcm_dsa *vdsa, int msix_idx)
+{
+
+	return 0;
+}
 
 static void vdsa_mmio_init (struct vdcm_dsa *vdsa)
 {
@@ -186,8 +322,8 @@ struct vdcm_dsa * vdcm_vdsa_create (struct dsadma_device *dsa,
 
 			vdsa->num_wqs = 1;
 
-			/* allocate IMS entries */
-			vdsa->ims_index[0] = dsa_get_ims_index(dsa);
+			/* allocate and setup IMS entries */
+			vdsa_setup_ims_entries(vdsa);
 
 			/* Set the MSI-X table size */
 			vdsa->cfg[VDSA_MSIX_TBL_SZ_OFFSET] = vdsa->num_wqs;
@@ -202,8 +338,9 @@ struct vdcm_dsa * vdcm_vdsa_create (struct dsadma_device *dsa,
 
 			vdsa->num_wqs = 1;
 
-			/* allocate IMS entries */
-			vdsa->ims_index[0] = dsa_get_ims_index(dsa);
+			/* allocate and setup IMS entries */
+			vdsa_setup_ims_entries(vdsa);
+
 			/* Set the MSI-X table size */
 			vdsa->cfg[VDSA_MSIX_TBL_SZ_OFFSET] = vdsa->num_wqs;
 
@@ -1367,47 +1504,7 @@ static int vdcm_dsa_get_irq_count(struct vdcm_dsa *vdsa, int type)
 	return 0;
 }
 
-irqreturn_t dsa_guest_wq_completion_interrupt(int irq, void *data)
-{
-        struct vdcm_dsa *vdsa = data;
-	int msix_idx = 1;
-
-        printk("received guest wq completion interrupt\n");
-
-	//msix_idx = irq_to_msix_idx(vdsa, irq);
-
-	vdsa_send_interrupt(vdsa, msix_idx);
-
-        return IRQ_HANDLED;
-}
-
-static int vdsa_setup_ims_entry (struct vdcm_dsa *vdsa, int ims_idx)
-{
-/*
-	struct msix_entry msix_entry;
-	struct dsadma_device *dsa = vdsa->dsa;
-	struct pci_dev *pdev = dsa->pdev;
-	int ims_offset;
-	u64 address;
-	u32 data;
-
-	pci_alloc_msix_vector(pdev, &address, &data);
-
-	vdsa->ims_entry[ims_idx].address = address;
-	vdsa->ims_entry[ims_idx].data = data;
-
-	ims_offset = DSA_IMS_OFFSET + vdsa->ims_index[ims_idx] * 0x10;
-
-	printk("writing %llx:%x ims entry %d:%lld to offset %x\n", address, data,
-				ims_idx, vdsa->ims_index[ims_idx], ims_offset);
-
-	writeq(address, dsa->reg_base + ims_offset);
-	writel(data, dsa->reg_base + ims_offset + 8);
-*/
-	return 0;
-}
-
-static int vdsa_free_ims_entry (struct vdcm_dsa *vdsa, int ims_idx)
+static int vdsa_setup_ims_entry (struct vdcm_dsa *vdsa, int msix_idx)
 {
 
 	return 0;

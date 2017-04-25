@@ -45,11 +45,9 @@ enum {
 	VDSA_PASID_OFFSET = 0x120,
 };
 
-struct dsa_ims_entry {
-	u64 address;
-	u32 data;
-	u32 mask:1;
-	u32 rsvd:31;
+struct ims_irq_entry {
+	struct vdcm_dsa *vdsa;
+	int int_src;
 };
 
 #define VDSA_MSIX_TBL_SZ_OFFSET  0x42
@@ -89,7 +87,8 @@ struct vdcm_dsa {
 	unsigned long handle;
 	u64 pasid[8];
 	u64 ims_index[VDSA_MAX_WQS];
-	struct dsa_ims_entry ims_entries[VDSA_MAX_WQS];
+	struct msix_entry ims_entries[VDSA_MAX_WQS];
+	struct ims_irq_entry irq_entries[VDSA_MAX_WQS];
 
 	u64 bar_val[VDSA_MAX_BARS];
 	u64 bar_size[VDSA_MAX_BARS];
