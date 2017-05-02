@@ -37,7 +37,6 @@ struct vdcm_dsa_type {
 #define VDSA_BAR2_SIZE  0x80000
 
 #define VDSA_BAR2_WQ_NP_OFFSET  0x0
-#define VDSA_BAR2_WQ_P_OFFSET  0x8000
 
 enum {
 	VDSA_ATS_OFFSET = 0x100,

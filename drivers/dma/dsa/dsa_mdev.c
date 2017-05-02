@@ -45,6 +45,7 @@
 #include <linux/pci.h>
 #include <linux/mdev.h>
 #include <linux/msi.h>
+#include <linux/intel-iommu.h>
 
 #include "dma.h"
 #include "dsa_vdcm.h"
@@ -126,16 +127,51 @@ irqreturn_t dsa_guest_wq_completion_interrupt(int irq, void *data)
         return IRQ_HANDLED;
 }
 
-static unsigned int dsa_ims_irq_mask (struct msi_desc *entry)
+static unsigned int dsa_ims_irq_mask (struct msi_desc *desc)
 {
-	printk("dsa irq mask not implemented yet\n");
-	return 0;
+	int ims_offset;
+	u32 mask_bits = desc->masked;
+	struct device *dev = desc->dev;
+	struct mdev_device *mdev = mdev_from_dev(dev);
+	struct vdcm_dsa *vdsa = mdev_get_drvdata(mdev);
+	struct dsadma_device *dsa = vdsa->dsa;
+	void __iomem *base;
+
+	printk("dsa irq mask\n");
+
+	mask_bits &= ~PCI_MSIX_ENTRY_CTRL_MASKBIT;
+	mask_bits |= PCI_MSIX_ENTRY_CTRL_MASKBIT;
+
+	ims_offset = DSA_IMS_OFFSET + vdsa->ims_index[desc->devims.ims_index]
+						* 0x10;
+	base = dsa->reg_base + ims_offset;
+
+	writel(mask_bits, base + PCI_MSIX_ENTRY_VECTOR_CTRL);
+
+	return mask_bits;
 }
 
-static unsigned int dsa_ims_irq_unmask (struct msi_desc *entry)
+static unsigned int dsa_ims_irq_unmask (struct msi_desc *desc)
 {
-	printk("dsa irq unmask not implemented yet\n");
-	return 0;
+	int ims_offset;
+	u32 mask_bits = desc->masked;
+	struct device *dev = desc->dev;
+	struct mdev_device *mdev = mdev_from_dev(dev);
+	struct vdcm_dsa *vdsa = mdev_get_drvdata(mdev);
+	struct dsadma_device *dsa = vdsa->dsa;
+	void __iomem *base;
+
+	printk("dsa irq unmask\n");
+
+	mask_bits &= ~PCI_MSIX_ENTRY_CTRL_MASKBIT;
+
+	ims_offset = DSA_IMS_OFFSET + vdsa->ims_index[desc->devims.ims_index]
+						* 0x10;
+	base = dsa->reg_base + ims_offset;
+
+	writel(mask_bits, base + PCI_MSIX_ENTRY_VECTOR_CTRL);
+
+	return mask_bits;
 }
 
 static void dsa_ims_write_msg (struct msi_desc *desc, struct msi_msg *msg)
@@ -147,7 +183,7 @@ static void dsa_ims_write_msg (struct msi_desc *desc, struct msi_msg *msg)
 	struct dsadma_device *dsa = vdsa->dsa;
 	void __iomem *base;
 
-	printk("ims_write: %d\n", desc->devims.ims_index);
+	printk("ims_write: %d %x\n", desc->devims.ims_index, msg->address_lo);
 
 	ims_offset = DSA_IMS_OFFSET + vdsa->ims_index[desc->devims.ims_index]
 						* 0x10;
@@ -182,14 +218,13 @@ static int vdsa_setup_ims_entries (struct vdcm_dsa *vdsa)
 		vdsa->ims_index[i] = dsa_get_ims_index(dsa);
 	}
 
-	printk("enabling %d ims entries\n", vdsa->num_wqs);
-
 	err = dev_ims_alloc_irqs(dev, vdsa->num_wqs, &dsa_ims_ops);
 
 	if (err < 0) {
 		printk("Enabling IMS entry! %d\n", err);
 		return err;
 	}
+	printk("enabled %d ims entries\n", err);
 /*
 	for (i = 0; i < vdsa->num_wqs; i++) {
 		irq_entry = &vdsa->irq_entries[i];
@@ -307,7 +342,6 @@ struct vdcm_dsa * vdcm_vdsa_create (struct dsadma_device *dsa,
 	memcpy(vdsa->cfg, dsa_pci_config, sizeof(dsa_pci_config));
 	memcpy(vdsa->cfg + 0x100, dsa_pci_ext_cap, sizeof(dsa_pci_ext_cap));
 
-	printk("vdsa_create: %llx %llx\n", *(u64*)&vdsa->cfg[0],  *(u64*)&vdsa->cfg[0x100]);
 	memcpy(vdsa->bar0.cap_ctrl_regs, dsa_cap_ctrl_reg,
 						sizeof(dsa_cap_ctrl_reg));
 
@@ -322,9 +356,6 @@ struct vdcm_dsa * vdcm_vdsa_create (struct dsadma_device *dsa,
 
 			vdsa->num_wqs = 1;
 
-			/* allocate and setup IMS entries */
-			vdsa_setup_ims_entries(vdsa);
-
 			/* Set the MSI-X table size */
 			vdsa->cfg[VDSA_MSIX_TBL_SZ_OFFSET] = vdsa->num_wqs;
 
@@ -337,9 +368,6 @@ struct vdcm_dsa * vdcm_vdsa_create (struct dsadma_device *dsa,
 			}
 
 			vdsa->num_wqs = 1;
-
-			/* allocate and setup IMS entries */
-			vdsa_setup_ims_entries(vdsa);
 
 			/* Set the MSI-X table size */
 			vdsa->cfg[VDSA_MSIX_TBL_SZ_OFFSET] = vdsa->num_wqs;
@@ -621,6 +649,97 @@ void vdsa_disable(struct vdcm_dsa *vdsa)
 	}
 }
 
+static void wq_enable (struct vdcm_dsa *vdsa, int wq_id)
+{
+	struct dsa_work_queue *wq;
+	volatile struct dsa_work_queue_reg *wqcfg;
+	struct vdcm_dsa_pci_bar0 *bar0 = &vdsa->bar0;
+	int dedicated;
+	bool wq_pasid_enable;
+	bool pasid_enabled = (*(u16 *)&vdsa->cfg[VDSA_PASID_OFFSET+6]) & 1U;
+	u64 *wqcap;
+
+	wq = vdsa->wqs[wq_id];
+
+	printk("vdsa enable wq %u:%u\n", wq_id, wq->idx);
+
+	wqcfg = (struct dsa_work_queue_reg*)&bar0->wq_ctrl_regs[wq_id * 16];
+	wqcap = (u64 *)&bar0->cap_ctrl_regs[DSA_WQCAP_OFFSET];
+
+	if (vdsa_state(vdsa) != 3) {
+		cmpxchg(&wqcfg->d.val, 1U, 1U << 8);
+		return;
+	}
+
+	if (wqcfg->a.a_fields.wq_size == 0) {
+		cmpxchg(&wqcfg->d.val, 1U, 2U << 8);
+		return;
+	}
+
+	if (wqcfg->b.b_fields.threshold > wqcfg->a.a_fields.wq_size) {
+		cmpxchg(&wqcfg->d.val, 1U, 3U << 8);
+		return;
+	}
+
+	dedicated = wqcfg->c.c_fields.mode;
+	wq_pasid_enable = wqcfg->c.c_fields.paside;
+
+	if (((dedicated == 0) && ((*wqcap & (1UL << 48)) == 0)) ||
+			((dedicated == 1) && ((*wqcap & (1UL << 49)) == 0))) {
+		cmpxchg(&wqcfg->d.val, 1U, 4U << 8);
+		return;
+	}
+
+	/* No need to check for error code 5 because BoF is enabled in both
+	 * GENCAP and WQCAP */
+
+	if ((dedicated == 0 && wq_pasid_enable == 0)
+		|| (wq_pasid_enable != 0 && pasid_enabled == 0)) {
+		cmpxchg(&wqcfg->d.val, 1U, 6U << 8);
+		return;
+	}
+
+	/* If dedicated WQ and PASID is not enabled, program the default PASID
+	 * in the WQ PASID register
+	 */
+	if (dedicated == 1 && wq_pasid_enable == 0) {
+		int wq_pasid;
+		struct mdev_device *mdev = vdsa->vdev.mdev;
+		struct device *dev = mdev_dev(mdev);
+
+		wq_pasid = intel_iommu_get_domain_pasid(dev);
+
+		if (wq_pasid >= 0) {
+			printk("program pasid %d in wq %d\n", wq_pasid, wq->idx);
+			dsa_wq_set_pasid(vdsa->dsa, wq->idx, wq_pasid, true);
+		} else
+			printk("pasid lookup failed for wq %d\n", wq->idx);
+	}
+
+	cmpxchg(&wqcfg->d.val, 1U, 3u);
+}
+
+static void wq_disable (struct vdcm_dsa *vdsa, int wq_id)
+{
+	struct dsa_work_queue *wq;
+	volatile struct dsa_work_queue_reg *wqcfg;
+	struct vdcm_dsa_pci_bar0 *bar0 = &vdsa->bar0;
+	int dedicated;
+
+	wq = vdsa->wqs[wq_id];
+
+	printk("vdsa disable wq %u:%u\n", wq_id, wq->idx);
+
+	wqcfg = (struct dsa_work_queue_reg*)&bar0->wq_ctrl_regs[wq_id * 16];
+
+	dedicated = wqcfg->c.c_fields.mode;
+
+	if (dedicated && dsa_wq_disable_pasid(vdsa->dsa, wq->idx))
+		printk("vdsa disable_wq %d failed\n", wq->idx);
+
+	cmpxchg(&wqcfg->d.val, 2U, 0);
+}
+
 static int vdcm_vdsa_mmio_write(struct vdcm_dsa *vdsa, u64 pos, void *buf,
                                 unsigned int size)
 {
@@ -758,7 +877,7 @@ static int vdcm_vdsa_mmio_write(struct vdcm_dsa *vdsa, u64 pos, void *buf,
 							/* fall through */
 						case 3:
 							if (cmpxchg(r, 3U, 4U << 8))
-							//wq_disable(wq_id);
+								wq_disable(vdsa, wq_id);
 							break;
 						default:
 							break;
@@ -781,16 +900,18 @@ static int vdcm_vdsa_mmio_write(struct vdcm_dsa *vdsa, u64 pos, void *buf,
 				case 12: {
 					volatile u32 *reg = &wqcfg->d.val;
 					u32 old_val = *reg;
-					int wq_state = old_val & 3u;
-					bool enable = new_val & 1u;
+					int wq_state = old_val & 3U;
+					bool enable = new_val & 1U;
+
+					printk("old_val %x new_val %x\n", old_val, new_val);
 					if (wq_state == 0 && enable == 1) {
-						if (cmpxchg(reg, old_val, 3u)) {
-							//wq_enable(wq_id);
+						if (cmpxchg(reg, old_val, 1U) == 0) {
+							wq_enable(vdsa, wq_id);
 						}
 					}
 					else if (wq_state == 3 && enable == 0) {
-						if (cmpxchg(reg, old_val, 0)) {
-							//wq_disable(wq_id);
+						if (cmpxchg(reg, old_val, 2U) == 3) {
+							wq_disable(vdsa, wq_id);
 						}
 					}
 					break;
@@ -1067,6 +1188,9 @@ static int vdcm_dsa_create(struct kobject *kobj, struct mdev_device *mdev)
 	mdev_set_drvdata(mdev, vdsa);
 
 	vdsa->type = type;
+
+	/* allocate and setup IMS entries */
+	vdsa_setup_ims_entries(vdsa);
 
 	mutex_lock(&mdev_list_lock);
 	list_add(&vdsa->next, &dsa_mdevs_list);
@@ -1442,19 +1566,18 @@ static int vdcm_dsa_mmap(struct mdev_device *mdev, struct vm_area_struct *vma)
 	struct dsadma_device *dsa = vdsa->dsa;
 	struct dsa_work_queue *wq;
 	phys_addr_t base;
+	uint32_t priv_offset;
 
 	index = vma->vm_pgoff >> (VFIO_PCI_OFFSET_SHIFT - PAGE_SHIFT);
 	offset = (vma->vm_pgoff << PAGE_SHIFT) & 
 				((1ULL << VFIO_PCI_OFFSET_SHIFT) - 1);
 
-	if (index >= VFIO_PCI_ROM_REGION_INDEX)
+	if (index != VFIO_PCI_BAR2_REGION_INDEX)
 		return -EINVAL;
 
 	if (vma->vm_end < vma->vm_start)
 		return -EINVAL;
 	if ((vma->vm_flags & VM_SHARED) == 0)
-		return -EINVAL;
-	if (index != VFIO_PCI_BAR2_REGION_INDEX)
 		return -EINVAL;
 
 	pg_prot = vma->vm_page_prot;
@@ -1466,7 +1589,8 @@ static int vdcm_dsa_mmap(struct mdev_device *mdev, struct vm_area_struct *vma)
 		return -EINVAL;
 	}
 
-	if (offset < VDSA_BAR2_WQ_P_OFFSET) {
+	priv_offset = vdsa->num_wqs * PAGE_SIZE;
+	if (offset < priv_offset) {
 		/* mapping a non-privileged portal */
 		int idx = (offset - VDSA_BAR2_WQ_NP_OFFSET) >> PAGE_SHIFT;
 		wq = vdsa->wqs[idx];
@@ -1479,7 +1603,7 @@ static int vdcm_dsa_mmap(struct mdev_device *mdev, struct vm_area_struct *vma)
 		pgoff = (base + (wq->idx << PAGE_SHIFT)) >> PAGE_SHIFT;
 	} else {
 		/* mapping a privileged portal to a guest WQ portal */
-		int idx = (offset - VDSA_BAR2_WQ_P_OFFSET) >> PAGE_SHIFT;
+		int idx = (offset - priv_offset) >> PAGE_SHIFT;
 		wq = vdsa->wqs[idx];
 
 		if (wq == NULL) {
@@ -1492,6 +1616,8 @@ static int vdcm_dsa_mmap(struct mdev_device *mdev, struct vm_area_struct *vma)
 		pgoff = (base + (offset << PAGE_SHIFT)) >> PAGE_SHIFT;
 	}
 	printk("mmap %llx %lx %lx %lx\n", virtaddr, pgoff, req_size, pgprot_val(pg_prot));
+	vma->vm_private_data = mdev;
+	vma->vm_pgoff = pgoff;
 	return remap_pfn_range(vma, virtaddr, pgoff, req_size, pg_prot);
 }
 
@@ -1649,6 +1775,7 @@ static long vdcm_dsa_ioctl(struct mdev_device *mdev, unsigned int cmd,
 		size_t size;
 		int nr_areas = 1;
 		int cap_type_id;
+		uint32_t priv_offset;
 
 		minsz = offsetofend(struct vfio_region_info, offset);
 
@@ -1702,13 +1829,13 @@ static long vdcm_dsa_ioctl(struct mdev_device *mdev, unsigned int cmd,
 			sparse->nr_areas = nr_areas;
 			cap_type_id = VFIO_REGION_INFO_CAP_SPARSE_MMAP;
 
+			priv_offset = vdsa->num_wqs * PAGE_SIZE;
 			for (i = 0; i < vdsa->num_wqs; i++) {
-				sparse->areas[2 * i].offset =
-					VDSA_BAR2_WQ_NP_OFFSET + PAGE_SIZE * i;
+				sparse->areas[2 * i].offset = PAGE_SIZE * i;
 				sparse->areas[2 * i].size = PAGE_SIZE;
 
 				sparse->areas[2 * i + 1].offset =
-					VDSA_BAR2_WQ_P_OFFSET + PAGE_SIZE * i;
+					priv_offset + PAGE_SIZE * i;
 				sparse->areas[2 * i + 1].size = PAGE_SIZE;
 			}
 			break;
@@ -1797,7 +1924,6 @@ static long vdcm_dsa_ioctl(struct mdev_device *mdev, unsigned int cmd,
 		if (info.argsz < minsz || info.index >= VFIO_PCI_NUM_IRQS)
 			return -EINVAL;
 
-		printk("get_irq_info %d\n", info.index);
 		switch (info.index) {
 			case VFIO_PCI_MSI_IRQ_INDEX:
 			case VFIO_PCI_MSIX_IRQ_INDEX:
@@ -1842,7 +1968,7 @@ static long vdcm_dsa_ioctl(struct mdev_device *mdev, unsigned int cmd,
 			}
 		}
 
-		pr_info("set_irq_info %x %d %d %d\n", hdr.flags, hdr.index, hdr.start, hdr.count);
+		//pr_info("set_irq_info %x %d %d %d\n", hdr.flags, hdr.index, hdr.start, hdr.count);
 		ret = vdcm_dsa_set_irqs(vdsa, hdr.flags, hdr.index,
 					hdr.start, hdr.count, data);
 		kfree(data);
