@@ -114,6 +114,30 @@ static uint64_t dsa_cap_ctrl_reg[] = {
 
 static int vdsa_send_interrupt(struct vdcm_dsa *vdsa, int msix_idx);
 
+void dsa_free_ims_index(struct dsadma_device *dsa, unsigned long ims_idx)
+{
+	clear_bit(ims_idx, dsa->allocated_ims);
+	atomic_dec(&dsa->num_allocated_ims);
+}
+
+int dsa_alloc_ims_index (struct dsadma_device *dsa)
+{
+	unsigned long index = 0;
+	int i;
+
+	for(i = 0; i < dsa->ims_size; i++) {
+		index = find_next_zero_bit(dsa->allocated_ims, dsa->ims_size,
+				index);
+		if (!test_and_set_bit(index, dsa->allocated_ims))
+			break;
+	}
+
+	if (i == dsa->ims_size)
+		return -ENOSPC;
+
+	return index;
+}
+
 irqreturn_t dsa_guest_wq_completion_interrupt(int irq, void *data)
 {
 	struct ims_irq_entry *irq_entry = data;
@@ -130,7 +154,7 @@ irqreturn_t dsa_guest_wq_completion_interrupt(int irq, void *data)
 static unsigned int dsa_ims_irq_mask (struct msi_desc *desc)
 {
 	int ims_offset;
-	u32 mask_bits = desc->masked;
+	u32 mask_bits = desc->devims.masked;
 	struct device *dev = desc->dev;
 	struct mdev_device *mdev = mdev_from_dev(dev);
 	struct vdcm_dsa *vdsa = mdev_get_drvdata(mdev);
@@ -154,7 +178,7 @@ static unsigned int dsa_ims_irq_mask (struct msi_desc *desc)
 static unsigned int dsa_ims_irq_unmask (struct msi_desc *desc)
 {
 	int ims_offset;
-	u32 mask_bits = desc->masked;
+	u32 mask_bits = desc->devims.masked;
 	struct device *dev = desc->dev;
 	struct mdev_device *mdev = mdev_from_dev(dev);
 	struct vdcm_dsa *vdsa = mdev_get_drvdata(mdev);
@@ -201,10 +225,32 @@ struct dev_ims_ops dsa_ims_ops  = {
 	.irq_write_msi_msg	= dsa_ims_write_msg,
 };
 
-static int vdsa_setup_ims_entries (struct vdcm_dsa *vdsa)
-
+static int vdsa_free_ims_entries (struct vdcm_dsa *vdsa)
 {
-	struct msix_entry *msix_entry;
+	struct dsadma_device *dsa = vdsa->dsa;
+	struct ims_irq_entry *irq_entry;
+	struct mdev_device *mdev = vdsa->vdev.mdev;
+	struct device *dev = mdev_dev(mdev);
+	struct msi_desc *desc;
+	int i;
+
+	i = 0;
+	for_each_msi_entry(desc, dev) {
+		irq_entry = &vdsa->irq_entries[i];
+		devm_free_irq(dev, desc->irq, irq_entry);
+		i++;
+	}
+
+	dev_ims_free_irqs(dev);
+
+	for (i = 0; i < vdsa->num_wqs; i++)
+		dsa_free_ims_index(dsa, vdsa->ims_index[i]);
+
+	return 0;
+}
+
+static int vdsa_setup_ims_entries (struct vdcm_dsa *vdsa)
+{
 	struct dsadma_device *dsa = vdsa->dsa;
 	struct ims_irq_entry *irq_entry;
 	struct mdev_device *mdev = vdsa->vdev.mdev;
@@ -212,11 +258,13 @@ static int vdsa_setup_ims_entries (struct vdcm_dsa *vdsa)
 	struct msi_desc *desc;
 	int i, err;
 
-	msix_entry = vdsa->ims_entries;
-
-	for (i = 0; i < vdsa->num_wqs; i++) {
-		vdsa->ims_index[i] = dsa_get_ims_index(dsa);
+	if (atomic_add_return(vdsa->num_wqs, &dsa->num_allocated_ims) >
+						dsa->ims_size) {
+		atomic_sub(vdsa->num_wqs, &dsa->num_allocated_ims);
+		return -ENOSPC;
 	}
+	for (i = 0; i < vdsa->num_wqs; i++)
+		vdsa->ims_index[i] = dsa_alloc_ims_index(dsa);
 
 	err = dev_ims_alloc_irqs(dev, vdsa->num_wqs, &dsa_ims_ops);
 
@@ -225,28 +273,7 @@ static int vdsa_setup_ims_entries (struct vdcm_dsa *vdsa)
 		return err;
 	}
 	printk("enabled %d ims entries\n", err);
-/*
-	for (i = 0; i < vdsa->num_wqs; i++) {
-		irq_entry = &vdsa->irq_entries[i];
-		irq_entry->vdsa = vdsa;
-		irq_entry->int_src = i;
 
-		err = devm_request_irq(dev, msix_entry[i].vector,
-					dsa_guest_wq_completion_interrupt, 0,
-					"dsa-ims", irq_entry);
-
-		if (err) {
-			int j;
-			printk("requesting IMS irq! %d\n", err);
-			for (j = 0; j < i; j++) {
-				irq_entry = &vdsa->irq_entries[j];
-				devm_free_irq(dev, msix_entry[i].vector,
-							irq_entry);
-			}
-			return err;
-		}
-	}
-*/
 	i = 0;
 	for_each_msi_entry(desc, dev) {
 		irq_entry = &vdsa->irq_entries[i];
@@ -938,7 +965,20 @@ static int vdcm_vdsa_mmio_write(struct vdcm_dsa *vdsa, u64 pos, void *buf,
 
 static void vdcm_vdsa_remove(struct vdcm_dsa *vdsa)
 {
+	int i;
+
 	printk("vdcm_vdsa_remove %d\n", vdsa->id);
+
+	for (i = 0; i < vdsa->num_wqs; i++)
+		dsa_wq_free(vdsa->wqs[i]);
+
+	vdsa_free_ims_entries(vdsa);
+
+	mutex_lock(&mdev_list_lock);
+	list_del(&vdsa->next);
+	mutex_unlock(&mdev_list_lock);
+
+	kfree(vdsa);
 }
 
 static void vdcm_vdsa_reset(struct vdcm_dsa *vdsa)

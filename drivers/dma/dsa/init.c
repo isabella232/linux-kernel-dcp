@@ -300,11 +300,20 @@ int dsa_dma_setup_interrupts(struct dsadma_device *dsa)
 		err = -ENOMEM;
 		goto err_no_irq;
 	}
-	
+
 	for (i = 0; i < msixcnt; i++)
 		dsa->msix_entries[i].entry = i;
 
-	printk("enabling %x msi-x entries %s\n", msixcnt, dev_name(dev));
+	dsa->allocated_ims = devm_kzalloc(dev, sizeof(unsigned long) *
+				BITS_TO_LONGS(dsa->ims_size), GFP_KERNEL);
+
+	if (dsa->allocated_ims == NULL) {
+		dev_err(dev, "Alloc bitmap %d ims entries!\n", dsa->ims_size);
+		err = -ENOMEM;
+		goto err_no_irq;
+	}
+	printk("space for %x ims entries %ld\n", dsa->ims_size, sizeof(unsigned long) * BITS_TO_LONGS(dsa->ims_size));
+
 	err = pci_enable_msix_exact(pdev, dsa->msix_entries, msixcnt);
 	if (err) {
 		dev_err(dev, "Enabling %d MSI-X entries!\n", msixcnt);
@@ -318,7 +327,7 @@ int dsa_dma_setup_interrupts(struct dsadma_device *dsa)
 	/* first MSI-X entry is not for wq interrupts */
 	dsa->num_wq_irqs = msixcnt - 1;
 	atomic_set(&dsa->irq_wq_next, 0);
-	atomic_set(&dsa->irq_ims_next, -1);
+	atomic_set(&dsa->num_allocated_ims, 0);
 
 	if (dsa->irq_entries == NULL) {
 		dev_err(dev, "Allocating %d irq entries!\n", msixcnt);
@@ -507,6 +516,8 @@ static void dsa_enumerate_capabilities(struct dsadma_device *dsa_dma)
 
 	dsa_dma->ims_size = (dsa_dma->gencap & DSA_CAP_IMS_MASK) >>
 					DSA_CAP_IMS_SHIFT;
+
+	dsa_dma->ims_size = dsa_dma->ims_size * DSA_CAP_IMS_MULTIPLIER;
 
 	dsa_dma->opcap = readq(dsa_dma->reg_base + DSA_OPCAP_OFFSET);
 

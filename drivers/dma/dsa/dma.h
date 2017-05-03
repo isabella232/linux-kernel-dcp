@@ -261,7 +261,7 @@ struct dsadma_device {
 	spinlock_t cmd_lock;
 	u32 version;
 	struct msix_entry *msix_entries;
-	struct msix_entry *ims_entries;
+	unsigned long *allocated_ims;
 	enum dsa_irq_mode irq_mode;
 	struct dsa_work_queue *wqs;
 	struct dsa_grpcfg_reg *grpcfg;
@@ -288,7 +288,7 @@ struct dsadma_device {
 
 	u16 num_wq_irqs;
 	atomic_t irq_wq_next;
-	atomic_t irq_ims_next;
+	atomic_t num_allocated_ims;
 
 	/* Operational Caps - 256 bits but only first 64 bits are valid */
 	u64 opcap;
@@ -443,13 +443,8 @@ static inline u32 dsa_ring_space(struct dsa_completion_ring *dring)
         return dsa_ring_size(dring) - dsa_ring_active(dring);
 }
 
-static inline int dsa_get_ims_index (struct dsadma_device *dsa)
-{
-	/* for now just do round-robin assignment */
-	/* FIXME: This increment may become negative on overflow */
-	return ((atomic_inc_return(&dsa->irq_ims_next) % dsa->ims_size));
-
-}
+int dsa_alloc_ims_index (struct dsadma_device *dsa);
+void dsa_free_ims_index (struct dsadma_device *dsa, unsigned long ims_idx);
 
 static inline int dsa_get_msix_index (struct dsadma_device *dsa)
 {
