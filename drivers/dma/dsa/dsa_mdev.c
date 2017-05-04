@@ -144,8 +144,6 @@ irqreturn_t dsa_guest_wq_completion_interrupt(int irq, void *data)
         struct vdcm_dsa *vdsa = irq_entry->vdsa;
 	int msix_idx = irq_entry->int_src;
 
-        printk("received guest wq completion interrupt %d\n", msix_idx);
-
 	vdsa_send_interrupt(vdsa, msix_idx + 1);
 
         return IRQ_HANDLED;
@@ -272,7 +270,6 @@ static int vdsa_setup_ims_entries (struct vdcm_dsa *vdsa)
 		printk("Enabling IMS entry! %d\n", err);
 		return err;
 	}
-	printk("enabled %d ims entries\n", err);
 
 	i = 0;
 	for_each_msi_entry(desc, dev) {
@@ -422,7 +419,7 @@ static int vdsa_send_interrupt(struct vdcm_dsa *vdsa, int msix_idx)
 
 	ret = eventfd_signal(vdsa->vdev.msix_trigger[msix_idx], 1);
 
-	pr_info("interrupt triggered %d\n", msix_idx);
+	pr_info("interrupt triggered %d %d\n", vdsa->id, msix_idx);
 
 	if (ret != 1)
 		pr_err("%s: eventfd signal failed (%d)\n", __func__, ret);
@@ -651,6 +648,7 @@ void vdsa_disable(struct vdcm_dsa *vdsa)
 	struct dsa_work_queue *wq;
 	volatile struct dsa_work_queue_reg *wqcfg;
 	struct vdcm_dsa_pci_bar0 *bar0 = &vdsa->bar0;
+	u32 *reg = (u32 *)&bar0->cap_ctrl_regs[DSA_ENABLE_OFFSET];
 
 	printk("dsa device disable\n");
 
@@ -668,12 +666,14 @@ void vdsa_disable(struct vdcm_dsa *vdsa)
 					break;
 				/* fall through */
 			case 3:
-				cmpxchg(&wqcfg->d.val, 3u, 0);
+				cmpxchg(&wqcfg->d.val, 3U, 0);
 				/* fall through */
 			default:
 				break;
 		}
 	}
+
+	cmpxchg(reg, 2U, 0);
 }
 
 static void wq_enable (struct vdcm_dsa *vdsa, int wq_id)
@@ -930,7 +930,6 @@ static int vdcm_vdsa_mmio_write(struct vdcm_dsa *vdsa, u64 pos, void *buf,
 					int wq_state = old_val & 3U;
 					bool enable = new_val & 1U;
 
-					printk("old_val %x new_val %x\n", old_val, new_val);
 					if (wq_state == 0 && enable == 1) {
 						if (cmpxchg(reg, old_val, 1U) == 0) {
 							wq_enable(vdsa, wq_id);
