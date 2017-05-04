@@ -39,6 +39,8 @@
 
 #include "../dmaengine.h"
 
+extern int ms_to;
+
 static void dsa_dma_test_callback(void *dma_async_param)
 {
 	struct completion *cmp = dma_async_param;
@@ -138,7 +140,7 @@ static int dsa_dma_batch_memcpy_self_test_swq (struct dsadma_device *dsa)
 		goto out;
 	}
 
-	tmo = dsa_wait_on_desc_timeout(desc, msecs_to_jiffies(10000));
+	tmo = dsa_wait_on_desc_timeout(desc, msecs_to_jiffies(ms_to));
 
 	if (tmo < 0) {
 		dev_err(dev, "Self-test copy timed out, disabling %d\n", tmo);
@@ -278,7 +280,7 @@ static int dsa_dma_batch_memcpy_self_test(struct dsadma_device *dsa)
 		}
 		dma->device_issue_pending(dma_chan);
 
-		tmo = wait_for_completion_timeout(&cmp, msecs_to_jiffies(10000));
+		tmo = wait_for_completion_timeout(&cmp, msecs_to_jiffies(ms_to));
 
 		if (tmo == 0 ||
 	    	dma->device_tx_status(dma_chan, cookie, NULL)
@@ -388,7 +390,7 @@ retry:
 		dest += copy;
 		len = len - copy;
 
-		tmo = dsa_wait_on_desc_timeout(desc, msecs_to_jiffies(1000));
+		tmo = dsa_wait_on_desc_timeout(desc, msecs_to_jiffies(ms_to));
 
 		if (tmo < 0) {
 			dev_err(dev, "Self-test copy timed out %d\n", tmo);
@@ -509,7 +511,7 @@ static int dsa_dma_memcpy_self_test(struct dsadma_device *dsa)
 		}
 		dma->device_issue_pending(dma_chan);
 
-		tmo = wait_for_completion_timeout(&cmp, msecs_to_jiffies(1000));
+		tmo = wait_for_completion_timeout(&cmp, msecs_to_jiffies(ms_to));
 
 		if (tmo == 0 || dma->device_tx_status(dma_chan, cookie, NULL)
 						!= DMA_COMPLETE) {
@@ -609,7 +611,7 @@ static int dsa_dma_batch_memset_self_test_swq (struct dsadma_device *dsa)
 		goto out;
 	}
 
-	tmo = dsa_wait_on_desc_timeout(desc, msecs_to_jiffies(10000));
+	tmo = dsa_wait_on_desc_timeout(desc, msecs_to_jiffies(ms_to));
 
 	if (tmo < 0) {
 		dev_err(dev, "Self-test copy timed out, disabling %d\n", tmo);
@@ -737,7 +739,7 @@ static int dsa_dma_batch_memset_self_test(struct dsadma_device *dsa)
 		}
 		dma->device_issue_pending(dma_chan);
 
-		tmo = wait_for_completion_timeout(&cmp, msecs_to_jiffies(10000));
+		tmo = wait_for_completion_timeout(&cmp, msecs_to_jiffies(ms_to));
 
 		if (tmo == 0 ||
 		dma->device_tx_status(dma_chan, cookie, NULL)
@@ -838,7 +840,7 @@ retry:
 		dest += copy;
 		len = len - copy;
 
-		tmo = dsa_wait_on_desc_timeout(desc, msecs_to_jiffies(1000));
+		tmo = dsa_wait_on_desc_timeout(desc, msecs_to_jiffies(ms_to));
 
 		if (tmo < 0) {
 			dev_err(dev, "Self-test copy timed out %d\n", tmo);
@@ -953,7 +955,7 @@ static int dsa_dma_memset_self_test(struct dsadma_device *dsa)
 		}
 		dma->device_issue_pending(dma_chan);
 
-		tmo = wait_for_completion_timeout(&cmp, msecs_to_jiffies(1000));
+		tmo = wait_for_completion_timeout(&cmp, msecs_to_jiffies(ms_to));
 
 		if (tmo == 0 || dma->device_tx_status(dma_chan, cookie, NULL)
 						!= DMA_COMPLETE) {
@@ -1064,7 +1066,7 @@ static int dsa_dma_batch_compare_self_test_swq (struct dsadma_device *dsa)
 		goto out;
 	}
 
-	tmo = dsa_wait_on_desc_timeout(desc, msecs_to_jiffies(10000));
+	tmo = dsa_wait_on_desc_timeout(desc, msecs_to_jiffies(ms_to));
 
 	if (tmo < 0) {
 		dev_err(dev, "Self-test comp timed out, disabling %d\n", tmo);
@@ -1100,7 +1102,7 @@ static int dsa_dma_batch_compare_self_test_swq (struct dsadma_device *dsa)
 		goto out;
 	}
 
-	tmo = dsa_wait_on_desc_timeout(desc, msecs_to_jiffies(10000));
+	tmo = dsa_wait_on_desc_timeout(desc, msecs_to_jiffies(ms_to));
 
 	if (tmo < 0) {
 		dev_err(dev, "Self-test copy timed out, disabling %d\n", tmo);
@@ -1196,7 +1198,7 @@ retry:
 		src2 += comp;
 		len = len - comp;
 
-		tmo = dsa_wait_on_desc_timeout(desc, msecs_to_jiffies(1000));
+		tmo = dsa_wait_on_desc_timeout(desc, msecs_to_jiffies(ms_to));
 
 		if (tmo < 0) {
 			dev_err(dev, "Self-test compare timed out %d\n", tmo);
@@ -1253,7 +1255,7 @@ retry1:
 		src2 += copy;
 		len = len - copy;
 
-		tmo = dsa_wait_on_desc_timeout(desc, msecs_to_jiffies(1000));
+		tmo = dsa_wait_on_desc_timeout(desc, msecs_to_jiffies(ms_to));
 
 		if (tmo < 0) {
 			dev_err(dev, "Self-test compare timed out %d\n", tmo);
@@ -1389,7 +1391,7 @@ static int dsa_dma_batch_dualcast_self_test_swq (struct dsadma_device *dsa)
 		goto out;
 	}
 
-	tmo = dsa_wait_on_desc_timeout(desc, msecs_to_jiffies(10000));
+	tmo = dsa_wait_on_desc_timeout(desc, msecs_to_jiffies(ms_to));
 
 	if (tmo < 0) {
 		dev_err(dev, "Self-test dcast timed out, disabling %d\n", tmo);
@@ -1517,7 +1519,7 @@ retry:
 		dest2 += copy;
 		len = len - copy;
 
-		tmo = dsa_wait_on_desc_timeout(desc, msecs_to_jiffies(1000));
+		tmo = dsa_wait_on_desc_timeout(desc, msecs_to_jiffies(ms_to));
 
 		if (tmo < 0) {
 			dev_err(dev, "Self-test dcast timed out %d\n", tmo);

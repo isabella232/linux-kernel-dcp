@@ -90,25 +90,30 @@ static int dmachan = 1;
 module_param(dmachan, int, 0644);
 MODULE_PARM_DESC(dmachan, "Allocate a WQ for DMAEngine APIs");
 
+int ms_to = 10000;
+module_param(ms_to, int, 0644);
+MODULE_PARM_DESC(ms_to, "Timeout in milliseconds for various ops");
+
 struct kmem_cache *dsa_cache;
 
 static int dsa_enable_wq (struct dsadma_device *dsa, int wq_offset,
 				struct dsa_work_queue_reg *wqcfg)
 {
 	int j;
+	int iterations = ms_to * 10;
 
 	wqcfg->d.d_fields.wq_enable = 1;
 
 	writel(wqcfg->d.val, dsa->reg_base + wq_offset + 0xC);
 
-	for (j = 0; j < 200; j++) {
+	for (j = 0; j < iterations; j++) {
 		wqcfg->d.val = readl(dsa->reg_base + wq_offset + 0xC);
 		if ((wqcfg->d.d_fields.wq_enabled) ||
 				(wqcfg->d.d_fields.wq_err))
 			break;
 	}
 
-	if ((j == 200) || wqcfg->d.d_fields.wq_err)
+	if ((j == iterations) || wqcfg->d.d_fields.wq_err)
 		return 1;
 
 	return 0;
@@ -118,18 +123,19 @@ static int dsa_disable_wq (struct dsadma_device *dsa, int wq_offset,
 				struct dsa_work_queue_reg *wqcfg)
 {
 	int j;
+	int iterations = ms_to * 10;
 
 	wqcfg->d.d_fields.wq_enable = 0;
 
 	writel(wqcfg->d.val, dsa->reg_base + wq_offset + 0xC);
 
-	for (j = 0; j < 200; j++) {
+	for (j = 0; j < iterations; j++) {
 		wqcfg->d.val = readl(dsa->reg_base + wq_offset + 0xC);
 		if (!wqcfg->d.d_fields.wq_enabled)
 			break;
 	}
 
-	if ((j == 200) || wqcfg->d.d_fields.wq_err) {
+	if ((j == iterations) || wqcfg->d.d_fields.wq_err) {
 		return 1;
 	}
 	return 0;
@@ -198,16 +204,17 @@ static int dsa_disable_device(struct dsadma_device *dsa)
 	int i, err = 0;
 	u32 enabled = 0;
 	struct device *dev = &dsa->pdev->dev;
+	int iterations = ms_to * 10;
 
 	writel(0, dsa->reg_base + DSA_ENABLE_OFFSET);
 
-	for (i = 0; i < 200000; i++) {
+	for (i = 0; i < iterations; i++) {
 		enabled = readl(dsa->reg_base + DSA_ENABLE_OFFSET);
 		if (!(enabled & DSA_ENABLED_BIT) || (enabled & DSA_ERR_BITS))
 			break;
 	}
 
-	if ((i == 200000) || (enabled & DSA_ERR_BITS)) {
+	if ((i == iterations) || (enabled & DSA_ERR_BITS)) {
 		dev_err(dev, "Error disabling the device %d %x\n", i,
 						enabled & DSA_ERR_BITS);
 		err = -ENODEV;
@@ -227,18 +234,19 @@ static int dsa_enable_device(struct dsadma_device *dsa)
 	struct dsa_work_queue_reg wqcfg;
 	struct device *dev = &dsa->pdev->dev;
 	unsigned int wq_offset;
+	int iterations = ms_to * 10;
 
 	enable |= DSA_ENABLE_BIT;
 
 	writel(enable, dsa->reg_base + DSA_ENABLE_OFFSET);
 
-	for (i = 0; i < 200000; i++) {
+	for (i = 0; i < iterations; i++) {
 		enable = readl(dsa->reg_base + DSA_ENABLE_OFFSET);
 		if ((enable & DSA_ENABLED_BIT) || (enable & DSA_ERR_BITS))
 			break;
 	}
 
-	if ((i == 200000) || (enable & DSA_ERR_BITS)) {
+	if ((i == iterations) || (enable & DSA_ERR_BITS)) {
 		dev_err(dev, "Error enabling the device %d %x\n", i,
 						enable & DSA_ERR_BITS);
 		err = -ENODEV;
@@ -253,14 +261,14 @@ static int dsa_enable_device(struct dsadma_device *dsa)
 
 		writel(wqcfg.d.val, dsa->reg_base + wq_offset + 0xC);
 
-		for (j = 0; j < 200000; j++) {
+		for (j = 0; j < iterations; j++) {
 			wqcfg.d.val = readl(dsa->reg_base + wq_offset + 0xC);
 			if ((wqcfg.d.d_fields.wq_enabled) ||
 					(wqcfg.d.d_fields.wq_err))
 				break;
 		}
 
-		if ((j == 200000) || wqcfg.d.d_fields.wq_err) {
+		if ((j == iterations) || wqcfg.d.d_fields.wq_err) {
 			dev_err(dev, "Error enabling the wq %d %d %x\n", i, j,
 						wqcfg.d.d_fields.wq_err);
 			err = -ENODEV;
@@ -312,7 +320,6 @@ int dsa_dma_setup_interrupts(struct dsadma_device *dsa)
 		err = -ENOMEM;
 		goto err_no_irq;
 	}
-	printk("space for %x ims entries %ld\n", dsa->ims_size, sizeof(unsigned long) * BITS_TO_LONGS(dsa->ims_size));
 
 	err = pci_enable_msix_exact(pdev, dsa->msix_entries, msixcnt);
 	if (err) {
@@ -437,11 +444,11 @@ static int dsa_probe(struct dsadma_device *dsa_dma)
 
 	err = dsa_dma_setup_interrupts(dsa_dma);
 	if (err)
-		goto err_setup_interrupts;
+		goto err_enable_pasid;
 
 	err = dsa_enable_device(dsa_dma);
 	if (err)
-		goto err_self_test;
+		goto err_enable_device;
 
 	printk("DSA device enabled successfully\n");
 
@@ -453,10 +460,11 @@ static int dsa_probe(struct dsadma_device *dsa_dma)
 	return 0;
 
 err_self_test:
+	dsa_disable_device(dsa_dma);
+err_enable_device:
 	dsa_disable_interrupts(dsa_dma);
 err_enable_pasid:
 	dsa_disable_system_pasid(dsa_dma);
-err_setup_interrupts:
 	pci_pool_destroy(dsa_dma->completion_pool);
 err_completion_pool:
 	return err;
