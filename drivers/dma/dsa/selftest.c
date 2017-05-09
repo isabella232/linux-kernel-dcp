@@ -379,6 +379,7 @@ static int dsa_dma_memcpy_self_test_swq (struct dsadma_device *dsa)
 		int copy;
 		copy = (len <= (PAGE_SIZE *2))? len: (PAGE_SIZE *2);
 retry:
+		printk("Self-test: memcpy from src:%p to dest:%p \n", src, dest);
 		desc = __dsa_prep_memcpy(dring, (u64)dest, (u64)src, copy,
 						flags);
 		if (desc == NULL) {
@@ -1577,11 +1578,11 @@ int dsa_dma_self_test (struct dsadma_device *dsa)
 {
 	int err;
 
-	err = dsa_dma_memcpy_self_test(dsa);
+	err = dsa_dma_memcpy_self_test_swq(dsa);
 	if (err)
 		goto err_self_test;
 
-	err = dsa_dma_memcpy_self_test_swq(dsa);
+	err = dsa_dma_memcpy_self_test(dsa);
 	if (err)
 		goto err_self_test;
 
