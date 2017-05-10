@@ -799,14 +799,14 @@ static int vdcm_vdsa_mmio_write(struct vdcm_dsa *vdsa, u64 pos, void *buf,
 			bool reset = val & 4;
 
 			if (reset) {
-				printk("cbdma reset control not implemented\n");
+				printk("dsa reset control not implemented\n");
 			} else if (vdev_state == 0 && enable == 1) {
 				if (cmpxchg(reg, old_val, 1) == 0)
 					vdsa_enable(vdsa);
 			} else if (vdev_state == 3 && enable == 0) {
 				if (cmpxchg(reg, old_val, 2) == 3)
 					vdsa_disable(vdsa);
-				}
+			}
 			break;
 		}
 

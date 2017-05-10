@@ -1163,6 +1163,9 @@ static void dsa_shutdown(struct pci_dev *pdev)
 
 	}
 
+	/* disable DSA and all the WQs */
+	dsa_disable_device(dsa);
+
 	dsa_disable_interrupts(dsa);
 }
 
