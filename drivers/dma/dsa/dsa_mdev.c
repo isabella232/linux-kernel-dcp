@@ -380,9 +380,6 @@ struct vdcm_dsa * vdcm_vdsa_create (struct dsadma_device *dsa,
 
 			vdsa->num_wqs = 1;
 
-			/* Set the MSI-X table size */
-			vdsa->cfg[VDSA_MSIX_TBL_SZ_OFFSET] = vdsa->num_wqs;
-
 		break;
 		case DSA_MDEV_TYPE_0_DWQ_1_SWQ:
 			vdsa->wqs[0] = dsa_wq_alloc(dsa, 0);
@@ -393,11 +390,11 @@ struct vdcm_dsa * vdcm_vdsa_create (struct dsadma_device *dsa,
 
 			vdsa->num_wqs = 1;
 
-			/* Set the MSI-X table size */
-			vdsa->cfg[VDSA_MSIX_TBL_SZ_OFFSET] = vdsa->num_wqs;
-
 		break;
 	}
+
+	/* Set the MSI-X table size */
+	vdsa->cfg[VDSA_MSIX_TBL_SZ_OFFSET] = vdsa->num_wqs;
 
 	vdsa->bar_size[0] = VDSA_BAR0_SIZE;
 	vdsa->bar_size[1] = VDSA_BAR2_SIZE;
@@ -1337,6 +1334,23 @@ out:
 	return ret;
 }
 
+static void vdcm_dsa_reinit(struct vdcm_dsa *vdsa)
+{
+	memset(vdsa->cfg, 0, VDSA_MAX_CFG_SPACE_SZ);
+	memset(&vdsa->bar0, 0, sizeof(struct vdcm_dsa_pci_bar0));
+
+	memcpy(vdsa->cfg, dsa_pci_config, sizeof(dsa_pci_config));
+	memcpy(vdsa->cfg + 0x100, dsa_pci_ext_cap, sizeof(dsa_pci_ext_cap));
+
+	memcpy(vdsa->bar0.cap_ctrl_regs, dsa_cap_ctrl_reg,
+						sizeof(dsa_cap_ctrl_reg));
+
+	/* Set the MSI-X table size */
+	vdsa->cfg[VDSA_MSIX_TBL_SZ_OFFSET] = vdsa->num_wqs;
+
+	vdsa_mmio_init(vdsa);
+}
+
 static void __vdcm_dsa_release(struct vdcm_dsa *vdsa)
 {
 	int ret;
@@ -1359,6 +1373,9 @@ static void __vdcm_dsa_release(struct vdcm_dsa *vdsa)
 
 	vdsa->vdev.kvm = NULL;
 	vdsa->handle = 0;
+
+	/* Re-initialize the VDSA to a pristine state for re-use */
+	vdcm_dsa_reinit(vdsa);
 }
 
 static void vdcm_dsa_release(struct mdev_device *mdev)
