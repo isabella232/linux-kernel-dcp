@@ -1022,58 +1022,45 @@ static void vdcm_dsa_release_work(struct work_struct *work);
 static int kvmdsa_guest_init(struct mdev_device *mdev);
 static bool kvmdsa_guest_exit(unsigned long handle);
 
-struct vdcm_dsa_type mdev_types[DSA_MDEV_TYPES];
-
-static struct attribute_group *dsa_mdev_type_groups[] = {
-		[0 ... DSA_MDEV_TYPES-1] = NULL,
+struct vdcm_dsa_type dsa_mdev_types[DSA_MDEV_TYPES] = {
+	{
+		.name = "1dwq",
+		.description = "DSA MDEV w/ 1 dedicated work queue",
+		.type = DSA_MDEV_TYPE_1_DWQ_0_SWQ,
+	},
+	{
+		.name  = "1swq",
+		.description = "DSA MDEV w/ 1 shared work queue",
+		.type = DSA_MDEV_TYPE_0_DWQ_1_SWQ,
+	},
 };
 
-static struct vdcm_dsa_type *vdcm_dsa_find_vdsa_type(struct dsadma_device *dsa,
+static struct vdcm_dsa_type *vdcm_dsa_find_vdsa_type(struct device *dev,
 		const char *name)
 {
 	int i;
+	char name1[DSA_MDEV_NAME_LEN];
 
 	for (i = 0; i < DSA_MDEV_TYPES; i++) {
-		if (!strncmp(name, mdev_types[i].name, DSA_MDEV_NAME_LEN))
-			return &mdev_types[i];
+		snprintf(name1, DSA_MDEV_NAME_LEN, "%s-%s",
+				dev_driver_string(dev), dsa_mdev_types[i].name);
+
+		if (!strncmp(name, name1, DSA_MDEV_NAME_LEN))
+			return &dsa_mdev_types[i];
 	}
 
 	return NULL;
 }
 
 static ssize_t
-dsa_dev_show(struct device *dev, struct device_attribute *attr,
-		char *buf)
-{
-	return sprintf(buf, "Data Streaming Accelerator (DSA)\n");
-}
-
-static DEVICE_ATTR_RO(dsa_dev);
-
-static struct attribute *dsa_dev_attrs[] = {
-        &dev_attr_dsa_dev.attr,
-        NULL,
-};
-
-static const struct attribute_group dsa_dev_group = {
-        .name  = "dsa_dev",
-        .attrs = dsa_dev_attrs,
-};
-
-const struct attribute_group *dsa_dev_groups[] = {
-        &dsa_dev_group,
-        NULL,
-};
-
-static ssize_t
 name_show(struct kobject *kobj, struct device *dev, char *buf)
 {
-	int i;
+	struct vdcm_dsa_type *type;
 
-	for (i = 0; i < DSA_MDEV_TYPES; i++) {
-		if (!strcmp(kobj->name, mdev_types[i].name))
-			return sprintf(buf, "%s\n", mdev_types[i].description);
-	}
+	type = vdcm_dsa_find_vdsa_type(dev, kobject_name(kobj));
+
+	if (type)
+		return sprintf(buf, "%s\n", type->description);
 
 	return -EINVAL;
 }
@@ -1087,13 +1074,11 @@ available_instances_show(struct kobject *kobj, struct device *dev, char *buf)
 	int dwqs = 0, swqs = 0;
 	struct vdcm_dsa *vdsa;
 	struct dsadma_device *dsa = dev_get_drvdata(dev);
+	struct vdcm_dsa_type *type;
 
-	for (i = 0; i < DSA_MDEV_TYPES; i++) {
-		if (!strcmp(kobj->name, mdev_types[i].name))
-			break;
-	}
+	type = vdcm_dsa_find_vdsa_type(dev, kobject_name(kobj));
 
-	if (i == DSA_MDEV_TYPES)
+	if (type == NULL)
 		return -EINVAL;
 
 	list_for_each_entry(vdsa, &dsa_mdevs_list, next) {
@@ -1105,7 +1090,7 @@ available_instances_show(struct kobject *kobj, struct device *dev, char *buf)
 		}
 	}
 
-	switch (mdev_types[i].type) {
+	switch (type->type) {
 		case DSA_MDEV_TYPE_1_DWQ_0_SWQ:
 			return sprintf(buf, "%d\n", (dsa->num_dwqs - dwqs));
 		case DSA_MDEV_TYPE_0_DWQ_1_SWQ:
@@ -1131,66 +1116,21 @@ static struct attribute *dsa_mdev_types_attrs[] = {
 	NULL,
 };
 
-static bool vdcm_dsa_init_type_groups(struct dsadma_device *dsa)
-{
-	int i, j;
-	struct vdcm_dsa_type *type;
-	struct attribute_group *group;
-	struct device *dev = &dsa->pdev->dev;
+static struct attribute_group dsa_mdev_type_group1 = {
+        .name  = "1dwq",
+        .attrs = dsa_mdev_types_attrs,
+};
 
-	for (i = 0; i < DSA_MDEV_TYPES; i++) {
-		type = &mdev_types[i];
+static struct attribute_group dsa_mdev_type_group2 = {
+        .name  = "1swq",
+        .attrs = dsa_mdev_types_attrs,
+};
 
-		group = kzalloc(sizeof(struct attribute_group), GFP_KERNEL);
-		if (WARN_ON(!group))
-			goto unwind;
-
-		switch (i) {
-			case DSA_MDEV_TYPE_1_DWQ_0_SWQ:
-				sprintf(type->name, "%s-%s",
-					dev_driver_string(dev), "1dwq");
-				strncpy(type->description,
-					"DSA MDEV w/ 1 dedicated work queue",
-					DSA_MDEV_DESCRIPTION_LEN);
-				type->type = i;
-				group->name = "1dwq";
-			break;
-			case DSA_MDEV_TYPE_0_DWQ_1_SWQ:
-				sprintf(type->name, "%s-%s",
-					dev_driver_string(dev), "1swq");
-				strncpy(type->description,
-					"DSA MDEV w/ 1 shared work queue",
-					DSA_MDEV_DESCRIPTION_LEN);
-				type->type = i;
-				group->name = "1swq";
-			break;
-		}
-		group->attrs = dsa_mdev_types_attrs;
-		dsa_mdev_type_groups[i] = group;
-	}
-
-	return true;
-
-unwind:
-	for (j = 0; j < i; j++) {
-		group = dsa_mdev_type_groups[j];
-		kfree(group);
-	}
-
-	return false;
-}
-
-static void vdcm_dsa_cleanup_type_groups(struct dsadma_device *dsa)
-{
-	int i;
-	struct attribute_group *group;
-
-	for (i = 0; i < DSA_MDEV_TYPES; i++) {
-		group = dsa_mdev_type_groups[i];
-		kfree(group);
-	}
-}
-
+struct attribute_group *dsa_mdev_type_groups[] = {
+        &dsa_mdev_type_group1,
+        &dsa_mdev_type_group2,
+        NULL,
+};
 
 static int vdcm_dsa_create(struct kobject *kobj, struct mdev_device *mdev)
 {
@@ -1203,7 +1143,7 @@ static int vdcm_dsa_create(struct kobject *kobj, struct mdev_device *mdev)
 	pdev = mdev_parent_dev(mdev);
 	dsa = dev_get_drvdata(pdev);
 
-	type = vdcm_dsa_find_vdsa_type(dsa, kobject_name(kobj));
+	type = vdcm_dsa_find_vdsa_type(pdev, kobject_name(kobj));
 	if (!type) {
 		pr_err("failed to find type %s to create\n",
 						kobject_name(kobj));
@@ -2097,9 +2037,6 @@ int dsa_host_init(struct dsadma_device *dsa)
 {
 	struct device *dev = &dsa->pdev->dev;
 
-	if (!vdcm_dsa_init_type_groups(dsa))
-		return -EFAULT;
-
 	mutex_init(&mdev_list_lock);
 	INIT_LIST_HEAD(&dsa_mdevs_list);
 
@@ -2112,6 +2049,5 @@ void dsa_host_exit(struct dsadma_device *dsa)
 
 	mdev_unregister_device(dev);
 
-	vdcm_dsa_cleanup_type_groups(dsa);
 }
 
