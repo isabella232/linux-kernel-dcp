@@ -1141,9 +1141,11 @@ static int dsa_dma_probe(struct dsadma_device *dsa_dma)
 	if (err)
 		return err;
 
-	err = dsa_register(dsa_dma);
-	if (err)
-		return err;
+	if (dsa_dma->num_kern_dwqs) {
+		err = dsa_register(dsa_dma);
+		if (err)
+			return err;
+	}
 
 	dsa_kobject_add(dsa_dma, &dsa_ktype);
 
