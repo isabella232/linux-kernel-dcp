@@ -682,6 +682,7 @@ static void wq_enable (struct vdcm_dsa *vdsa, int wq_id)
 	bool wq_pasid_enable;
 	bool pasid_enabled = (*(u16 *)&vdsa->cfg[VDSA_PASID_OFFSET+6]) & 1U;
 	u64 *wqcap;
+	bool priv;
 
 	wq = vdsa->wqs[wq_id];
 
@@ -726,18 +727,27 @@ static void wq_enable (struct vdcm_dsa *vdsa, int wq_id)
 	/* If dedicated WQ and PASID is not enabled, program the default PASID
 	 * in the WQ PASID register
 	 */
-	if (dedicated == 1 && wq_pasid_enable == 0) {
-		int wq_pasid;
+	if (dedicated == 1) {
+		int wq_pasid, gpasid = -1;
 		struct mdev_device *mdev = vdsa->vdev.mdev;
 		struct device *dev = mdev_dev(mdev);
 
-		wq_pasid = intel_iommu_get_domain_pasid(dev);
+		if (wq_pasid_enable) {
+			gpasid = wqcfg->c.c_fields.pasid;
+			priv = wqcfg->c.c_fields.u_s;
+			wq_pasid = intel_iommu_get_host_pasid(dev, gpasid);
+		} else {
+			wq_pasid = intel_iommu_get_domain_pasid(dev);
+			priv = true;
+		}
 
 		if (wq_pasid >= 0) {
-			printk("program pasid %d in wq %d\n", wq_pasid, wq->idx);
-			dsa_wq_set_pasid(vdsa->dsa, wq->idx, wq_pasid, true);
+			printk("program pasid %d:%d in wq %d\n", gpasid,
+							wq_pasid, wq->idx);
+			dsa_wq_set_pasid(vdsa->dsa, wq->idx, wq_pasid, priv);
 		} else
-			printk("pasid lookup failed for wq %d\n", wq->idx);
+			printk("pasid setup failed wq %d gpasid %d\n",
+							wq->idx, gpasid);
 	}
 
 	cmpxchg(&wqcfg->d.val, 1U, 3u);
@@ -891,9 +901,9 @@ static int vdcm_vdsa_mmio_write(struct vdcm_dsa *vdsa, u64 pos, void *buf,
 					wqcfg->b.b_fields.threshold = threshold;
 					if (threshold >
 						wqcfg->a.a_fields.wq_size) {
-						volatile u32 *r =
-							&wqcfg->d.val;
+						volatile u32 *r = &wqcfg->d.val;
 						u32 wq_state = *r;
+
 						switch (wq_state) {
 						case 1:
 							if (cmpxchg(r, 1U, 4U << 8))
@@ -913,7 +923,10 @@ static int vdcm_vdsa_mmio_write(struct vdcm_dsa *vdsa, u64 pos, void *buf,
 				case 8: {
 					u32 wq_state = wqcfg->d.val & 3u;
 					if (wq_state == 0) {
-						wqcfg->c.val = new_val & 0xcffffff3;
+						/* FIXME: Which fields guest is
+						 * allowed to write? */
+						wqcfg->c.val |= new_val &
+								0xcfffff00;
 					}
 					if (size <= 4)
 						break;
