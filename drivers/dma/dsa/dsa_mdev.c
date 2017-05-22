@@ -925,6 +925,7 @@ static int vdcm_vdsa_mmio_write(struct vdcm_dsa *vdsa, u64 pos, void *buf,
 					if (wq_state == 0) {
 						/* FIXME: Which fields guest is
 						 * allowed to write? */
+						wqcfg->c.val &= ~0xcfffff00;
 						wqcfg->c.val |= new_val &
 								0xcfffff00;
 					}
