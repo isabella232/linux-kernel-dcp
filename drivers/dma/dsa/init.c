@@ -500,7 +500,8 @@ static void dsa_dma_remove(struct dsadma_device *dsa_dma)
 
 	dsa_kobject_del(dsa_dma);
 
-	dma_async_device_unregister(dma);
+	if (dsa_dma->num_kern_dwqs)
+		dma_async_device_unregister(dma);
 
 	pci_pool_destroy(dsa_dma->completion_pool);
 
