@@ -35,7 +35,6 @@
 
 
 #define DSA_WQ_UNALLOCATED  (-1)
-#define IA32_PASID_MSR   0x00000d93
 
 #define to_dsadma_device(dev) container_of(dev, struct dsadma_device, dma_dev)
 #define to_dev(dsa_wq) (&(dsa_wq)->dsa->pdev->dev)

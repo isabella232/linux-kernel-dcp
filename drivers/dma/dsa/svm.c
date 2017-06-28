@@ -59,14 +59,14 @@ static void dsa_set_pasid_msr(int pasid)
 {
 	uint32_t val = (1 << 31) | pasid;
 
-	wrmsr(IA32_PASID_MSR, val, 0);
+	wrmsr(MSR_IA32_PASID, val, 0);
 }
 
 static void dsa_disable_pasid_msr(void)
 {
 	uint32_t val = 0;
 
-	wrmsr(IA32_PASID_MSR, val, 0);
+	wrmsr(MSR_IA32_PASID, val, 0);
 }
 
 int dsa_fops_open(struct inode *inode, struct file *filep)
@@ -246,7 +246,7 @@ static int dsa_ioctl_wq_alloc (struct dsa_context *ctx, unsigned long arg)
 	printk("pasid %d\n", ctx->pasid);
 
 	/* If dedicated queue, configure the PASID into WQ PASID register, else
-	 * configure the PASID in IA_PASID_MSR */
+	 * configure the PASID in MSR_IA_PASID */
 	if (wq->dedicated) {
 		ret = dsa_wq_set_pasid(dsa, ctx->wq_idx, ctx->pasid, 0);
 		if (ret)
