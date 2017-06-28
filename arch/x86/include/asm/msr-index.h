@@ -448,6 +448,7 @@
 #define MSR_IA32_FEATURE_CONTROL        0x0000003a
 #define MSR_IA32_TSC_ADJUST             0x0000003b
 #define MSR_IA32_BNDCFGS		0x00000d90
+#define MSR_IA32_PASID                 0x00000d93
 
 #define MSR_IA32_BNDCFGS_RSVD		0x00000ffc
 
