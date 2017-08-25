@@ -3675,7 +3675,7 @@ static void intel_unmap(struct device *dev, dma_addr_t dev_addr, size_t size)
 	start_pfn = mm_to_dma_pfn(iova_pfn);
 	last_pfn = start_pfn + nrpages - 1;
 
-	pr_debug("Device %s unmapping: pfn %lx-%lx\n",
+	pr_debug_ratelimited("Device %s unmapping: pfn %lx-%lx\n",
 		 dev_name(dev), start_pfn, last_pfn);
 
 	freelist = domain_unmap(domain, start_pfn, last_pfn);
