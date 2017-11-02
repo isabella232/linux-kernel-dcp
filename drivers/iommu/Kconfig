@@ -161,6 +161,15 @@ config INTEL_IOMMU_TEST
 
 	  When in doubt, say N.
 
+config INTEL_IOMMU_DEBUG
+	bool "Export Intel IOMMU internals in DebugFS"
+	depends on INTEL_IOMMU && DEBUG_FS
+	---help---
+	  Select this to see the IOMMU internal states such as
+	  context, PASID tables via debugfs.
+
+	  Say N unless you know you need this.
+
 config INTEL_IOMMU_SVM
 	bool "Support for Shared Virtual Memory with Intel IOMMU"
 	depends on INTEL_IOMMU && X86
