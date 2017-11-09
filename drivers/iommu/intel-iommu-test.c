@@ -162,7 +162,7 @@ static struct tlb_invalidate_info tinfo[IOMMU_INV_NR_TYPE] =
 			IOMMU_INV_TYPE_TLB,
 		},
 		IOMMU_INV_GRANU_PAGE_PASID,
-		IOMMU_INVALIDATE_DMA_PASID | IOMMU_INVALIDATE_GLOBAL_PAGE,
+		IOMMU_INVALIDATE_PASID_TAGGED | IOMMU_INVALIDATE_GLOBAL_PAGE,
 		0, 1234, 0x12345 >> VTD_PAGE_SHIFT,
 	},
 	/* IOTLB without PASID, domain sel */
@@ -183,7 +183,7 @@ static struct tlb_invalidate_info tinfo[IOMMU_INV_NR_TYPE] =
 			IOMMU_INV_TYPE_CONTEXT,
 		},
 		IOMMU_INV_GRANU_DEVICE,
-		IOMMU_INVALIDATE_DMA_PASID,
+		IOMMU_INVALIDATE_PASID_TAGGED,
 		4, 1234, 0x123456789 >> VTD_PAGE_SHIFT,
 	},
 	/* PASID cache, PASID sel */
@@ -193,7 +193,7 @@ static struct tlb_invalidate_info tinfo[IOMMU_INV_NR_TYPE] =
 			IOMMU_INV_TYPE_PASID,
 		},
 		IOMMU_INV_GRANU_PASID_SEL,
-		IOMMU_INVALIDATE_DMA_PASID,
+		IOMMU_INVALIDATE_PASID_TAGGED,
 		4, 1234, 0x123456789 >> VTD_PAGE_SHIFT,
 	},
 };
@@ -254,7 +254,9 @@ static ssize_t test_vtd_invalidate_store(struct device *dev,
 
 	if ((num == TEST_INVALIDATE_ALL) && domain) {
 		for (i = 0; i < IOMMU_INV_NR_TYPE; i++) {
-			ret = iommu_invalidate(domain, dev, &tinfo[i]);
+			pr_debug("sva_invl: type: %d, granu: %d\n",
+				tinfo[i].hdr.type, tinfo[i].granularity);
+			ret = iommu_sva_invalidate(domain, dev, &tinfo[i]);
 			if (ret)
 				pr_err("invalidation failed %d\n", ret);
 		}
