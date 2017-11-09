@@ -82,15 +82,8 @@ static ssize_t test_vtd_gapsid_table_ptr_store(struct device *dev,
 	if (num == TEST_PASID_BIND_MM)
 		pr_info("test bind mm %d\n", intel_svm_available(dev));
 
-	if ((num == TEST_PASIDPTR_UNBIND) && domain) {
-		ret = iommu_unbind_pasid_table(domain, dev);
-		if (ret)
-			pr_err("unbind svm failed %d\n", ret);
-//		iommu_unregister_fault_notifier(group, dev, &prq_nb);
-
-		goto out;
-	}
-
+	if ((num == TEST_PASIDPTR_UNBIND) && domain)
+		iommu_unbind_pasid_table(domain, dev);
 
 	if (!num && domain) {
 		pr_debug("unbind svm\n");
