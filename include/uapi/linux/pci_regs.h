@@ -693,7 +693,8 @@
 #define PCI_EXT_CAP_ID_DPC	0x1D	/* Downstream Port Containment */
 #define PCI_EXT_CAP_ID_L1SS	0x1E	/* L1 PM Substates */
 #define PCI_EXT_CAP_ID_PTM	0x1F	/* Precision Time Measurement */
-#define PCI_EXT_CAP_ID_MAX	PCI_EXT_CAP_ID_PTM
+#define PCI_EXT_CAP_ID_DVSEC	0x23	/* Designated Vendor Specific Ext Cap */
+#define PCI_EXT_CAP_ID_MAX	PCI_EXT_CAP_ID_DVSEC
 
 #define PCI_EXT_CAP_DSN_SIZEOF	12
 #define PCI_EXT_CAP_MCAST_ENDPOINT_SIZEOF 40
@@ -920,6 +921,13 @@
 #define  PCI_LTR_SCALE_MASK	0x00001c00
 #define  PCI_LTR_SCALE_SHIFT	10
 #define PCI_EXT_CAP_LTR_SIZEOF	8
+
+/* Scalable I/O Virtualization */
+#define PCI_SIOV_VENDOR_ID	0x4
+#define PCI_SIOV_DVSEC_ID	0x8
+#define PCI_SIOV_CAPABILITIES	0x14
+#define PCI_SIOV_CAPABILITY_IMS	0x1
+
 
 /* Access Control Service */
 #define PCI_ACS_CAP		0x04	/* ACS Capability Register */
