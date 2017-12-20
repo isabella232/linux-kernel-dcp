@@ -3,7 +3,7 @@
 
 
 /* MMIO bits */
-#define DSA_CMD_INT_MASK  0x100000
+#define DSA_CMD_INT_MASK  0x10000000
 
 #define DSA_MDEV_NAME_LEN  16
 #define DSA_MDEV_DESCRIPTION_LEN  64
@@ -21,11 +21,22 @@ struct vdcm_dsa_type {
 
 #define VDSA_MAX_CFG_SPACE_SZ 4096
 
-#define VDSA_CAP_CTRL_SZ 0xB0
+#define VDSA_CAP_CTRL_SZ 0x100
+
+#define VDSA_MSIX_PERM_OFFSET	0x300
+#define VDSA_GRPCFG_OFFSET	0x400
+#define VDSA_WQCFG_OFFSET	0x500
+#define VDSA_IMS_OFFSET		0x1000
+
 #define VDSA_GRP_CTRL_SZ 0x100
-#define VDSA_WQ_CTRL_SZ  0x80
+#define VDSA_WQ_CTRL_SZ  0x100
 #define VDSA_WQ_OCPY_INT_SZ 0x20
+
+#define VDSA_MSIX_TABLE_OFFSET	0x600
 #define VDSA_MSIX_TBL_SZ  0x90
+#define VDSA_MSIX_PERM_TBL_SZ  0x48
+
+#define VDSA_MSIX_PBA_OFFSET	0x700
 
 /* two 64-bit BARs implemented */
 #define VDSA_MAX_BARS  3
@@ -33,8 +44,8 @@ struct vdcm_dsa_type {
 
 #define VDSA_MAX_WQS  8
 
-#define VDSA_BAR0_SIZE  0x10000
-#define VDSA_BAR2_SIZE  0x80000
+#define VDSA_BAR0_SIZE  0x2000
+#define VDSA_BAR2_SIZE  0x20000
 
 #define VDSA_BAR2_WQ_NP_OFFSET  0x0
 
@@ -56,6 +67,7 @@ struct vdcm_dsa_pci_bar0 {
 	u8 wq_ctrl_regs[VDSA_WQ_CTRL_SZ];
 	u8 wq_ocpy_int_regs[VDSA_WQ_OCPY_INT_SZ];
 	u8 msix_table[VDSA_MSIX_TBL_SZ];
+	u8 msix_perm_table[VDSA_MSIX_PERM_TBL_SZ];
 	u16 msix_pba;
 };
 

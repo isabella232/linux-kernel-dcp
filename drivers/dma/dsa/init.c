@@ -72,7 +72,7 @@ static void dsa_remove(struct pci_dev *pdev);
 static int dsa_init_wq(struct dsadma_device *dsa_dma, int idx);
 static void dsa_enumerate_capabilities(struct dsadma_device *dsa_dma);
 static int dsa_configure_groups(struct dsadma_device *dsa);
-static int dsa_enumerate_work_queues(struct dsadma_device *dsa);
+static int dsa_configure_work_queues(struct dsadma_device *dsa);
 
 static int dsa_num_dwqs = 0;
 module_param(dsa_num_dwqs, int, 0644);
@@ -100,48 +100,86 @@ MODULE_PARM_DESC(enable_vdsa, "Set to 1 if dsa driver support virtualization");
 
 struct kmem_cache *dsa_cache;
 
-static int dsa_enable_wq (struct dsadma_device *dsa, int wq_offset,
-				struct dsa_work_queue_reg *wqcfg)
+void dsa_change_wq_reg (struct dsadma_device *dsa, int wq_idx, int reg_offset,
+		u32 val)
+{
+	unsigned int wq_offset;
+
+	printk("change wq %d off %x val %x\n", wq_idx, reg_offset, val);
+	/* Each WQCONFIG register is 32 bytes */
+	wq_offset = dsa->wq_offset + wq_idx * 32 + reg_offset;
+
+	writel(val, dsa->reg_base + wq_offset);
+}
+
+
+int dsa_enable_wq (struct dsadma_device *dsa, int wq_idx)
 {
 	int j;
 	int iterations = ms_to * 10;
+	union dsa_command_reg cmd;
+	struct dsa_work_queue *wq = &dsa->wqs[wq_idx];
+	u32 cmdsts;
 
-	wqcfg->d.d_fields.wq_enable = 1;
+	if (wq->wq_enabled == true)
+		return 0;
 
-	writel(wqcfg->d.val, dsa->reg_base + wq_offset + 0xC);
+	memset(&cmd, 0, sizeof(cmd));
+
+	cmd.fields.cmd = DSA_ENABLE_WQ;
+	cmd.fields.operand = wq_idx;
+
+	spin_lock(&dsa->cmd_lock);
+	writel(cmd.val, dsa->reg_base + DSA_CMD_OFFSET);
 
 	for (j = 0; j < iterations; j++) {
-		wqcfg->d.val = readl(dsa->reg_base + wq_offset + 0xC);
-		if ((wqcfg->d.d_fields.wq_enabled) ||
-				(wqcfg->d.d_fields.wq_err))
+		cmdsts = readl(dsa->reg_base + DSA_CMDSTS_OFFSET);
+		if (!(cmdsts & DSA_CMD_ACTIVE))
 			break;
 	}
+	spin_unlock(&dsa->cmd_lock);
 
-	if ((j == iterations) || wqcfg->d.d_fields.wq_err)
+	if ((j == iterations) || (cmdsts & DSA_CMD_ERRCODE_MASK)) {
+		printk("Error enabling the wq %d %x\n", wq_idx,
+				readl(dsa->reg_base + DSA_CMDSTS_OFFSET));
 		return 1;
+	}
 
+	wq->wq_enabled = true;
 	return 0;
 }
 
-static int dsa_disable_wq (struct dsadma_device *dsa, int wq_offset,
-				struct dsa_work_queue_reg *wqcfg)
+/* We disable only 1 WQ at a time */
+int dsa_disable_wq (struct dsadma_device *dsa, int wq_idx)
 {
 	int j;
 	int iterations = ms_to * 10;
+	union dsa_command_reg cmd;
+	struct dsa_work_queue *wq = &dsa->wqs[wq_idx];
+	u32 cmdsts;
 
-	wqcfg->d.d_fields.wq_enable = 0;
+	if (wq->wq_enabled == false)
+		return 0;
 
-	writel(wqcfg->d.val, dsa->reg_base + wq_offset + 0xC);
+	memset(&cmd, 0, sizeof(cmd));
+
+	cmd.fields.cmd = DSA_DISABLE_WQ;
+	cmd.fields.operand = 1 << wq_idx;
+
+	spin_lock(&dsa->cmd_lock);
+	writel(cmd.val, dsa->reg_base + DSA_CMD_OFFSET);
 
 	for (j = 0; j < iterations; j++) {
-		wqcfg->d.val = readl(dsa->reg_base + wq_offset + 0xC);
-		if (!wqcfg->d.d_fields.wq_enabled)
+		cmdsts = readl(dsa->reg_base + DSA_CMDSTS_OFFSET);
+		if (!(cmdsts & DSA_CMD_ACTIVE))
 			break;
 	}
 
-	if ((j == iterations) || wqcfg->d.d_fields.wq_err) {
+	spin_unlock(&dsa->cmd_lock);
+	if ((j == iterations) || (cmdsts & DSA_CMD_ERRCODE_MASK))
 		return 1;
-	}
+
+	wq->wq_enabled = false;
 	return 0;
 }
 
@@ -206,24 +244,72 @@ static int dsa_disable_system_pasid(struct dsadma_device *dsa)
 static int dsa_disable_device(struct dsadma_device *dsa)
 {
 	int i, err = 0;
-	u32 enabled = 0;
+	union dsa_command_reg cmd;
+	u32 cmdsts;
 	struct device *dev = &dsa->pdev->dev;
 	int iterations = ms_to * 10;
 
-	writel(0, dsa->reg_base + DSA_ENABLE_OFFSET);
+	memset(&cmd, 0, sizeof(cmd));
+
+	/* Enable the device first */
+	cmd.fields.cmd = DSA_DISABLE;
+
+	spin_lock(&dsa->cmd_lock);
+	writel(cmd.val, dsa->reg_base + DSA_CMD_OFFSET);
 
 	for (i = 0; i < iterations; i++) {
-		enabled = readl(dsa->reg_base + DSA_ENABLE_OFFSET);
-		if (!(enabled & DSA_ENABLED_BIT) || (enabled & DSA_ERR_BITS))
+		cmdsts = readl(dsa->reg_base + DSA_CMDSTS_OFFSET);
+		if (!(cmdsts & DSA_CMD_ACTIVE))
 			break;
 	}
 
-	if ((i == iterations) || (enabled & DSA_ERR_BITS)) {
+	spin_unlock(&dsa->cmd_lock);
+	if ((i == iterations) || (cmdsts & DSA_CMD_ERRCODE_MASK)) {
 		dev_err(dev, "Error disabling the device %d %x\n", i,
-						enabled & DSA_ERR_BITS);
+						cmdsts & DSA_CMD_ERRCODE_MASK);
 		err = -ENODEV;
+	} else {
+		for (i = 0; i < dsa->num_wqs; i++)
+			dsa->wqs[i].wq_enabled = false;
 	}
 
+	return err;
+}
+
+static int dsa_enable_wqs(struct dsadma_device *dsa)
+{
+	int i, err = 0;
+	union dsa_command_reg cmd;
+	u32 cmdsts;
+	struct device *dev = &dsa->pdev->dev;
+	int iterations = ms_to * 10;
+
+	memset(&cmd, 0, sizeof(cmd));
+
+	/* Enable the WQs */
+	cmd.fields.cmd = DSA_ENABLE_WQ;
+	for (i = 0; i < dsa->num_wqs; i++) {
+		int j;
+
+		cmd.fields.operand = i;
+
+		spin_lock(&dsa->cmd_lock);
+		writel(cmd.val, dsa->reg_base + DSA_CMD_OFFSET);
+
+		for (j = 0; j < iterations; j++) {
+			cmdsts = readl(dsa->reg_base + DSA_CMDSTS_OFFSET);
+			if (!(cmdsts & DSA_CMD_ACTIVE))
+				break;
+		}
+
+		spin_unlock(&dsa->cmd_lock);
+		if ((j == iterations) || (cmdsts & DSA_CMD_ERRCODE_MASK)) {
+			dev_err(dev, "Error enabling the wq %d %d %x\n", i, j,
+						cmdsts & DSA_CMD_ERRCODE_MASK);
+			err = -ENODEV;
+		} else
+			dsa->wqs[i].wq_enabled = true;
+	}
 	return err;
 }
 
@@ -234,50 +320,32 @@ static int dsa_disable_device(struct dsadma_device *dsa)
 static int dsa_enable_device(struct dsadma_device *dsa)
 {
 	int i, err = 0;
-	u32 enable = 0;
-	struct dsa_work_queue_reg wqcfg;
+	union dsa_command_reg cmd;
+	u32 cmdsts;
 	struct device *dev = &dsa->pdev->dev;
-	unsigned int wq_offset;
 	int iterations = ms_to * 10;
 
-	enable |= DSA_ENABLE_BIT;
+	memset(&cmd, 0, sizeof(cmd));
 
-	writel(enable, dsa->reg_base + DSA_ENABLE_OFFSET);
+	/* Enable the device */
+	cmd.fields.cmd = DSA_ENABLE;
+
+	spin_lock(&dsa->cmd_lock);
+	writel(cmd.val, dsa->reg_base + DSA_CMD_OFFSET);
 
 	for (i = 0; i < iterations; i++) {
-		enable = readl(dsa->reg_base + DSA_ENABLE_OFFSET);
-		if ((enable & DSA_ENABLED_BIT) || (enable & DSA_ERR_BITS))
+		cmdsts = readl(dsa->reg_base + DSA_CMDSTS_OFFSET);
+		if (!(cmdsts & DSA_CMD_ACTIVE))
 			break;
 	}
 
-	if ((i == iterations) || (enable & DSA_ERR_BITS)) {
+	spin_unlock(&dsa->cmd_lock);
+	if ((i == iterations) || (cmdsts & DSA_CMD_ERRCODE_MASK)) {
 		dev_err(dev, "Error enabling the device %d %x\n", i,
-						enable & DSA_ERR_BITS);
+						cmdsts & DSA_CMD_ERRCODE_MASK);
 		err = -ENODEV;
 	}
 
-	for (i = 0; i < dsa->num_wqs; i++) {
-		int j;
-		wq_offset = DSA_WQCFG_OFFSET + i * 16;
-
-		wqcfg.d.val = 0;
-		wqcfg.d.d_fields.wq_enable = 1;
-
-		writel(wqcfg.d.val, dsa->reg_base + wq_offset + 0xC);
-
-		for (j = 0; j < iterations; j++) {
-			wqcfg.d.val = readl(dsa->reg_base + wq_offset + 0xC);
-			if ((wqcfg.d.d_fields.wq_enabled) ||
-					(wqcfg.d.d_fields.wq_err))
-				break;
-		}
-
-		if ((j == iterations) || wqcfg.d.d_fields.wq_err) {
-			dev_err(dev, "Error enabling the wq %d %d %x\n", i, j,
-						wqcfg.d.d_fields.wq_err);
-			err = -ENODEV;
-		}
-	}
 	return err;
 }
 
@@ -418,23 +486,7 @@ static int dsa_probe(struct dsadma_device *dsa_dma)
 
 	dsa_enumerate_capabilities(dsa_dma);
 
-	/* If IMS and Guest Portals supported, map them */
-	if (dsa_dma->gencap & DSA_CAP_IMS) {
-		void __iomem * const *iomap;
-		int msk = (1 << DSA_GUEST_WQ_BAR);
-
-		err = pcim_iomap_regions(pdev, msk, DRV_NAME);
-		if (err)
-			goto err_enable_pasid;
-
-		iomap = pcim_iomap_table(pdev);
-		if (!iomap)
-			goto err_enable_pasid;
-
-		dsa_dma->gwq_reg_base = iomap[DSA_GUEST_WQ_BAR];
-	}
-
-	err = dsa_enumerate_work_queues(dsa_dma);
+	err = dsa_configure_work_queues(dsa_dma);
 
 	if (err)
 		goto err_enable_pasid;
@@ -453,6 +505,10 @@ static int dsa_probe(struct dsadma_device *dsa_dma)
 	err = dsa_enable_device(dsa_dma);
 	if (err)
 		goto err_enable_device;
+
+	err = dsa_enable_wqs(dsa_dma);
+	if (err)
+		goto err_self_test;
 
 	printk("DSA device enabled successfully\n");
 
@@ -508,6 +564,39 @@ static void dsa_dma_remove(struct dsadma_device *dsa_dma)
 	INIT_LIST_HEAD(&dma->channels);
 }
 
+/* FIXME: Find a good place for this constant */
+#define DVSEC_INTEL_SCALABLE_IOV_ID 0x5
+
+static int dsa_ims_supported (struct dsadma_device *dsa)
+{
+	int pos;
+	u16 vid, dvsec_id;
+	u32 capabilities;
+	struct pci_dev *pdev = dsa->pdev;
+
+	pos = pci_find_ext_capability(pdev, PCI_EXT_CAP_ID_DVSEC);
+
+	if (!pos)
+		return 0;
+
+	pci_read_config_word(pdev, pos + PCI_SIOV_VENDOR_ID, &vid);
+
+	if (vid != 0x8086)
+		return 0;
+
+	pci_read_config_word(pdev, pos + PCI_SIOV_DVSEC_ID, &dvsec_id);
+
+	if (dvsec_id != DVSEC_INTEL_SCALABLE_IOV_ID)
+		return 0;
+
+	pci_read_config_dword(pdev, pos + PCI_SIOV_CAPABILITIES, &capabilities);
+
+	if (capabilities & PCI_SIOV_CAPABILITY_IMS)
+		return 1;
+
+	return 0;
+}
+
 /**
  * dsa_enumerate_capabilities - enumerate the device's capabilities
  * @dsa_dma: the dsa dma device to be enumerated
@@ -515,28 +604,64 @@ static void dsa_dma_remove(struct dsadma_device *dsa_dma)
 static void dsa_enumerate_capabilities(struct dsadma_device *dsa_dma)
 {
 	struct dma_device *dma = &dsa_dma->dma_dev;
-	u32 max_xfer_bits;
 
 	dsa_dma->gencap = readq(dsa_dma->reg_base + DSA_GENCAP_OFFSET);
 
-	max_xfer_bits = (dsa_dma->gencap & DSA_CAP_MAX_XFER_MASK) >> 
+	dsa_dma->max_xfer_bits = (dsa_dma->gencap & DSA_CAP_MAX_XFER_MASK) >> 
 						DSA_CAP_MAX_XFER_SHIFT;
-	dsa_dma->max_xfer_bits = max_xfer_bits + 16;
 	dsa_dma->max_xfer_size = 1 << dsa_dma->max_xfer_bits;
 
 	dsa_dma->max_batch_size = (dsa_dma->gencap & DSA_CAP_MAX_BATCH_MASK) >>
 					DSA_CAP_MAX_BATCH_SHIFT;
 
-	dsa_dma->ims_size = (dsa_dma->gencap & DSA_CAP_IMS_MASK) >>
+	dsa_dma->max_batch_size = 1 << dsa_dma->max_batch_size;
+
+	dsa_dma->cfg_support = !!(dsa_dma->gencap & DSA_CAP_CONFIG);
+
+	dsa_dma->ims_support = dsa_ims_supported(dsa_dma);
+	/* If IMS table supported read its size */
+	if (dsa_dma->ims_support) {
+		dsa_dma->ims_size = (dsa_dma->gencap & DSA_CAP_IMS_MASK) >>
 					DSA_CAP_IMS_SHIFT;
 
-	dsa_dma->ims_size = dsa_dma->ims_size * DSA_CAP_IMS_MULTIPLIER;
+		dsa_dma->ims_size = dsa_dma->ims_size * DSA_CAP_IMS_MULTIPLIER;
+	}
+
+	dsa_dma->grpcap = readq(dsa_dma->reg_base + DSA_GRPCAP_OFFSET);
+
+	dsa_dma->max_grps = dsa_dma->grpcap & DSA_CAP_MAX_GRP_MASK;
+
+	dsa_dma->engcap = readq(dsa_dma->reg_base + DSA_ENGCAP_OFFSET);
+
+	dsa_dma->max_engs = dsa_dma->engcap & DSA_CAP_MAX_ENG_MASK;
 
 	dsa_dma->opcap = readq(dsa_dma->reg_base + DSA_OPCAP_OFFSET);
 
+	dsa_dma->table_offsets = readq(dsa_dma->reg_base + DSA_TABLE_OFFSET);
+
+	dsa_dma->grp_offset = dsa_dma->table_offsets & DSA_TABLE_GRPCFG_MASK;
+
+	dsa_dma->grp_offset  = dsa_dma->grp_offset * 0x100;
+
+	dsa_dma->wq_offset = (dsa_dma->table_offsets & DSA_TABLE_WQCFG_MASK) >>
+			DSA_TABLE_WQCFG_SHIFT;
+
+	dsa_dma->wq_offset = dsa_dma->wq_offset * 0x100;
+
+	dsa_dma->msix_perm_offset = (dsa_dma->table_offsets &
+			DSA_TABLE_MSIX_PERM_MASK) >> DSA_TABLE_MSIX_PERM_SHIFT;
+
+	dsa_dma->msix_perm_offset = dsa_dma->msix_perm_offset * 0x100;
+
+	dsa_dma->ims_offset = (dsa_dma->table_offsets & DSA_TABLE_IMS_MASK) >>
+			DSA_TABLE_IMS_SHIFT;
+
+	dsa_dma->ims_offset = dsa_dma->ims_offset * 0x100;
+
 	dma_cap_set(DMA_PRIVATE, dma->cap_mask);
 
-	printk("gencap %llx opcap %llx\n", dsa_dma->gencap, dsa_dma->opcap);
+	printk("gencap %llx opcap %llx ims %d\n", dsa_dma->gencap,
+			dsa_dma->opcap, dsa_dma->ims_support);
 	if (MEMMOVE_SUPPORT(dsa_dma->opcap))
 		dma_cap_set(DMA_MEMCPY, dma->cap_mask);
 	if (MEMFILL_SUPPORT(dsa_dma->opcap))
@@ -549,7 +674,7 @@ static int dsa_configure_groups(struct dsadma_device *dsa)
 	int grp_offset;
 	int i;
 
-	if (dsa->wq_cfg_support == 0) {
+	if (dsa->cfg_support == 0) {
 		/* can't configure the GRPs. grpcfg has already been read */
 		return 0;
 	}
@@ -572,14 +697,15 @@ static int dsa_configure_groups(struct dsadma_device *dsa)
 	for (i = 0; i < dsa->num_grps; i++) {
 		int j;
 
-		grp_offset = DSA_GRPCFG_OFFSET + i * 64;
+		grp_offset = dsa->grp_offset + i * 64;
 		for (j = 0; j < 4; j++)
 			if (dsa->grpcfg[i].wq_bits[j])
 				writeq(dsa->grpcfg[i].wq_bits[j],
 					dsa->reg_base + grp_offset + j * 8);
 		writeq(dsa->grpcfg[i].eng_bits, dsa->reg_base + grp_offset+32);
+
+		/* FIXME: No GRPFLAGS configuration for now */
 	}
-	/* FIXME: need to configure VCs, bandwidth tokens, etc. */
 	return 0;
 }
 
@@ -668,6 +794,34 @@ void dsa_setup_irq_event (struct dsa_irq_event *ev, struct dsa_irq_entry
 	write_unlock_irqrestore(&irq_entry->irq_wait_lock, flags);
 }
 
+static int dsa_get_int_handle (struct dsadma_device *dsa, bool ims, int idx)
+{
+	int j;
+	int iterations = ms_to * 10;
+	union dsa_command_reg cmd;
+	u32 cmdsts;
+
+	memset(&cmd, 0, sizeof(cmd));
+
+	cmd.fields.cmd = DSA_INT_HANDLE;
+	cmd.fields.operand = (ims << 16) | (idx & 0xffff);
+
+	spin_lock(&dsa->cmd_lock);
+	writel(cmd.val, dsa->reg_base + DSA_CMD_OFFSET);
+
+	for (j = 0; j < iterations; j++) {
+		cmdsts = readl(dsa->reg_base + DSA_CMDSTS_OFFSET);
+		if (!(cmdsts & DSA_CMD_ACTIVE))
+			break;
+	}
+	spin_unlock(&dsa->cmd_lock);
+
+	if ((j == iterations) || (cmdsts & DSA_CMD_ERRCODE_MASK))
+		return -1;
+
+	return (cmdsts >> 8) & 0xffff;
+}
+
 static struct dsa_completion_ring *
 dsa_alloc_descriptors (struct dsa_work_queue *wq,
 			void (*isr_cb)(struct dsa_completion_ring *dring))
@@ -714,11 +868,23 @@ dsa_alloc_descriptors (struct dsa_work_queue *wq,
 
 	dsa_setup_irq_event(&dring->ev, irq_entry, dring, isr_cb);
 
-	dring->wq_reg = dsa_get_wq_reg(wq->dsa, wq->idx, msix_idx, 1);
+	dring->wq_reg = dsa->wq_reg_base +
+		dsa_get_wq_portal_offset(wq->idx, false, false);
 
+	dring->int_idx = msix_idx;
 	return dring;
 }
 
+static void dsa_configure_msix_perm_table (struct dsa_completion_ring *dring)
+{
+	struct dsadma_device *dsa = dring->dsa;
+	unsigned int perm_offset;
+	u32 perm_val = (1 << 3) | (dsa->system_pasid << 12);
+
+	perm_offset = dsa->msix_perm_offset + dring->int_idx * 8;
+
+	writel(perm_val, dsa->reg_base + perm_offset);
+}
 
 static int dsa_init_wq (struct dsadma_device *dsa, int wq_idx)
 {
@@ -728,8 +894,8 @@ static int dsa_init_wq (struct dsadma_device *dsa, int wq_idx)
 
 	memset(&wqcfg, 0, sizeof(wqcfg));
 
-	/* Each WQCONFIG register is 16 bytes (A, B, C, and D registers) */
-	wq_offset = DSA_WQCFG_OFFSET + wq_idx * 16;
+	/* Each WQCONFIG register is 32 bytes */
+	wq_offset = dsa->wq_offset + wq_idx * 32;
 
 	wqcfg.a.a_fields.wq_size = wq->wq_size;
 	writel(wqcfg.a.val, dsa->reg_base + wq_offset);
@@ -746,11 +912,13 @@ static int dsa_init_wq (struct dsadma_device *dsa, int wq_idx)
 
 	wqcfg.c.c_fields.mode = wq->dedicated ? 1 : 0;
 	/* Enable the BOF if it is supported */
-	if (dsa->gencap & DSA_CAP_BLOCK_ON_FAULT)
+	if (dsa->gencap & DSA_CAP_BLOCK_ON_FAULT) {
 		wqcfg.c.c_fields.bof_en = 1;
+		wq->bof_enabled = 1;
+	}
 
 	wqcfg.c.c_fields.priority = wq->priority;
-	wqcfg.c.c_fields.u_s = 1;
+	wqcfg.c.c_fields.priv = 1;
 
 	/* SWQ can only work if PASID is enabled */
 	if (!wq->dedicated && dsa->pasid_enabled)
@@ -759,7 +927,16 @@ static int dsa_init_wq (struct dsadma_device *dsa, int wq_idx)
 		wqcfg.c.c_fields.paside = 0;
 
 	writel(wqcfg.c.val, dsa->reg_base + wq_offset + 8);
-	
+
+	/* Set the same max_xfer_bits as the GENCAP */
+	wq->max_xfer_bits = dsa->max_xfer_bits;
+	wq->max_batch_bits = (dsa->gencap &
+			DSA_CAP_MAX_BATCH_MASK) >> DSA_CAP_MAX_BATCH_SHIFT;
+
+	wqcfg.d.d_fields.max_xfer_bits = wq->max_xfer_bits;
+	wqcfg.d.d_fields.max_batch_bits = wq->max_batch_bits;
+
+	writel(wqcfg.d.val, dsa->reg_base + wq_offset + 12);
 	return 0;
 }
 
@@ -768,35 +945,30 @@ int dsa_wq_disable_pasid (struct dsadma_device *dsa, int wq_idx)
 	struct dsa_work_queue_reg wqcfg;
 	unsigned int wq_offset;
 
-	memset(&wqcfg, 0, sizeof(wqcfg));
-
-	/* Each WQCONFIG register is 16 bytes (A, B, C, and D registers) */
-	wq_offset = DSA_WQCFG_OFFSET + wq_idx * 16;
-
-	wqcfg.d.val = readl(dsa->reg_base + wq_offset + 0xC);
-
 	/* First disable the WQ */
-	if (dsa_disable_wq(dsa, wq_offset, &wqcfg)) {
+	if (dsa_disable_wq(dsa, wq_idx)) {
 		printk("Error disabling the wq %d %x\n", wq_idx,
-					wqcfg.d.d_fields.wq_err);
+				readl(dsa->reg_base + DSA_CMDSTS_OFFSET));
 		return -ENODEV;
 	}
+
+	memset(&wqcfg, 0, sizeof(wqcfg));
+
+	/* Each WQCONFIG register is 32 bytes */
+	wq_offset = dsa->wq_offset + wq_idx * 32;
 
 	/* Change the PASID */
 	wqcfg.c.val = readl(dsa->reg_base + wq_offset + 8);
 
-	wqcfg.c.c_fields.u_s = 1;
+	wqcfg.c.c_fields.priv = 1;
 	wqcfg.c.c_fields.paside = 0;
 	wqcfg.c.c_fields.pasid = 0;
 
 	writel(wqcfg.c.val, dsa->reg_base + wq_offset + 8);
 
 	/* Now re-enable the WQ */
-	if (dsa_enable_wq(dsa, wq_offset, &wqcfg)) {
-		printk("Error re-enabling the wq %d %x\n", wq_idx,
-					wqcfg.d.d_fields.wq_err);
+	if (dsa_enable_wq(dsa, wq_idx))
 		return -ENODEV;
-	}
 
 	return 0;
 }
@@ -807,40 +979,35 @@ int dsa_wq_set_pasid (struct dsadma_device *dsa, int wq_idx, int pasid,
 	struct dsa_work_queue_reg wqcfg;
 	unsigned int wq_offset;
 
-	memset(&wqcfg, 0, sizeof(wqcfg));
-
-	/* Each WQCONFIG register is 16 bytes (A, B, C, and D registers) */
-	wq_offset = DSA_WQCFG_OFFSET + wq_idx * 16;
-
-	wqcfg.d.val = readl(dsa->reg_base + wq_offset + 0xC);
-
 	/* First disable the WQ */
-	if (dsa_disable_wq(dsa, wq_offset, &wqcfg)) {
+	if (dsa_disable_wq(dsa, wq_idx)) {
 		printk("Error disabling the wq %d %x\n", wq_idx,
-					wqcfg.d.d_fields.wq_err);
+				readl(dsa->reg_base + DSA_CMDSTS_OFFSET));
 		return -ENODEV;
 	}
+
+	memset(&wqcfg, 0, sizeof(wqcfg));
+
+	/* Each WQCONFIG register is 32 bytes */
+	wq_offset = dsa->wq_offset + wq_idx * 32;
 
 	/* Change the PASID */
 	wqcfg.c.val = readl(dsa->reg_base + wq_offset + 8);
 
-	wqcfg.c.c_fields.u_s = privilege;
+	wqcfg.c.c_fields.priv = privilege;
 	wqcfg.c.c_fields.paside = 1;
 	wqcfg.c.c_fields.pasid = pasid;
 
 	writel(wqcfg.c.val, dsa->reg_base + wq_offset + 8);
 
 	/* Now re-enable the WQ */
-	if (dsa_enable_wq(dsa, wq_offset, &wqcfg)) {
-		printk("Error re-enabling the wq %d %x\n", wq_idx,
-					wqcfg.d.d_fields.wq_err);
+	if (dsa_enable_wq(dsa, wq_idx))
 		return -ENODEV;
-	}
 
 	return 0;
 }
 
-static void dsa_get_wq_grp_config(struct dsadma_device *dsa)
+static int dsa_get_wq_grp_config(struct dsadma_device *dsa)
 {
 	struct dsa_work_queue_reg wqcfg;
 	struct dsa_work_queue *wq;
@@ -852,10 +1019,10 @@ static void dsa_get_wq_grp_config(struct dsadma_device *dsa)
 
 	dsa->num_wqs = dsa->max_wqs;
 
-	for (i = 0; i < dsa->max_engs; i++) {
+	for (i = 0; i < dsa->max_grps; i++) {
 		int j;
 
-		grp_offset = DSA_GRPCFG_OFFSET + i * 64;
+		grp_offset = dsa->grp_offset + i * 64;
 		for (j = 0; j < 4; j++)
 			dsa->grpcfg[i].wq_bits[j] =
 				readq(dsa->reg_base + grp_offset + j * 8);
@@ -865,17 +1032,22 @@ static void dsa_get_wq_grp_config(struct dsadma_device *dsa)
 			dsa->num_grps++;
 
 		dsa->grpcfg[i].eng_bits = readq(dsa->reg_base + grp_offset +32);
+
+		/* FIXME: Do we need to read the GRPFLAGS as well? */
 	}
 
 	for (i = 0; i < dsa->num_wqs; i++) {
 		wq = &dsa->wqs[i];
 
 		/* Each WQCONFIG reg is 16 bytes (A, B, C, and D registers) */
-		wq_offset = DSA_WQCFG_OFFSET + i * 16;
+		wq_offset = dsa->wq_offset + i * 32;
 
 		wqcfg.a.val = readl(dsa->reg_base + wq_offset);
 		wqcfg.b.val = readl(dsa->reg_base + wq_offset + 4);
 		wqcfg.c.val = readl(dsa->reg_base + wq_offset + 8);
+		wqcfg.d.val = readl(dsa->reg_base + wq_offset + 12);
+		wqcfg.e.val = readl(dsa->reg_base + wq_offset + 16);
+		wqcfg.f.val = readl(dsa->reg_base + wq_offset + 20);
 
 		for (j = 0; j < 4; j++)
 			if (dsa->grpcfg[j].wq_bits[i / BITS_PER_LONG] &
@@ -886,21 +1058,83 @@ static void dsa_get_wq_grp_config(struct dsadma_device *dsa)
 		wq->wq_size = wqcfg.a.a_fields.wq_size;
 		wq->threshold = wqcfg.b.b_fields.threshold;
 		wq->priority = wqcfg.c.c_fields.priority;
+		wq->mode_support = wqcfg.f.f_fields.mode_support;
 		wq->idx = i;
 
 		if (dsa->wqs[i].dedicated)
 			dsa->num_dwqs++;
 
-		printk("init wq %d dedicated %d sz %d grp %d\n", i,
-				wq->dedicated, wq->wq_size, wq->grp_id);
+		printk("init wq %d dedicated %d sz %d grp %d mode_s %d\n", i,
+		wq->dedicated, wq->wq_size, wq->grp_id, wq->mode_support);
 	}
+
+	printk("wq configs %d %d %d %d\n", dsa_num_swqs, dsa_num_dwqs, dsa->num_wqs, dsa->num_dwqs);
+	if ((dsa_num_swqs + dsa_num_dwqs) == 0)
+		return 0;
+
+	if ((dsa_num_swqs + dsa_num_dwqs) != dsa->num_wqs) {
+		printk("[%d:%d] Num WQs != MAX WQs\n",
+			dsa_num_swqs + dsa_num_dwqs, dsa->num_wqs);
+		return -EINVAL;
+	}
+
+	while (dsa_num_swqs > (dsa->num_wqs - dsa->num_dwqs)) {
+		/* convert some DWQs to SWQs */
+		for (i = 0; i < dsa->num_wqs; i++) {
+			wq = &dsa->wqs[i];
+
+			if (wq->mode_support && wq->dedicated) {
+				wq_offset = dsa->wq_offset + i * 32 + 4;
+
+				wq->threshold = (wq->wq_size * 8)/10;
+				wqcfg.b.b_fields.threshold = wq->threshold;
+				writel(wqcfg.b.val, dsa->reg_base + wq_offset);
+
+				wq_offset += 4;
+				wqcfg.c.val = readl(dsa->reg_base + wq_offset);
+				wqcfg.c.c_fields.mode = 0;
+				wqcfg.c.c_fields.paside = 1;
+				writel(wqcfg.c.val, dsa->reg_base + wq_offset);
+
+				wq->dedicated = 0;
+				dsa->num_dwqs--;
+				break;
+			}
+		}
+		if (i == dsa->num_wqs)
+			return 1;
+	}
+
+	while (dsa_num_dwqs > dsa->num_dwqs) {
+		/* convert some SWQs to DWQs if we can */
+		for (i = 0; i < dsa->num_wqs; i++) {
+			wq = &dsa->wqs[i];
+
+			if (wq->mode_support && !wq->dedicated) {
+				wq_offset = dsa->wq_offset + i * 32 + 8;
+
+				wqcfg.c.val = readl(dsa->reg_base + wq_offset);
+				wqcfg.c.c_fields.mode = 1;
+				wqcfg.c.c_fields.paside = 0;
+				writel(wqcfg.c.val, dsa->reg_base + wq_offset);
+
+				wq->dedicated = 1;
+				dsa->num_dwqs++;
+				break;
+			}
+		}
+		if (i == dsa->num_wqs)
+			return 1;
+	}
+
+	return 0;
 }
 
 /**
- * dsa_enumerate_work_queues - configure the device's work queues
+ * dsa_configure_work_queues - configure the device's work queues
  * @dsa_dma: the dsa dma device to be enumerated
  */
-static int dsa_enumerate_work_queues(struct dsadma_device *dsa)
+static int dsa_configure_work_queues(struct dsadma_device *dsa)
 {
 	struct device *dev = &dsa->pdev->dev;
 	struct dma_device *dma = &dsa->dma_dev;
@@ -913,11 +1147,6 @@ static int dsa_enumerate_work_queues(struct dsadma_device *dsa)
 
 	dsa->max_wqs = (dsa->wqcap & DSA_CAP_MAX_WQ_MASK) >>
 						DSA_CAP_MAX_WQ_SHIFT;
-	dsa->max_engs = (dsa->wqcap & DSA_CAP_MAX_ENG_MASK) >>
-						DSA_CAP_MAX_ENG_SHIFT;
-
-	dsa->wq_cfg_support = (dsa->wqcap & DSA_CAP_WQ_CFG_MASK) >>
-				DSA_CAP_WQ_CFG_SHIFT;
 
 	dsa->wqs = devm_kzalloc(dev, sizeof(struct dsa_work_queue) *
 						dsa->max_wqs, GFP_KERNEL);
@@ -928,32 +1157,38 @@ static int dsa_enumerate_work_queues(struct dsadma_device *dsa)
 	}
 
 	dsa->grpcfg = devm_kzalloc(dev, sizeof(struct dsa_grpcfg_reg) *
-						dsa->max_engs, GFP_KERNEL);
+						dsa->max_grps, GFP_KERNEL);
 	if (dsa->grpcfg == NULL) {
-		dev_err(dev, "Allocating %d grpcfg structures!\n", dsa->max_engs);
+		dev_err(dev, "Allocating %d grpcfg structs!\n", dsa->max_grps);
 		return -ENOMEM;
 	}
 
-	if (dsa->wq_cfg_support == 0) {
-		/* can't configure the WQs. so read the WQ config */
-		dsa_get_wq_grp_config(dsa);
+	if (!(dsa->wqcap & DSA_CAP_SWQ) && !(dsa->wqcap & DSA_CAP_DWQ))
+		return -EINVAL;
+
+	/* We can't use SWQs if PASID was not enabled */
+	if (!dsa->pasid_enabled || !(dsa->wqcap & DSA_CAP_SWQ))
+		dsa_num_swqs = 0;
+
+	if (!(dsa->wqcap & DSA_CAP_DWQ))
+		dsa_num_dwqs = 0;
+
+	if (dsa->cfg_support == 0) {
+		/* Read the WQ config */
+		if (dsa_get_wq_grp_config(dsa))
+			return -EINVAL;
 
 		goto skip_wq_config;
 	}
-	/* We can't use SWQs if PASID was not enabled */
-	if (!dsa->pasid_enabled)
-		dsa_num_swqs = 0;
 
-	if (dsa_num_dwqs)
-		dsa->num_wqs += dsa_num_dwqs;
-	if (dsa_num_swqs)
-		dsa->num_wqs += dsa_num_swqs;
+	dsa->num_wqs += dsa_num_dwqs;
+	dsa->num_wqs += dsa_num_swqs;
 
 	/* by default #WQs = #Engines, and #DWQs = #SWQs */
 	if (dsa->num_wqs == 0) {
 		dsa->num_wqs = dsa->max_engs;
 		dsa_num_swqs = dsa->max_engs/2;
-		if (!dsa->pasid_enabled)
+		if (!dsa->pasid_enabled || !(dsa->wqcap & DSA_CAP_SWQ))
 			dsa_num_swqs = 0;
 		dsa_num_dwqs = dsa->max_engs - dsa_num_swqs;
 	}
@@ -971,14 +1206,16 @@ static int dsa_enumerate_work_queues(struct dsadma_device *dsa)
 		return -EINVAL;
 	}
 
-	/* FIXME: currently all SWQs are in one group and all DWQs in another */
-	if (dsa_num_dwqs > 0) {	
+	/* FIXME: currently all SWQs are in one group and all DWQs in another.
+	 * All WQ are assigned priorities (wq_id + 1) */
+	if (dsa_num_dwqs > 0) {
 		for (i = 0; i < dsa_num_dwqs; i++) {
 			dsa->wqs[i].grp_id = dsa->num_grps;
 			dsa->wqs[i].dedicated = 1;
 			dsa->wqs[i].wq_size = wq_size;
+			dsa->wqs[i].threshold = 0; /* N/A for DWQ */
+			dsa->wqs[i].priority = i + 1;
 			dsa->wqs[i].idx = i;
-			dsa->wqs[i].threshold = (dsa->wqs[i].wq_size * 8)/10;
 			allocated_size += wq_size;
 		}
 		dsa->num_grps++;
@@ -986,8 +1223,6 @@ static int dsa_enumerate_work_queues(struct dsadma_device *dsa)
 			/* readjust last WQ to account for integer arithmatic */
 			dsa->wqs[i-1].wq_size += dsa->tot_wq_size -
 							allocated_size;
-			dsa->wqs[i-1].threshold = (dsa->wqs[i - 1].wq_size * 8)/
-							10;
 		}
 		dsa->num_dwqs = dsa_num_dwqs;
 	}
@@ -997,7 +1232,7 @@ static int dsa_enumerate_work_queues(struct dsadma_device *dsa)
 			dsa->wqs[i].dedicated = 0;
 			dsa->wqs[i].wq_size = wq_size * 2;
 			dsa->wqs[i].threshold = (dsa->wqs[i].wq_size * 8)/10;
-			dsa->wqs[i].priority = i;
+			dsa->wqs[i].priority = i + 1;
 			dsa->wqs[i].idx = i;
 			allocated_size += (wq_size * 2);
 		}
@@ -1005,6 +1240,12 @@ static int dsa_enumerate_work_queues(struct dsadma_device *dsa)
 		dsa->wqs[i-1].wq_size += dsa->tot_wq_size - allocated_size;
 		dsa->wqs[i-1].threshold = (dsa->wqs[i - 1].wq_size * 8)/10;
 		dsa->num_grps++;
+	}
+
+	if (dsa->num_grps > dsa->max_grps) {
+		dev_err(dev, "[%d:%d] Num GRPs > MAX GRPs\n", dsa->num_grps,
+							dsa->max_grps);
+		return -EINVAL;
 	}
 
 	for (i = 0; i < dsa->max_wqs; i++) {
@@ -1052,6 +1293,18 @@ struct dsa_completion_ring *dsa_alloc_svm_resources(struct dsa_work_queue *wq)
 	if (!dring)
 		return NULL;
 
+	/* Configure the MSI-X permission table if we are using PASID */
+	dsa_configure_msix_perm_table(dring);
+
+	if (dring->dsa->gencap & DSA_CAP_INT_HANDLE) {
+		if ((dring->int_idx = dsa_get_int_handle(dring->dsa, false,
+							dring->int_idx)) < 0) {
+			printk("int handle allocation failed\n");
+			dsa_free_descriptors(dring);
+			return NULL;
+		}
+	}
+
         /* allocate the array to hold the callback descriptors */
         dring->callback_ring_buf = kcalloc(dring->num_entries,
 			sizeof(struct dsa_callback_descriptor), GFP_KERNEL);
@@ -1095,6 +1348,15 @@ static int dsa_alloc_chan_resources(struct dma_chan *c)
 
 	if (!dring)
 		return -EFAULT;
+
+	if (dring->dsa->gencap & DSA_CAP_INT_HANDLE) {
+		if ((dring->int_idx = dsa_get_int_handle(dring->dsa, false,
+							dring->int_idx)) < 0) {
+			printk("int handle allocation failed\n");
+			dsa_free_descriptors(dring);
+			return -EFAULT;
+		}
+	}
 
 	wq->dring = dring;
 

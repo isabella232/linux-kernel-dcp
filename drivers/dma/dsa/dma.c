@@ -135,19 +135,9 @@ void dsa_stop(struct dsa_work_queue *dsa_wq)
 #endif
 }
 
-void __iomem *dsa_get_wq_reg(struct dsadma_device *dsa, int wq_idx,
-				int msix_idx, bool priv)
+int dsa_get_wq_portal_offset(int wq_idx, bool ims, bool limited)
 {
-	u32 wq_offset;
-
-	if (!priv) {
-		wq_offset = wq_idx;
-	} else {
-		wq_offset = msix_idx * dsa->max_wqs + wq_idx;
-	}
-	wq_offset = wq_offset << PAGE_SHIFT;
-
-	return (dsa->wq_reg_base + wq_offset);
+	return (wq_idx * 4 + ims * 2 + limited) << PAGE_SHIFT;
 }
 
 int dsa_enqcmds (struct dsa_dma_descriptor *hw, void __iomem * wq_reg)
@@ -305,6 +295,7 @@ static void dsa_init_ring_ent(struct dsa_ring_ent *entry,
 			entry->hw.pasid = dring->wq->dsa->system_pasid;
 		}
 	}
+	entry->hw.int_handle = dring->int_idx;
 }
 
 void dsa_free_ring_ent(struct dsa_ring_ent *desc, struct dma_chan *chan)

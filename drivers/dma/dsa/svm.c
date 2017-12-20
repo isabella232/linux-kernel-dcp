@@ -97,6 +97,7 @@ int dsa_ctx_drain_pasid (struct dsa_context *ctx, bool abort)
 int dsa_drain_pasid (struct dsadma_device *dsa, int pasid, bool abort)
 {
 	union dsa_command_reg reg;
+	u32 cmdsts;
 	int i;
 
 	memset(&reg, 0, sizeof(union dsa_command_reg));
@@ -105,15 +106,17 @@ int dsa_drain_pasid (struct dsadma_device *dsa, int pasid, bool abort)
 	spin_lock(&dsa->cmd_lock);
 
 	reg.fields.operand = pasid;
-	reg.fields.cmd = DRAIN_PASID;
-	reg.fields.abort = abort;
+	if (abort)
+		reg.fields.cmd = DSA_ABORT_PASID;
+	else
+		reg.fields.cmd = DSA_DRAIN_PASID;
 	writel(reg.val, dsa->reg_base + DSA_CMD_OFFSET);
 
 	/* wait for completion */
 	for (i = 0; i < DRAIN_CMD_TIMEOUT; i++) {
 		mdelay(1);
-		reg.val = readl(dsa->reg_base + DSA_CMD_OFFSET);
-		if (reg.fields.status == 0)
+		cmdsts = readl(dsa->reg_base + DSA_CMDSTS_OFFSET);
+		if (!(cmdsts & DSA_CMD_ACTIVE))
 			break;
 	}
 	spin_unlock(&dsa->cmd_lock);
@@ -219,15 +222,6 @@ static int dsa_ioctl_wq_alloc (struct dsa_context *ctx, unsigned long arg)
 	printk("wq_alloc: wq %d dedicated %d\n", wq->idx, wq->dedicated);
 	ctx->wq_idx = wq->idx;
 
-	/* allocate an interrupt for this wq */
-	msix_idx = dsa_get_msix_index(dsa);
-
-	irq_entry = &dsa->irq_entries[msix_idx];
-
-	dsa_setup_irq_event(&ctx->ev, irq_entry, NULL, NULL);
-
-	ctx->wq_reg = dsa_get_wq_reg(dsa, wq->idx, msix_idx, 1);
-
 	/* Allocate and bind a PASID */
 	ctx->svm_dev = &dsa->pdev->dev;
 	ctx->tsk = current;
@@ -244,6 +238,17 @@ static int dsa_ioctl_wq_alloc (struct dsa_context *ctx, unsigned long arg)
 	}
 
 	printk("pasid %d\n", ctx->pasid);
+
+	/* allocate an interrupt for this wq */
+	/* FIXME: save this somewhere? */
+	msix_idx = dsa_get_msix_index(dsa);
+
+	irq_entry = &dsa->irq_entries[msix_idx];
+
+	dsa_setup_irq_event(&ctx->ev, irq_entry, NULL, NULL);
+
+	ctx->wq_reg = dsa->wq_reg_base +
+		dsa_get_wq_portal_offset(wq->idx, false, false);
 
 	/* If dedicated queue, configure the PASID into WQ PASID register, else
 	 * configure the PASID in MSR_IA_PASID */
@@ -319,7 +324,8 @@ static int dsa_wq_reg_fault(struct vm_fault *vmf)
 	/* the vma should be at most a 4K page size */
 	BUG_ON((vma->vm_end - vma->vm_start) > PAGE_SIZE);
 
-	pfn = (base + (ctx->wq_idx << PAGE_SHIFT)) >> PAGE_SHIFT;
+	pfn = (base + dsa_get_wq_portal_offset(ctx->wq_idx, false, true))
+					>> PAGE_SHIFT;
 
 	printk("dsa page fault pfn vaadr %lx %lx\n", vma->vm_start, pfn);
 	ret = vm_insert_pfn(vma, vma->vm_start, pfn);
@@ -354,7 +360,8 @@ int dsa_fops_mmap(struct file *filep, struct vm_area_struct *vma)
 
 	vma->vm_flags |= VM_DONTCOPY;
 
-	pfn = (base + (ctx->wq_idx << PAGE_SHIFT)) >> PAGE_SHIFT;
+	pfn = (base + dsa_get_wq_portal_offset(ctx->wq_idx, false, true))
+					>> PAGE_SHIFT;
 
 	printk("dsa_fops_mmap %lx %lx %lx prot %lx\n", vma->vm_start, vma->vm_end, pfn, vma->vm_page_prot.pgprot);
 	ret = io_remap_pfn_range(vma, vma->vm_start, pfn, PAGE_SIZE, vma->vm_page_prot);

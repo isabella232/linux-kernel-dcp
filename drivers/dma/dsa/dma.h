@@ -68,10 +68,22 @@ enum desc_flags {
 	desc_in_use,
 };
 
+union dsa_grpflags_reg {
+	struct {
+		u32 lowbw_allowed:1;
+		u32 rsvd:7;
+		u32 bwtok_rsvd:8;
+		u32 rsvd1:4;
+		u32 bwtok_allowed:8;
+		u32 rsvd2:4;
+	}grpflags_fields;
+	u32     val;
+};
+
 struct dsa_grpcfg_reg {
 	u64 wq_bits[4];
 	u64 eng_bits;
-	u32 vc;
+	union dsa_grpflags_reg grpflags;
 	u32 rsvd0;
 	u64 rsvd1[2];
 };
@@ -83,12 +95,16 @@ struct dsa_work_queue {
 	bool wq_enabled;
 	bool dedicated;
 	bool bof_enabled;
+	bool occu_int_req;
+	bool mode_support;
 	u8   priority;
 	u8   idx;
 	u32  pasid;
 	bool privileged;
 	u16  threshold;
 	u16  wq_size;
+	u16  max_xfer_bits;
+	u16  max_batch_bits;
 	u64 issued;
 	int grp_id;
 	spinlock_t lock;
@@ -127,26 +143,44 @@ struct dsa_work_queue_reg {
 		struct {
 			u32 mode:1;
 			u32 bof_en:1;
-			u32 rsvd2:2;
+			u32 ordering:1;
+			u32 rsvd:1;
 			u32 priority:4;
 			u32 pasid:20;
-			u32 rsvd3:2;
 			u32 paside:1;
-			u32 u_s:1;
+			u32 priv:1;
+			u32 rsvd1:2;
 		}c_fields;
 		u32     val;
 	}c;
 
 	union {
 		struct {
-			u32 wq_enable:1;
-			u32 wq_enabled:1;
-			u32 rsvd0:6;
-			u32 wq_err:8;
-			u32 rsvd1:16;
+			u32 max_xfer_bits:5;
+			u32 max_batch_bits:4;
+			u32 rsvd:23;
 		}d_fields;
 		u32     val;
 	}d;
+
+	union {
+		struct {
+			u32 occup_limit:16;
+			u32 int_handle:14;
+			u32 table_type:1;
+			u32 int_en:1;
+		}e_fields;
+		u32     val;
+	}e;
+	union {
+		struct {
+			u32 occup:16;
+			u32 rsvd:13;
+			u32 mode_support:1;
+			u32 wq_state:2;
+		}f_fields;
+		u32     val;
+	}f;
 };
 
 struct dsa_batch {
@@ -193,6 +227,7 @@ struct dsa_completion_ring {
 	void    *callback_ring_buf;
 	dma_addr_t  comp_base;
 	void __iomem *wq_reg;
+	u16 int_idx;
 	struct dsa_irq_event ev;
 };
 
@@ -240,7 +275,11 @@ struct dsadma_device {
 	struct pci_dev *pdev;
 	void __iomem *reg_base;
 	void __iomem *wq_reg_base;
-	void __iomem *gwq_reg_base;
+	u16  wq_offset;
+	u16  grp_offset;
+	u16  msix_perm_offset;
+	u16  ims_offset;
+	u64 table_offsets;
 	struct pci_pool *dma_pool;
 	struct pci_pool *completion_pool;
 	struct dma_device dma_dev;
@@ -276,12 +315,18 @@ struct dsadma_device {
 	u64 wqcap;
 	u16 tot_wq_size;
 	u16 max_wqs;
-	u16 max_engs;
 	u16 num_wqs;
 	u16 num_dwqs;
 	u16 num_virt_swqs;
+
+	/* Group and Eng capabilities */
+	u64 grpcap;
+	u16 max_grps;
 	u16 num_grps;
-	bool wq_cfg_support;
+	u64 engcap;
+	u16 max_engs;
+	bool cfg_support;
+	bool ims_support;
 
 	u16 num_kern_dwqs;
 
@@ -393,25 +438,6 @@ dsa_wq_by_index(struct dsadma_device *dsa_dma, int index)
 static inline u64 dsa_swerr(struct dsadma_device *dsa)
 {
 	return readq(dsa->reg_base + DSA_SWERR_OFFSET);
-}
-
-static inline void dsa_wq_disable(struct dsa_work_queue *wq)
-{
-	int i;
-	u32 wq_enable, wq_offset;
-	wq_offset = DSA_WQCFG_OFFSET + wq->idx * 0x10 + 0xC;
-
-	writel(0, wq->dsa->reg_base + wq_offset);
-
-	for (i = 0; i < 200000; i++) {
-		wq_enable = readl(wq->dsa->reg_base + wq_offset);
-		if (!(wq_enable & DSA_ENABLED_BIT))
-			break;
-	}
-
-	if (i == 200000)
-		printk("Error disabling the wq %d %d %x\n", wq->idx, i,
-					wq_enable);
 }
 
 static inline u32 dsa_ring_size(struct dsa_completion_ring *dring)
@@ -672,9 +698,12 @@ int dsa_usr_add(struct dsadma_device *dsa);
 int dsa_wq_set_pasid (struct dsadma_device *dsa, int wq_idx, int pasid,
 				bool privilege);
 int dsa_wq_disable_pasid (struct dsadma_device *dsa, int wq_idx);
+int dsa_disable_wq (struct dsadma_device *dsa, int wq_idx);
+int dsa_enable_wq (struct dsadma_device *dsa, int wq_idx);
+void dsa_change_wq_reg (struct dsadma_device *dsa, int wq_idx, int reg_offset,
+		u32 val);
 
-void __iomem *dsa_get_wq_reg(struct dsadma_device *dsa, int wq_idx,
-				int msix_idx, bool priv);
+int dsa_get_wq_portal_offset(int wq_idx, bool ims, bool limited);
 void dsa_setup_irq_event (struct dsa_irq_event *ev, struct dsa_irq_entry
 			*irq_entry, struct dsa_completion_ring *dring,
 			void (*isr_cb)(struct dsa_completion_ring *dring));

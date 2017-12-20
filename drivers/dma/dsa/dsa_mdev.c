@@ -77,14 +77,14 @@ static u64 get_reg_val (void *buf, int size)
 static uint64_t dsa_pci_config[] = {
 	0x001000006f308086ULL,
 	0x0080000008800000ULL,
-	0x0000000000000004ULL,
-	0x0000000000000004ULL,
-	0x0000000000000004ULL,
+	0x000000000000000cULL,
+	0x000000000000000cULL,
+	0x0000000000000000ULL,
 	0x2010808600000000ULL,
 	0x0000004000000000ULL,
 	0x000000ff00000000ULL,
-	0x0000600000005011ULL, /* MSI-X capability */
-	0x0000700000000000ULL,
+	0x0000060000005011ULL, /* MSI-X capability */
+	0x0000070000000000ULL,
 	0x0000000000910010ULL, /* PCIe capability */
 	0x0000000000000000ULL,
 	0x0000000000000000ULL,
@@ -100,16 +100,26 @@ static uint64_t dsa_pci_ext_cap[] = {
 	0x0000000000000001ULL,
 	0x000014040001001bULL, /* PASID capability */
 	0x0000000000000000ULL,
+	0x0181808600010023ULL, /* Scalable IOV capability */
+	0x0000000100000005ULL,
+	0x0000000000000001ULL,
+	0x0000000000000000ULL,
 };
 
 static uint64_t dsa_cap_ctrl_reg[] = {
 	0x0000000000000100ULL,
 	0x0000000000000000ULL,
-	0x0000000500400001ULL,
+	0x00000001013f038fULL, /* gencap */
 	0x0000000000000000ULL,
 	0x0000000000000000ULL,
 	0x0000000000000000ULL,
-	0x000000000011f3ffULL,
+	0x0000000000004004ULL, /* grpcap */
+	0x0000000000000004ULL, /* engcap */
+	0x00000001003f03ffULL, /* opcap */
+	0x0000000000000000ULL,
+	0x0000000000000000ULL,
+	0x0000000000000000ULL,
+	0x0000000000000000ULL, // offsets
 };
 
 static int vdsa_send_interrupt(struct vdcm_dsa *vdsa, int msix_idx);
@@ -164,7 +174,7 @@ static unsigned int dsa_ims_irq_mask (struct msi_desc *desc)
 	mask_bits &= ~PCI_MSIX_ENTRY_CTRL_MASKBIT;
 	mask_bits |= PCI_MSIX_ENTRY_CTRL_MASKBIT;
 
-	ims_offset = DSA_IMS_OFFSET + vdsa->ims_index[desc->devims.ims_index]
+	ims_offset = dsa->ims_offset + vdsa->ims_index[desc->devims.ims_index]
 						* 0x10;
 	base = dsa->reg_base + ims_offset;
 
@@ -187,7 +197,7 @@ static unsigned int dsa_ims_irq_unmask (struct msi_desc *desc)
 
 	mask_bits &= ~PCI_MSIX_ENTRY_CTRL_MASKBIT;
 
-	ims_offset = DSA_IMS_OFFSET + vdsa->ims_index[desc->devims.ims_index]
+	ims_offset = dsa->ims_offset + vdsa->ims_index[desc->devims.ims_index]
 						* 0x10;
 	base = dsa->reg_base + ims_offset;
 
@@ -207,7 +217,7 @@ static void dsa_ims_write_msg (struct msi_desc *desc, struct msi_msg *msg)
 
 	printk("ims_write: %d %x\n", desc->devims.ims_index, msg->address_lo);
 
-	ims_offset = DSA_IMS_OFFSET + vdsa->ims_index[desc->devims.ims_index]
+	ims_offset = dsa->ims_offset + vdsa->ims_index[desc->devims.ims_index]
 						* 0x10;
 
 	base = dsa->reg_base + ims_offset;
@@ -311,6 +321,7 @@ static void vdsa_mmio_init (struct vdcm_dsa *vdsa)
 	u64 sm = 0, dm = 0;
 	struct vdcm_dsa_pci_bar0 *bar0 = &vdsa->bar0;
 	u64 *wq_cap;
+	u64 *offsets;
 	struct dsadma_device *dsa = vdsa->dsa;
 
 	for (i = 0; i < vdsa->num_wqs; i++) {
@@ -320,16 +331,26 @@ static void vdsa_mmio_init (struct vdcm_dsa *vdsa)
 
 		total_wq_size += wq->wq_size;
 
-		wqcfg = (struct dsa_work_queue_reg*)&bar0->wq_ctrl_regs[i * 16];
+		wqcfg = (struct dsa_work_queue_reg*)&bar0->wq_ctrl_regs[i * 32];
 		grpcfg = (struct dsa_grpcfg_reg *)
 				&bar0->grp_ctrl_regs[wq->grp_id * 64];
 
 		/* setup wq cfg */
+		wqcfg->a.val = 0;
 		wqcfg->a.a_fields.wq_size = wq->wq_size;
+		wqcfg->b.val = 0;
 		wqcfg->b.b_fields.threshold = wq->threshold;
+		wqcfg->c.val = 0;
 		wqcfg->c.c_fields.mode = wq->dedicated;
+		wqcfg->c.c_fields.paside = !wq->dedicated;
 		wqcfg->c.c_fields.bof_en = wq->bof_enabled;
 		wqcfg->c.c_fields.priority = wq->priority;
+		/* Exposing the physical values to vDSA */
+		wqcfg->d.val = 0;
+		wqcfg->d.d_fields.max_xfer_bits = wq->max_xfer_bits;
+		wqcfg->d.d_fields.max_batch_bits = wq->max_batch_bits;
+		/* FIXME: Emulate WQ Occupancy registers */
+		wqcfg->e.val = 0;
 
 		/* setup grp cfg */
 		grpcfg->wq_bits[i/BITS_PER_LONG] |= (1 << (i % BITS_PER_LONG));
@@ -337,16 +358,27 @@ static void vdsa_mmio_init (struct vdcm_dsa *vdsa)
 		grpcfg->eng_bits = dsa->grpcfg[wq->grp_id].eng_bits;
 
 		if (wq->dedicated == 0) {
-			wqcfg->d.val = 3;
+			wqcfg->f.val = 0x0;
 			sm = 1;
-		} else
+		} else {
+			wqcfg->f.val = 0x20000000;
 			dm = 1;
+			sm = 1;
+		}
 	}
 
 	/* setup wqcap */
 	wq_cap = (u64 *)&bar0->cap_ctrl_regs[DSA_WQCAP_OFFSET];
-	*wq_cap = (sm << 48) | (dm << 49) | (((u64)dsa->max_engs & 0xFF) << 24)
-		|(((u64)vdsa->num_wqs & 0xFF) << 16) | (total_wq_size & 0xffff);
+	/* Currently no priority, occupancy, and occupancy int capabilities */
+	*wq_cap = (sm << 48) | (dm << 49) |
+		(((u64)vdsa->num_wqs & 0xFF) << 16) | (total_wq_size & 0xFFFF);
+
+	/* initialize the offsets register */
+	offsets = (u64 *)&bar0->cap_ctrl_regs[DSA_TABLE_OFFSET];
+	*offsets = ((((u64)VDSA_IMS_OFFSET >> 8) & 0xffff) << 48) |
+			((((u64)VDSA_MSIX_PERM_OFFSET >> 8) & 0xffff) << 32) |
+			((((u64)VDSA_WQCFG_OFFSET >> 8) & 0xffff) << 16) |
+			(((u64)VDSA_GRPCFG_OFFSET >> 8) & 0xffff);
 }
 
 
@@ -379,7 +411,8 @@ struct vdcm_dsa * vdcm_vdsa_create (struct dsadma_device *dsa,
 			}
 
 			vdsa->num_wqs = 1;
-
+			/* disable physical wq. will be enabled by the VM */
+			dsa_disable_wq(dsa, vdsa->wqs[0]->idx);
 		break;
 		case DSA_MDEV_TYPE_0_DWQ_1_SWQ:
 			vdsa->wqs[0] = dsa_wq_alloc(dsa, 0);
@@ -389,7 +422,6 @@ struct vdcm_dsa * vdcm_vdsa_create (struct dsadma_device *dsa,
 			}
 
 			vdsa->num_wqs = 1;
-
 		break;
 	}
 
@@ -409,6 +441,21 @@ static int vdsa_send_interrupt(struct vdcm_dsa *vdsa, int msix_idx)
 {
 	int ret = -1;
 
+	/* We need to check MSIX mask bit only for entry 0 because that is the
+	 * only virtual interrupt. Other interrupts are physical interrupts, and
+	 * they are setup such that we receive them only when guest wants to
+	 * receive them.
+	 */
+	if (msix_idx == 0) {
+		u8 *msix_perm = &vdsa->bar0.msix_perm_table[0];
+
+		if (msix_perm[0] & 1) {
+			set_bit(0, (unsigned long *)&vdsa->bar0.msix_pba);
+			set_bit(1, (unsigned long *)msix_perm);
+		}
+		return 1;
+	}
+
 	if (!vdsa->vdev.msix_trigger[msix_idx]) {
 		pr_info("%s: Intr evtfd not found %d\n", __func__, msix_idx);
 		return -EINVAL;
@@ -426,7 +473,7 @@ static int vdsa_send_interrupt(struct vdcm_dsa *vdsa, int msix_idx)
 
 static inline u8 vdsa_state (struct vdcm_dsa *vdsa)
 {
-	return vdsa->bar0.cap_ctrl_regs[DSA_ENABLE_OFFSET] & 0x3;
+	return vdsa->bar0.cap_ctrl_regs[DSA_GENSTS_OFFSET] & 0x3;
 }
 
 static int vdcm_vdsa_cfg_read(struct vdcm_dsa *vdsa, unsigned int pos,
@@ -452,12 +499,14 @@ static int vdcm_vdsa_cfg_write(struct vdcm_dsa *vdsa, unsigned int pos,
 	printk("dsa pci W %d %x %x: %llx\n", vdsa->id, size, offset, get_reg_val(buf, size));
 
 	switch (offset) {
-		case 0x04: { /* device control */
+		case PCI_COMMAND: { /* device control */
 			bool bme;
 			memcpy(&cfg[offset], buf, size);
 			bme = cfg[offset] & (1u << 2);
-			if (!bme && ((*(u32 *)&bar0[DSA_ENABLE_OFFSET]) & 0x3) != 0) {
-				*(u32 *)(&bar0[DSA_ENABLE_OFFSET]) = 8u << 8;
+			if (!bme && ((*(u32 *)&bar0[DSA_GENSTS_OFFSET]) & 0x3)
+					!= 0) {
+				*(u32 *)(&bar0[DSA_SWERR_OFFSET]) = 0x51u << 8;
+				*(u32 *)(&bar0[DSA_GENSTS_OFFSET]) = 0;
 			}
 			if (size < 4)
 				break;
@@ -467,7 +516,7 @@ static int vdcm_vdsa_cfg_write(struct vdcm_dsa *vdsa, unsigned int pos,
 			/* fall through */
         	}
 
-        	case 0x6: { /* device status */
+		case PCI_STATUS: { /* device status */
 			u16 nval = get_reg_val(buf, size) << (offset & 1) * 8;
 			nval &= 0xf900;
 			*(u16 *)&cfg[offset] = *((u16 *)&cfg[offset]) & ~nval;
@@ -479,25 +528,25 @@ static int vdcm_vdsa_cfg_write(struct vdcm_dsa *vdsa, unsigned int pos,
 			memcpy(&cfg[offset], buf, size);
 			break;
 
-		case 0x10: /* BAR0 */
-		case 0x14: /* BAR1 */
-		case 0x18: /* BAR2 */
-		case 0x1c: /* BAR3 */
-		case 0x20: /* BAR4 */
-		case 0x24: /* BAR5 */ {
+		case PCI_BASE_ADDRESS_0: /* BAR0 */
+		case PCI_BASE_ADDRESS_1: /* BAR1 */
+		case PCI_BASE_ADDRESS_2: /* BAR2 */
+		case PCI_BASE_ADDRESS_3: /* BAR3 */ {
 			unsigned int bar_id, bar_offset;
 			u64 bar, bar_size;
 
-			bar_id = (offset - 0x10) / 8;
+			bar_id = (offset - PCI_BASE_ADDRESS_0) / 8;
 			bar_size = vdsa->bar_size[bar_id];
-			bar_offset = 0x10 + bar_id * 8;
+			bar_offset = PCI_BASE_ADDRESS_0 + bar_id * 8;
 
 			val = get_reg_val(buf, size);
 			bar = *(u64 *)&cfg[bar_offset];
 			memcpy((u8 *)&bar + (offset & 0x7), buf, size);
 			bar &= ~(bar_size - 1);
 
-			*(u64 *)&cfg[bar_offset] = bar | 4;
+			*(u64 *)&cfg[bar_offset] = bar |
+					PCI_BASE_ADDRESS_MEM_TYPE_64 |
+					PCI_BASE_ADDRESS_MEM_PREFETCH;
 
 			if (val == -1U || val == -1ULL)
 				break;
@@ -587,24 +636,31 @@ static int vdcm_vdsa_mmio_read(struct vdcm_dsa *vdsa, u64 pos, void *buf,
 			reg_addr = &bar0->cap_ctrl_regs[offset];
 			break;
 
-		case DSA_GRPCFG_OFFSET ... DSA_GRPCFG_OFFSET + VDSA_GRP_CTRL_SZ - 1:
+		case VDSA_GRPCFG_OFFSET ... VDSA_GRPCFG_OFFSET + VDSA_GRP_CTRL_SZ - 1:
 			reg_addr =
-				&bar0->grp_ctrl_regs[offset-DSA_GRPCFG_OFFSET];
+				&bar0->grp_ctrl_regs[offset-VDSA_GRPCFG_OFFSET];
 			break;
 
-		case DSA_WQCFG_OFFSET ... DSA_WQCFG_OFFSET + VDSA_WQ_CTRL_SZ - 1:
-			reg_addr = &bar0->wq_ctrl_regs[offset-DSA_WQCFG_OFFSET];
+		case VDSA_WQCFG_OFFSET ... VDSA_WQCFG_OFFSET + VDSA_WQ_CTRL_SZ - 1:
+			reg_addr = &bar0->wq_ctrl_regs[offset-VDSA_WQCFG_OFFSET];
 			break;
 
 		/* TODO: WQ Occupancy Interrupt Control */
-		case DSA_MSIX_TABLE_OFFSET ... DSA_MSIX_TABLE_OFFSET + VDSA_MSIX_TBL_SZ - 1:
+		case VDSA_MSIX_TABLE_OFFSET ... VDSA_MSIX_TABLE_OFFSET + VDSA_MSIX_TBL_SZ - 1:
 			reg_addr =
-				&bar0->msix_table[offset-DSA_MSIX_TABLE_OFFSET];
+				&bar0->msix_table[offset-VDSA_MSIX_TABLE_OFFSET];
                 break;
 
-		case DSA_MSIX_PBA_OFFSET ... DSA_MSIX_PBA_OFFSET + 7:
+		case VDSA_MSIX_PBA_OFFSET ... VDSA_MSIX_PBA_OFFSET + 7:
 			reg_addr = (u8 *)&bar0->msix_pba;
 			break;
+
+		case VDSA_MSIX_PERM_OFFSET ... VDSA_MSIX_PERM_OFFSET + VDSA_MSIX_PERM_TBL_SZ - 1:
+			reg_addr = &bar0->msix_perm_table[offset -
+							VDSA_MSIX_PERM_OFFSET];
+
+			break;
+		/* TODO: IMS Table */
 		default:
 			reg_addr = 0;
 			break;
@@ -619,24 +675,45 @@ static int vdcm_vdsa_mmio_read(struct vdcm_dsa *vdsa, u64 pos, void *buf,
 	return 0;
 }
 
+static void dsa_complete_command (struct vdcm_dsa *vdsa, int cmdsts_val)
+{
+	struct vdcm_dsa_pci_bar0 *bar0 = &vdsa->bar0;
+	u32 *cmd = (u32 *)&bar0->cap_ctrl_regs[DSA_CMD_OFFSET];
+	u32 *cmdsts = (u32 *)&bar0->cap_ctrl_regs[DSA_CMDSTS_OFFSET];
+
+	*cmdsts = cmdsts_val;
+
+	printk("cmd completion %08x\n", *cmd);
+	if (*cmd & DSA_CMD_INT_MASK) {
+		bar0->cap_ctrl_regs[DSA_INTCAUSE_OFFSET] |= 4U;
+		vdsa_send_interrupt(vdsa, 0);
+	}
+}
+
 void vdsa_enable(struct vdcm_dsa *vdsa)
 {
 	struct vdcm_dsa_pci_bar0 *bar0 = &vdsa->bar0;
 	bool ats = (*(u16 *)&vdsa->cfg[VDSA_ATS_OFFSET+6]) & (1U << 15);
 	bool prs = (*(u16 *)&vdsa->cfg[VDSA_PRS_OFFSET+4]) & 1U;
 	bool pasid = (*(u16 *)&vdsa->cfg[VDSA_PASID_OFFSET+6]) & 1U;
-	u32 *reg = (u32 *)&bar0->cap_ctrl_regs[DSA_ENABLE_OFFSET];
+	u32 vdev_state = *(u32 *)&bar0->cap_ctrl_regs[DSA_GENSTS_OFFSET] &
+				DSA_GENSTS_STATE_MASK;
 
 	printk("dsa device enable\n");
 
+	if (vdev_state == DSA_GENSTS_ENABLED)
+		return dsa_complete_command(vdsa, 0x10);
+
 	/* Check PCI configuration */
 	if ((vdsa->cfg[PCI_COMMAND] & (1U << 2)) == 0)
-		cmpxchg(reg, 1U, 2U << 8);
+		return dsa_complete_command(vdsa, 0x12);
 
 	if (pasid != prs || (pasid && !ats))
-		cmpxchg(reg, 1U, 3U << 8);
+		return dsa_complete_command(vdsa, 0x12);
 
-	cmpxchg(reg, 1U, 3U);
+	bar0->cap_ctrl_regs[DSA_GENSTS_OFFSET] = DSA_GENSTS_ENABLED;
+
+	return dsa_complete_command(vdsa, 0x0);
 }
 
 void vdsa_disable(struct vdcm_dsa *vdsa)
@@ -645,35 +722,31 @@ void vdsa_disable(struct vdcm_dsa *vdsa)
 	struct dsa_work_queue *wq;
 	volatile struct dsa_work_queue_reg *wqcfg;
 	struct vdcm_dsa_pci_bar0 *bar0 = &vdsa->bar0;
-	u32 *reg = (u32 *)&bar0->cap_ctrl_regs[DSA_ENABLE_OFFSET];
+	u32 vdev_state = *(u32 *)&bar0->cap_ctrl_regs[DSA_GENSTS_OFFSET] &
+				DSA_GENSTS_STATE_MASK;
 
-	printk("dsa device disable\n");
+	printk("vdsa device disable\n");
 
-	/* FIXME: If it is a DWQ, need to disable the DWQ as well */
+	if (vdev_state == DSA_GENSTS_DISABLED)
+		return dsa_complete_command(vdsa, 0x31);
+
 	for (i = 0; i < vdsa->num_wqs; i++) {
-		int wq_state;
+		wqcfg = (struct dsa_work_queue_reg*)&bar0->wq_ctrl_regs[i * 32];
 
 		wq = vdsa->wqs[i];
-		wqcfg = (struct dsa_work_queue_reg*)&bar0->wq_ctrl_regs[i * 16];
-		wq_state = wqcfg->d.val;
 
-		switch (wq_state) {
-			case 1:
-				if (cmpxchg(&wqcfg->d.val, 1U, 1U << 8))
-					break;
-				/* fall through */
-			case 3:
-				cmpxchg(&wqcfg->d.val, 3U, 0);
-				/* fall through */
-			default:
-				break;
-		}
+		/* If it is a DWQ, need to disable the DWQ as well */
+		if (wq->dedicated && dsa_disable_wq(vdsa->dsa, wq->idx))
+			printk("vdsa disable_wq %d:%d failed\n", i, wq->idx);
+
+		/* FIXME: do we need to drain the PASIDs for SWQ? */
+		wqcfg->f.f_fields.wq_state = 0;
 	}
 
-	cmpxchg(reg, 2U, 0);
+	return dsa_complete_command(vdsa, 0x0);
 }
 
-static void wq_enable (struct vdcm_dsa *vdsa, int wq_id)
+static void vdsa_wq_enable (struct vdcm_dsa *vdsa, int wq_id)
 {
 	struct dsa_work_queue *wq;
 	volatile struct dsa_work_queue_reg *wqcfg;
@@ -683,58 +756,60 @@ static void wq_enable (struct vdcm_dsa *vdsa, int wq_id)
 	bool pasid_enabled = (*(u16 *)&vdsa->cfg[VDSA_PASID_OFFSET+6]) & 1U;
 	u64 *wqcap;
 	bool priv;
+	u32 c_val;
+
+	if (wq_id >= vdsa->num_wqs)
+		return dsa_complete_command(vdsa, 0x2);
 
 	wq = vdsa->wqs[wq_id];
 
 	printk("vdsa enable wq %u:%u\n", wq_id, wq->idx);
 
-	wqcfg = (struct dsa_work_queue_reg*)&bar0->wq_ctrl_regs[wq_id * 16];
+	wqcfg = (struct dsa_work_queue_reg*)&bar0->wq_ctrl_regs[wq_id * 32];
 	wqcap = (u64 *)&bar0->cap_ctrl_regs[DSA_WQCAP_OFFSET];
 
-	if (vdsa_state(vdsa) != 3) {
-		cmpxchg(&wqcfg->d.val, 1U, 1U << 8);
+	if (vdsa_state(vdsa) != 1) {
+		dsa_complete_command(vdsa, 0x20);
+		return;
+	}
+
+	if (wqcfg->f.f_fields.wq_state != 0) {
+		dsa_complete_command(vdsa, 0x21);
 		return;
 	}
 
 	if (wqcfg->a.a_fields.wq_size == 0) {
-		cmpxchg(&wqcfg->d.val, 1U, 2U << 8);
+		dsa_complete_command(vdsa, 0x22);
 		return;
 	}
 
-	if (wqcfg->b.b_fields.threshold > wqcfg->a.a_fields.wq_size) {
-		cmpxchg(&wqcfg->d.val, 1U, 3U << 8);
-		return;
-	}
-
-	dedicated = wqcfg->c.c_fields.mode;
-	wq_pasid_enable = wqcfg->c.c_fields.paside;
+	c_val = wqcfg->c.val;
+	dedicated = c_val & 1;;
+	wq_pasid_enable = c_val & (1 << 28);
 
 	if (((dedicated == 0) && ((*wqcap & (1UL << 48)) == 0)) ||
 			((dedicated == 1) && ((*wqcap & (1UL << 49)) == 0))) {
-		cmpxchg(&wqcfg->d.val, 1U, 4U << 8);
+		dsa_complete_command(vdsa, 0x24);
 		return;
 	}
 
-	/* No need to check for error code 5 because BoF is enabled in both
-	 * GENCAP and WQCAP */
-
 	if ((dedicated == 0 && wq_pasid_enable == 0)
 		|| (wq_pasid_enable != 0 && pasid_enabled == 0)) {
-		cmpxchg(&wqcfg->d.val, 1U, 6U << 8);
+		dsa_complete_command(vdsa, 0x26);
 		return;
 	}
 
 	/* If dedicated WQ and PASID is not enabled, program the default PASID
 	 * in the WQ PASID register
 	 */
-	if (dedicated == 1) {
+	if (dedicated == 1 && wqcfg->f.f_fields.mode_support) {
 		int wq_pasid, gpasid = -1;
 		struct mdev_device *mdev = vdsa->vdev.mdev;
 		struct device *dev = mdev_dev(mdev);
 
 		if (wq_pasid_enable) {
 			gpasid = wqcfg->c.c_fields.pasid;
-			priv = wqcfg->c.c_fields.u_s;
+			priv = wqcfg->c.c_fields.priv;
 			wq_pasid = intel_iommu_get_host_pasid(dev, gpasid);
 		} else {
 			wq_pasid = intel_iommu_get_domain_pasid(dev);
@@ -742,36 +817,167 @@ static void wq_enable (struct vdcm_dsa *vdsa, int wq_id)
 		}
 
 		if (wq_pasid >= 0) {
+			c_val = c_val & ~0x3fffff00;
+			c_val |= (priv << 29) | (1 << 28) | (wq_pasid << 8);
+
 			printk("program pasid %d:%d in wq %d\n", gpasid,
 							wq_pasid, wq->idx);
-			dsa_wq_set_pasid(vdsa->dsa, wq->idx, wq_pasid, priv);
+			dsa_change_wq_reg(vdsa->dsa, wq->idx, 8, c_val);
+			dsa_enable_wq(vdsa->dsa, wq->idx);
 		} else
 			printk("pasid setup failed wq %d gpasid %d\n",
 							wq->idx, gpasid);
+	} else if (dedicated == 0 && wqcfg->f.f_fields.mode_support) {
+		dsa_change_wq_reg(vdsa->dsa, wq->idx, 8, c_val);
+		dsa_enable_wq(vdsa->dsa, wq->idx);
 	}
+	wqcfg->f.f_fields.wq_state = 1;
 
-	cmpxchg(&wqcfg->d.val, 1U, 3u);
+	dsa_complete_command(vdsa, 0x0);
 }
 
-static void wq_disable (struct vdcm_dsa *vdsa, int wq_id)
+static void vdsa_drain_pasid (struct vdcm_dsa *vdsa, int pasid)
+{
+	dsa_drain_pasid(vdsa->dsa, pasid, 0);
+	dsa_complete_command(vdsa, 0x0);
+}
+
+static void vdsa_abort_pasid (struct vdcm_dsa *vdsa, int pasid)
+{
+	dsa_drain_pasid(vdsa->dsa, pasid, 1);
+	dsa_complete_command(vdsa, 0x0);
+}
+
+static void vdsa_wq_disable (struct vdcm_dsa *vdsa, int wq_id_mask)
 {
 	struct dsa_work_queue *wq;
 	volatile struct dsa_work_queue_reg *wqcfg;
 	struct vdcm_dsa_pci_bar0 *bar0 = &vdsa->bar0;
-	int dedicated;
+	int wq_id = 0;
 
-	wq = vdsa->wqs[wq_id];
+	/* Assuming the guest doesn't have more than 16 WQs */
 
-	printk("vdsa disable wq %u:%u\n", wq_id, wq->idx);
+	while (wq_id_mask && wq_id < 16) {
+		if (!(wq_id_mask & 1)) {
+			wq_id_mask >>= 1;
+			wq_id++;
+			continue;
+		}
+		if (wq_id >= vdsa->num_wqs)
+			return dsa_complete_command(vdsa, 0x2);
 
-	wqcfg = (struct dsa_work_queue_reg*)&bar0->wq_ctrl_regs[wq_id * 16];
+		wq = vdsa->wqs[wq_id];
 
-	dedicated = wqcfg->c.c_fields.mode;
+		printk("vdsa disable wq %u:%u\n", wq_id, wq->idx);
 
-	if (dedicated && dsa_wq_disable_pasid(vdsa->dsa, wq->idx))
-		printk("vdsa disable_wq %d failed\n", wq->idx);
+		wqcfg = (struct dsa_work_queue_reg*)&bar0->wq_ctrl_regs[wq_id * 32];
 
-	cmpxchg(&wqcfg->d.val, 2U, 0);
+		if (wq->dedicated && dsa_disable_wq(vdsa->dsa, wq->idx))
+			printk("vdsa disable_wq %d failed\n", wq->idx);
+
+		wqcfg->f.f_fields.wq_state = 0;
+
+		wq_id_mask >>= 1;
+		wq_id++;
+	}
+	dsa_complete_command(vdsa, 0x0);
+}
+
+static void vdsa_alloc_int_handle (struct vdcm_dsa *vdsa, int vidx)
+{
+	bool ims = (vidx >> 16) & 1;
+	u32 cmdsts;
+
+	vidx = vidx & 0xffff;
+
+	printk("allocating int handle for %x\n", vidx);
+
+	if (vidx == 0 || vidx > vdsa->num_wqs)
+		return dsa_complete_command(vdsa, 0x41);
+
+	if (ims) {
+		printk("IMS allocation is not implemented yet\n");
+		return dsa_complete_command(vdsa, 0x42);
+	} else {
+		vidx--; /* MSIX idx 0 is a slow path interrupt */
+		cmdsts = (vdsa->ims_index[vidx] << 8);
+		return dsa_complete_command(vdsa, cmdsts);
+	}
+}
+
+
+static void vdsa_do_command (struct vdcm_dsa *vdsa, u32 val)
+{
+	volatile union dsa_command_reg *reg = (union dsa_command_reg *)
+				&vdsa->bar0.cap_ctrl_regs[DSA_CMD_OFFSET];
+
+	reg->val = val;
+	printk("do_cmd: %x\n", reg->val);
+	switch (reg->fields.cmd) {
+		case 1:
+			vdsa_enable(vdsa);
+			break;
+		case 2:
+			vdsa_disable(vdsa);
+			break;
+		case 3:
+			//drain_all();
+			break;
+		case 4:
+			//abort_all();
+			break;
+		case 5:
+			//vdsa_reset();
+			break;
+		case 6:
+			vdsa_wq_enable(vdsa, reg->fields.operand);
+			break;
+		case 7:
+			vdsa_wq_disable(vdsa, reg->fields.operand);
+			break;
+		case 8:
+			//drain_wq(val & 0xff, //abort);
+			break;
+		case 11:
+			vdsa_drain_pasid(vdsa, reg->fields.operand);
+			break;
+		case 12:
+			vdsa_abort_pasid(vdsa, reg->fields.operand);
+			break;
+		case 13:
+			vdsa_alloc_int_handle(vdsa, reg->fields.operand);
+			break;
+	}
+}
+
+static int vdsa_setup_ims_entry (struct vdcm_dsa *vdsa, int ims_idx, u32 val)
+{
+	struct mdev_device *mdev = vdsa->vdev.mdev;
+	struct device *dev = mdev_dev(mdev);
+	int pasid;
+	bool paside;
+	unsigned int ims_offset;
+
+	paside = (val >> 3) & 1;
+
+	/* Setup the PASID filtering */
+	if (paside) {
+		pasid = (val >> 12) & 0xfffff;
+		/* translate guest pasid to host pasid */
+		pasid = intel_iommu_get_host_pasid(dev, pasid);
+	} else
+		pasid = intel_iommu_get_domain_pasid(dev);
+
+	if (pasid >= 0) {
+		val = (1 << 3) | (pasid << 12) | (val & 7);
+		ims_offset = vdsa->dsa->ims_offset +
+					vdsa->ims_index[ims_idx] * 0x10;
+		writel(val, vdsa->dsa->reg_base + ims_offset + 12);
+	} else
+		printk("pasid setup failed for ims entry %lld\n",
+					vdsa->ims_index[ims_idx]);
+
+	return 0;
 }
 
 static int vdcm_vdsa_mmio_write(struct vdcm_dsa *vdsa, u64 pos, void *buf,
@@ -797,26 +1003,6 @@ static int vdcm_vdsa_mmio_write(struct vdcm_dsa *vdsa, u64 pos, void *buf,
 			memcpy(&bar0->cap_ctrl_regs[offset], buf, size);
 			break;
 
-		case DSA_ENABLE_OFFSET: {
-			u32 val = get_reg_val(buf, size);
-			volatile u32 *reg = (u32 *)&bar0->cap_ctrl_regs[offset];
-			u32 old_val = *reg;
-			int vdev_state = old_val & 3;
-			bool enable = val & 1;
-			bool reset = val & 4;
-
-			if (reset) {
-				printk("dsa reset control not implemented\n");
-			} else if (vdev_state == 0 && enable == 1) {
-				if (cmpxchg(reg, old_val, 1) == 0)
-					vdsa_enable(vdsa);
-			} else if (vdev_state == 3 && enable == 0) {
-				if (cmpxchg(reg, old_val, 2) == 3)
-					vdsa_disable(vdsa);
-			}
-			break;
-		}
-
 		case DSA_INTCAUSE_OFFSET:
 			bar0->cap_ctrl_regs[offset] &=
 					~(get_reg_val(buf, 1) & 0x0f);
@@ -825,59 +1011,37 @@ static int vdcm_vdsa_mmio_write(struct vdcm_dsa *vdsa, u64 pos, void *buf,
 		/* Abort/Drain TBD */
 		case DSA_CMD_OFFSET:
 			if (size == 4) {
-				volatile union dsa_command_reg *reg = (union
-					dsa_command_reg *)&bar0->cap_ctrl_regs[
-						DSA_CMD_OFFSET];
-				u32 val = get_reg_val(buf, size) |
-							reg->fields.status;
-				u32 old_val = reg->val;
+				volatile long unsigned int *cmdsts =
+					(long unsigned int *)
+					&bar0->cap_ctrl_regs[DSA_CMDSTS_OFFSET];
+				u32 val = get_reg_val(buf, size);
 
-				printk("dsa cmd write %08x (prev: %08x)\n",
-					val, old_val);
+				if (test_and_set_bit(31, cmdsts) == 0) {
+					*(u32 *)cmdsts = 1 << 31;
 
-				if ((old_val & 0x80000000) == 0 &&
-					cmpxchg(&reg->val, old_val, val)) {
-					bool abort = (val >> 28) & 1U;
-					switch ((val >> 24) & 0x0f) {
-						case 1:
-							//drain_all(abort);
-							break;
-						case 2:
-							dsa_drain_pasid(
-							vdsa->dsa, val &
-							0xfffff, abort);
-							break;
-						case 3:
-							//drain_wq(val & 0xff,
-								//abort);
-							break;
-					}
-				}
-				val &= ~0x80000000;
-				printk("cmd completion %08x\n", val);
-				if (val & DSA_CMD_INT_MASK) {
-					bar0->cap_ctrl_regs[DSA_INTCAUSE_OFFSET]
-							|= 4U;
-
-					vdsa_send_interrupt(vdsa, 0);
+					vdsa_do_command(vdsa, val);
 				}
 			}
 			break;
-		/* W1C */
 		case DSA_SWERR_OFFSET:
-		case DSA_HWERR_OFFSET:
+		case DSA_HWERR_OFFSET: {
+			/* W1C */
 			bar0->cap_ctrl_regs[offset] &=
-						~(get_reg_val(buf, 1) & 3);
+					~(get_reg_val(buf, 1) & 3);
 			break;
-
-		case DSA_WQCFG_OFFSET ... DSA_WQCFG_OFFSET + VDSA_WQ_CTRL_SZ - 1: {
+		}
+		case VDSA_WQCFG_OFFSET ... VDSA_WQCFG_OFFSET + VDSA_WQ_CTRL_SZ - 1: {
 			struct dsa_work_queue_reg *wqcfg;
-			int wq_id = (offset - DSA_WQCFG_OFFSET) / 0x10;
-			int subreg = offset & 0x0c;
+			int wq_id = (offset - VDSA_WQCFG_OFFSET) / 0x20;
+			struct dsa_work_queue *wq;
+			int subreg = offset & 0x1c;
 			u32 new_val;
 
+			if (wq_id >= vdsa->num_wqs)
+				break;
+			wq = vdsa->wqs[wq_id];
 			wqcfg = (struct dsa_work_queue_reg *)
-					&bar0->wq_ctrl_regs[wq_id * 0x10];
+					&bar0->wq_ctrl_regs[wq_id * 0x20];
 			if (size >= 4) {
 				new_val = get_reg_val(buf, 4);
 			} else {
@@ -889,6 +1053,8 @@ static int vdcm_vdsa_mmio_write(struct vdcm_dsa *vdsa, u64 pos, void *buf,
 						tmp1 = wqcfg->c.val; break;
 					case 12:
 						tmp1 = wqcfg->d.val; break;
+					case 16:
+						tmp1 = wqcfg->e.val; break;
 				}
 				tmp2 = get_reg_val(buf, size);
 				shift = (offset & 0x03U) * 8;
@@ -896,78 +1062,83 @@ static int vdcm_vdsa_mmio_write(struct vdcm_dsa *vdsa, u64 pos, void *buf,
 				new_val = (tmp1 & ~mask) | (tmp2 << shift);
 			}
 			switch (subreg) {
-				case 4: {
-					u16 threshold = new_val & 0xffff;
-					wqcfg->b.b_fields.threshold = threshold;
-					if (threshold >
-						wqcfg->a.a_fields.wq_size) {
-						volatile u32 *r = &wqcfg->d.val;
-						u32 wq_state = *r;
-
-						switch (wq_state) {
-						case 1:
-							if (cmpxchg(r, 1U, 4U << 8))
-							break;
-							/* fall through */
-						case 3:
-							if (cmpxchg(r, 3U, 4U << 8))
-								wq_disable(vdsa, wq_id);
-							break;
-						default:
-							break;
-						}
+				case 4:
+					if (wqcfg->f.f_fields.mode_support) {
+						u16 threshold = new_val &0xffff;
+						wqcfg->b.b_fields.threshold =
+								threshold;
+						/* write the threshold to wq */
+						dsa_change_wq_reg(vdsa->dsa,
+							wq->idx, 4, threshold);
 					}
 					break;
-				}
 
 				case 8: {
-					u32 wq_state = wqcfg->d.val & 3u;
-					if (wq_state == 0) {
-						/* FIXME: Which fields guest is
-						 * allowed to write? */
-						wqcfg->c.val &= ~0xcfffff00;
+					if (wqcfg->f.f_fields.wq_state == 0 &&
+					wqcfg->f.f_fields.mode_support) {
+						wqcfg->c.val &= ~0x3fffff01;
 						wqcfg->c.val |= new_val &
-								0xcfffff00;
+								0x3fffff01;
+						/* Will be written to phys wq 
+						 * when wq is enabled */
 					}
-					if (size <= 4)
-						break;
-					new_val = get_reg_val(buf + 4, size+4);
-					/* fall through */
+					break;
 				}
 
-				case 12: {
-					volatile u32 *reg = &wqcfg->d.val;
-					u32 old_val = *reg;
-					int wq_state = old_val & 3U;
-					bool enable = new_val & 1U;
-
-					if (wq_state == 0 && enable == 1) {
-						if (cmpxchg(reg, old_val, 1U) == 0) {
-							wq_enable(vdsa, wq_id);
-						}
-					}
-					else if (wq_state == 3 && enable == 0) {
-						if (cmpxchg(reg, old_val, 2U) == 3) {
-							wq_disable(vdsa, wq_id);
-						}
+				case 16: {
+					if (wqcfg->f.f_fields.mode_support) {
+						wqcfg->e.val = new_val;
+						if (wqcfg->e.e_fields.int_en)
+							wq->occu_int_req = true;
+						/* Write the val to phys wq */
+						dsa_change_wq_reg(vdsa->dsa,
+							wq->idx, 16, new_val);
 					}
 					break;
 				}
 			}
 			break;
 		}
-		case DSA_MSIX_TABLE_OFFSET ... DSA_MSIX_TABLE_OFFSET + VDSA_MSIX_TBL_SZ - 1: {
-			int index = (offset - DSA_MSIX_TABLE_OFFSET) / 0x10;
-			u8 *msix_entry = &bar0->msix_table[index];
+		case VDSA_MSIX_TABLE_OFFSET ... VDSA_MSIX_TABLE_OFFSET + VDSA_MSIX_TBL_SZ - 1: {
+			int index = (offset - VDSA_MSIX_TABLE_OFFSET) / 0x10;
+			u8 *msix_entry = &bar0->msix_table[index * 0x10];
+			u8 *msix_perm = &bar0->msix_perm_table[index * 8];
 			memcpy(msix_entry + (offset & 0x0f), buf, size);
 			/* check mask and pba */
-			if ((msix_entry[12] & 1) == 0 &&
-					(bar0->msix_pba & (1ULL << index))) {
-				bar0->msix_pba &= ~(1ull << index);
-				vdsa_send_interrupt(vdsa, index);
-			}
+			if ((msix_entry[12] & 1) == 0) { 
+				*(u32 *)msix_perm &= ~3U;
+				if (test_and_clear_bit(index,
+					(unsigned long *)&bar0->msix_pba))
+					vdsa_send_interrupt(vdsa, index);
+			} else
+				*(u32 *)msix_perm |= 1;
 			break;
 		}
+		case VDSA_MSIX_PERM_OFFSET ... VDSA_MSIX_PERM_OFFSET + VDSA_MSIX_PERM_TBL_SZ - 1:
+			if ((offset & 7) == 0 && size == 4) {
+				int index = (offset-VDSA_MSIX_PERM_OFFSET) / 8;
+				u32 *msix_perm =
+					(u32 *)&bar0->msix_perm_table[index*8];
+				u8 *msix_entry = &bar0->msix_table[index*0x10];
+				u32 val = get_reg_val(buf, size) & 0xfffff00d;
+
+				if (index > 0)
+					vdsa_setup_ims_entry(vdsa, index-1,val);
+
+				if (val & 1) {
+					msix_entry[12] |= 1;
+					if (bar0->msix_pba & (1ULL << index))
+						val |= 2;
+				} else {
+					msix_entry[12] &= ~1u;
+					if (test_and_clear_bit(index, (unsigned
+						long *)&bar0->msix_pba))
+						vdsa_send_interrupt(vdsa,index);
+				}
+				*msix_perm = val;
+			}
+			break;
+		/* TODO: IMS Table */
 	}
 
 	return 0;
@@ -1568,15 +1739,14 @@ write_err:
 
 static int vdcm_dsa_mmap(struct mdev_device *mdev, struct vm_area_struct *vma)
 {
-	unsigned int index, offset;
-	u64 virtaddr;
-	unsigned long req_size, pgoff = 0;
+	unsigned int index, wq_idx;
+	unsigned long req_size, pgoff = 0, offset;
 	pgprot_t pg_prot;
 	struct vdcm_dsa *vdsa = mdev_get_drvdata(mdev);
 	struct dsadma_device *dsa = vdsa->dsa;
 	struct dsa_work_queue *wq;
-	phys_addr_t base;
-	uint32_t priv_offset;
+	bool virt_limited, phys_limited;
+	phys_addr_t base = pci_resource_start(dsa->pdev, DSA_WQ_BAR);
 
 	index = vma->vm_pgoff >> (VFIO_PCI_OFFSET_SHIFT - PAGE_SHIFT);
 	offset = (vma->vm_pgoff << PAGE_SHIFT) & 
@@ -1591,7 +1761,6 @@ static int vdcm_dsa_mmap(struct mdev_device *mdev, struct vm_area_struct *vma)
 		return -EINVAL;
 
 	pg_prot = vma->vm_page_prot;
-	virtaddr = vma->vm_start;
 	req_size = vma->vm_end - vma->vm_start;
 
 	if (req_size != PAGE_SIZE) {
@@ -1599,36 +1768,40 @@ static int vdcm_dsa_mmap(struct mdev_device *mdev, struct vm_area_struct *vma)
 		return -EINVAL;
 	}
 
-	priv_offset = vdsa->num_wqs * PAGE_SIZE;
-	if (offset < priv_offset) {
-		/* mapping a non-privileged portal */
-		int idx = (offset - VDSA_BAR2_WQ_NP_OFFSET) >> PAGE_SHIFT;
-		wq = vdsa->wqs[idx];
-
-		if (wq == NULL) {
-			printk("wq null %x\n", offset);
-			return -EINVAL;
-		}
-		base = pci_resource_start(dsa->pdev, DSA_WQ_BAR);
-		pgoff = (base + (wq->idx << PAGE_SHIFT)) >> PAGE_SHIFT;
-	} else {
-		/* mapping a privileged portal to a guest WQ portal */
-		int idx = (offset - priv_offset) >> PAGE_SHIFT;
-		wq = vdsa->wqs[idx];
-
-		if (wq == NULL) {
-			printk("p wq null %x\n", offset);
-			return -EINVAL;
-		}
-
-		offset = vdsa->ims_index[idx] * dsa->max_wqs + wq->idx;
-		base = pci_resource_start(dsa->pdev, DSA_GUEST_WQ_BAR);
-		pgoff = (base + (offset << PAGE_SHIFT)) >> PAGE_SHIFT;
+	wq_idx = offset >> (PAGE_SHIFT + 2); 
+	if (wq_idx >= vdsa->num_wqs) {
+		printk("mapping invalid wq %d off %lx\n", wq_idx, offset);
+		return -EINVAL;
 	}
-	printk("mmap %llx %lx %lx %lx\n", virtaddr, pgoff, req_size, pgprot_val(pg_prot));
+
+	wq = vdsa->wqs[wq_idx];
+
+	if (wq == NULL) {
+		printk("wq null %lx\n", offset);
+		return -EINVAL;
+	}
+
+	virt_limited = ((offset >> PAGE_SHIFT) & 0x3) == 1;
+	phys_limited = true;
+
+	if (!virt_limited && wq->dedicated)
+		phys_limited = false;
+
+	/* We always map IMS portals to the guest */
+	pgoff = (base + dsa_get_wq_portal_offset(wq->idx, true, phys_limited))
+					>> PAGE_SHIFT;
+
+	printk("mmap offset %lx %lx %lx %lx %lx\n", offset, vma->vm_start, pgoff, req_size,
+					pgprot_val(pg_prot));
 	vma->vm_private_data = mdev;
 	vma->vm_pgoff = pgoff;
-	return remap_pfn_range(vma, virtaddr, pgoff, req_size, pg_prot);
+	/* FIXME: Currently we map the real physical portal to the VM. This is
+	 * not ok for SWQ because the physical SWQs are enabled and the guest
+	 * driver can submit work to SWQ without enabling the virtual SWQ.
+	 * Although this is a minor bug, a better way to do this would be to
+	 * initially map a dummy DRAM page for the SWQ and change the mapping to
+	 * real physical portals when guest driver enables the virtual SWQ. */
+	return remap_pfn_range(vma, vma->vm_start, pgoff, req_size, pg_prot);
 }
 
 static int vdcm_dsa_get_irq_count(struct vdcm_dsa *vdsa, int type)
@@ -1636,12 +1809,6 @@ static int vdcm_dsa_get_irq_count(struct vdcm_dsa *vdsa, int type)
 	if (type == VFIO_PCI_MSI_IRQ_INDEX || type == VFIO_PCI_MSIX_IRQ_INDEX) {
 		return vdsa->num_wqs + 1;
 	}
-
-	return 0;
-}
-
-static int vdsa_setup_ims_entry (struct vdcm_dsa *vdsa, int msix_idx)
-{
 
 	return 0;
 }
@@ -1687,7 +1854,7 @@ static int vdcm_dsa_set_msix_trigger(struct vdcm_dsa *vdsa,
 			 * entry
 			 */
 			if (i) {
-				ret = vdsa_setup_ims_entry(vdsa, i - 1);
+				ret = vdsa_setup_ims_entry(vdsa, i - 1, 0);
 				if (ret)
 					return ret;
 			}
@@ -1785,7 +1952,6 @@ static long vdcm_dsa_ioctl(struct mdev_device *mdev, unsigned int cmd,
 		size_t size;
 		int nr_areas = 1;
 		int cap_type_id;
-		uint32_t priv_offset;
 
 		minsz = offsetofend(struct vfio_region_info, offset);
 
@@ -1826,8 +1992,8 @@ static long vdcm_dsa_ioctl(struct mdev_device *mdev, unsigned int cmd,
 					VFIO_REGION_INFO_FLAG_WRITE;
 			info.size = vdsa->bar_size[1];
 
-			/* Every WQ has two areas for non-privileged and
-			 * privileged portals */
+			/* Every WQ has two areas for unlimited and limited
+			 * MSI-X portals. IMS portals are not reported */
 			nr_areas = vdsa->num_wqs * 2;
 
 			size = sizeof(*sparse) +
@@ -1839,13 +2005,12 @@ static long vdcm_dsa_ioctl(struct mdev_device *mdev, unsigned int cmd,
 			sparse->nr_areas = nr_areas;
 			cap_type_id = VFIO_REGION_INFO_CAP_SPARSE_MMAP;
 
-			priv_offset = vdsa->num_wqs * PAGE_SIZE;
 			for (i = 0; i < vdsa->num_wqs; i++) {
-				sparse->areas[2 * i].offset = PAGE_SIZE * i;
+				sparse->areas[2 * i].offset = PAGE_SIZE * i * 4;
 				sparse->areas[2 * i].size = PAGE_SIZE;
 
 				sparse->areas[2 * i + 1].offset =
-					priv_offset + PAGE_SIZE * i;
+					PAGE_SIZE + PAGE_SIZE * i * 4;
 				sparse->areas[2 * i + 1].size = PAGE_SIZE;
 			}
 			break;
