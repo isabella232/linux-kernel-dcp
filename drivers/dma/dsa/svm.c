@@ -263,6 +263,11 @@ static int dsa_ioctl_wq_alloc (struct dsa_context *ctx, unsigned long arg)
 	}
 	/* FIXME: return appropriate capabilities to the user client */
 	req.gencap = dsa->gencap & DSA_CAP_USER_MASK;
+	req.gencap |= (wq->max_xfer_bits << DSA_CAP_MAX_XFER_SHIFT) &
+				DSA_CAP_MAX_XFER_MASK;
+	req.gencap |= (wq->max_batch_bits << DSA_CAP_MAX_BATCH_SHIFT) &
+			DSA_CAP_MAX_BATCH_MASK;
+
 	req.opcap = dsa->opcap;
 	req.wq_idx = wq->idx;
 
