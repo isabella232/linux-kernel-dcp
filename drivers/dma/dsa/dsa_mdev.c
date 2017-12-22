@@ -361,6 +361,9 @@ static void vdsa_mmio_init (struct vdcm_dsa *vdsa)
 			wqcfg->f.val = 0x0;
 			sm = 1;
 		} else {
+			/* Even if the VM converts the DWQ to a SWQ, we keep
+			 * the wq->dedicated to true. We revert it back to DWQ
+			 * after the MDEV is freed (i.e., VM goes away) */
 			wqcfg->f.val = 0x20000000;
 			dm = 1;
 			sm = 1;
@@ -853,11 +856,11 @@ static void vdsa_wq_disable (struct vdcm_dsa *vdsa, int wq_id_mask)
 	struct dsa_work_queue *wq;
 	volatile struct dsa_work_queue_reg *wqcfg;
 	struct vdcm_dsa_pci_bar0 *bar0 = &vdsa->bar0;
-	int wq_id = 0;
+	int wq_id = (wq_id_mask >> 16) & 0xf;
 
-	/* Assuming the guest doesn't have more than 16 WQs */
+	wq_id_mask = wq_id_mask & 0xffff;
 
-	while (wq_id_mask && wq_id < 16) {
+	while (wq_id_mask) {
 		if (!(wq_id_mask & 1)) {
 			wq_id_mask >>= 1;
 			wq_id++;
@@ -872,8 +875,13 @@ static void vdsa_wq_disable (struct vdcm_dsa *vdsa, int wq_id_mask)
 
 		wqcfg = (struct dsa_work_queue_reg*)&bar0->wq_ctrl_regs[wq_id * 32];
 
-		if (wq->dedicated && dsa_disable_wq(vdsa->dsa, wq->idx))
+		if (wqcfg->f.f_fields.wq_state != 1)
+			return dsa_complete_command(vdsa, 0x32);
+
+		if (wq->dedicated && dsa_disable_wq(vdsa->dsa, wq->idx)) {
+			/* FIXME: How should we handle this error? Reset? */
 			printk("vdsa disable_wq %d failed\n", wq->idx);
+		}
 
 		wqcfg->f.f_fields.wq_state = 0;
 
@@ -1461,6 +1469,8 @@ out:
 
 static void vdcm_dsa_reinit(struct vdcm_dsa *vdsa)
 {
+	int i;
+
 	memset(vdsa->cfg, 0, VDSA_MAX_CFG_SPACE_SZ);
 	memset(&vdsa->bar0, 0, sizeof(struct vdcm_dsa_pci_bar0));
 
@@ -1472,6 +1482,39 @@ static void vdcm_dsa_reinit(struct vdcm_dsa *vdsa)
 
 	/* Set the MSI-X table size */
 	vdsa->cfg[VDSA_MSIX_TBL_SZ_OFFSET] = vdsa->num_wqs;
+
+	for (i = 0; i < vdsa->num_wqs; i++) {
+		struct dsa_work_queue *wq = vdsa->wqs[i];
+
+		/* If it was a dwq, revert it back to dwq
+		 * because the VM may have changed it to swq. */
+		if (wq->dedicated) {
+			struct dsa_work_queue_reg wqcfg;
+			unsigned int wq_offset;
+			struct dsadma_device *dsa = vdsa->dsa;
+
+			memset(&wqcfg, 0, sizeof(wqcfg));
+
+			wq_offset = dsa->wq_offset + wq->idx * 32;
+
+			dsa_disable_wq(vdsa->dsa, wq->idx);
+
+			wqcfg.b.b_fields.threshold = wq->threshold;
+			writel(wqcfg.b.val, dsa->reg_base + wq_offset + 4);
+
+			wqcfg.c.val = readl(dsa->reg_base + wq_offset + 8);
+			wqcfg.c.c_fields.mode = 1;
+
+			wqcfg.c.c_fields.priv = 1;
+			wqcfg.c.c_fields.paside = 0;
+
+			writel(wqcfg.c.val, dsa->reg_base + wq_offset + 8);
+
+			wqcfg.e.val = 0;
+			writel(wqcfg.e.val, dsa->reg_base + wq_offset + 16);
+
+		}
+	}
 
 	vdsa_mmio_init(vdsa);
 }

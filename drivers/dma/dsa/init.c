@@ -937,6 +937,10 @@ static int dsa_init_wq (struct dsadma_device *dsa, int wq_idx)
 	wqcfg.d.d_fields.max_batch_bits = wq->max_batch_bits;
 
 	writel(wqcfg.d.val, dsa->reg_base + wq_offset + 12);
+
+	wqcfg.e.val = 0;
+	writel(wqcfg.e.val, dsa->reg_base + wq_offset + 16);
+
 	return 0;
 }
 
@@ -1059,6 +1063,11 @@ static int dsa_get_wq_grp_config(struct dsadma_device *dsa)
 		wq->threshold = wqcfg.b.b_fields.threshold;
 		wq->priority = wqcfg.c.c_fields.priority;
 		wq->mode_support = wqcfg.f.f_fields.mode_support;
+		/* Set the same max_xfer_bits as the GENCAP */
+		wq->max_xfer_bits = dsa->max_xfer_bits;
+		wq->max_batch_bits = (dsa->gencap &
+			DSA_CAP_MAX_BATCH_MASK) >> DSA_CAP_MAX_BATCH_SHIFT;
+
 		wq->idx = i;
 
 		if (dsa->wqs[i].dedicated)
