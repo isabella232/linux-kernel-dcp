@@ -408,7 +408,7 @@ int dsa_check_space_lock(struct dsa_work_queue *wq, int num_descs)
 	if (time_is_before_jiffies(dsa_chan->timer.expires)
 	    && timer_pending(&dsa_chan->timer)) {
 		mod_timer(&dsa_chan->timer, jiffies + COMPLETION_TIMEOUT);
-		dsa_timer_event((unsigned long)dsa_chan);
+		dsa_timer_event(dsa_chan->timer);
 	}
 #endif
 	return -ENOMEM;
@@ -539,8 +539,9 @@ static void dsa_restart_wq(struct dsa_work_queue *wq)
 	__dsa_restart_wq(wq);
 }
 
-void dsa_timer_event(unsigned long data)
+void dsa_timer_event(struct timer_list *t)
 {
+	struct dsa_work_queue *wq = from_timer(wq, t, timer);
 #if 0
 	struct dsa_work_queue *wq = (struct dsa_work_queue *)data;
 	dma_addr_t phys_complete;

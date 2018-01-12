@@ -673,10 +673,9 @@ void dsa_misc_cleanup(unsigned long data);
 
 void dsa_completion_cleanup(struct dsa_completion_ring *dring);
 
-void dsa_timer_event(unsigned long data);
+void dsa_timer_event(struct timer_list *t);
 int dsa_check_space_lock(struct dsa_work_queue *dsa_chan, int num_descs);
 void dsa_issue_pending(struct dma_chan *chan);
-void dsa_timer_event(unsigned long data);
 struct dsa_work_queue *dsa_wq_alloc (struct dsadma_device *dsa, int dedicated);
 void dsa_wq_free (struct dsa_work_queue *wq);
 

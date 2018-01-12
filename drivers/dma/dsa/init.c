@@ -1274,9 +1274,12 @@ skip_wq_config:
 
 		wq->dma_chan.device = dma;
 		dma_cookie_init(&wq->dma_chan);
+#if 0 /* replace timer apis */
 		init_timer(&wq->timer);
 		wq->timer.function = dsa_timer_event;
        		wq->timer.data = (unsigned long)wq;
+#endif
+		timer_setup(&wq->timer, dsa_timer_event, 0);
 
 		if (wq->dedicated && !dsa->num_kern_dwqs && dmachan) {
 			list_add_tail(&wq->dma_chan.device_node,&dma->channels);
