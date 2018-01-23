@@ -1593,11 +1593,11 @@ static int dsa_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	/* Create user interface only if PASID is enabled */
 	if (device->pasid_enabled)
 		err = dsa_usr_add(device);
-
+#if 0 //JP: no mdev for now
 	if (enable_vdsa) {
 		dsa_host_init(device);
 	}
-
+#endif
 	list_add(&device->list, &dsa_devices);
 	num_dsa_devices++;
 
@@ -1614,9 +1614,9 @@ static void dsa_remove(struct pci_dev *pdev)
 	dev_err(&pdev->dev, "Removing dma services\n");
 
 	pci_disable_pcie_error_reporting(pdev);
-
+#if 0
 	dsa_host_exit(device);
-
+#endif
 	if (device->pasid_enabled)
 		misc_deregister(&device->misc_dev);
 
