@@ -25,6 +25,8 @@
 #include <linux/circ_buf.h>
 #include <linux/interrupt.h>
 #include <linux/miscdevice.h>
+#include <linux/workqueue.h>
+#include <linux/iommu.h>
 #include "svm.h"
 #include "registers.h"
 #include "hw.h"
@@ -258,6 +260,12 @@ struct dsa_irq_entry {
 	rwlock_t irq_wait_lock;
 	struct dsadma_device *dsa;
 	int int_src;
+};
+
+struct dsa_fault_ctx {
+	struct page_response_msg msg;
+	struct delayed_work dwork;
+	struct device *dev;
 };
 
 /**
@@ -725,10 +733,11 @@ void dsa_dma_completion_cleanup(struct dsa_completion_ring *dring);
 
 /* Self test routines */
 
-int dsa_dma_self_test (struct dsadma_device *dsa);
+int dsa_dma_self_test (struct dsadma_device *dsa, bool triggerfault);
 
 
 int dsa_host_init(struct dsadma_device *dsa);
 void dsa_host_exit(struct dsadma_device *dsa);
+extern struct mm_struct *tmm;
 
 #endif /* DSADMA_H */

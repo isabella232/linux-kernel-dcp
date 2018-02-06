@@ -1,3 +1,5 @@
+#define DEBUG
+#define pr_fmt(fmt)	KBUILD_MODNAME ": " fmt
 #include <linux/init.h>
 #include <linux/compat.h>
 #include <linux/module.h>
@@ -12,6 +14,9 @@
 #include <linux/poll.h>
 #include <linux/intel-svm.h>
 #include <linux/sched/task.h>
+#include <linux/sched/mm.h>
+#include <linux/iommu.h>
+
 #include "dma.h"
 #include "registers.h"
 #include "hw.h"
@@ -31,6 +36,10 @@ static const struct file_operations dsa_fops = {
 	.mmap           = dsa_fops_mmap,
 	//.poll           = dsa_fops_poll,
 };
+/* For testing page response by guest */
+struct mm_struct *tmm;
+struct iommu_domain *tdomain;
+
 
 int dsa_usr_add(struct dsadma_device *dsa)
 {
@@ -120,6 +129,7 @@ int dsa_drain_pasid (struct dsadma_device *dsa, int pasid, bool abort)
 			break;
 	}
 	spin_unlock(&dsa->cmd_lock);
+	printk("drained pasid %d %d\n", pasid, abort);
 
 	if (i == DRAIN_CMD_TIMEOUT) {
 		printk("drain pasid time out %d\n", pasid);
@@ -129,6 +139,8 @@ int dsa_drain_pasid (struct dsadma_device *dsa, int pasid, bool abort)
 
 	return 0;
 }
+struct workqueue_struct *dsa_fwq; /* Reporting IOMMU fault to device */
+
 
 int dsa_fops_release(struct inode *inode, struct file *filep)
 {
@@ -138,9 +150,15 @@ int dsa_fops_release(struct inode *inode, struct file *filep)
 
 	if (ctx->svm_dev) {
 		dsa_ctx_drain_pasid(ctx, 1);
+		iommu_domain_free(tdomain);
+//		destroy_workqueue(dsa_fwq);
+		dsa_fwq = NULL;
+		printk("DSA fault workqueue destroyed\n");
 
+		iommu_unregister_device_fault_handler(ctx->svm_dev);
 		intel_svm_unbind_mm(ctx->svm_dev, ctx->pasid);
 		put_task_struct(ctx->tsk);
+		tmm = NULL;
 	}
 	if (ctx->wq_idx != DSA_WQ_UNALLOCATED) {
 		struct dsa_work_queue *wq = &ctx->dsa->wqs[ctx->wq_idx];
@@ -165,18 +183,6 @@ static int dsa_ioctl_completion_wait(struct dsa_context *ctx, unsigned long arg)
 	return 0;
 }
 
-static void dsa_svm_fault_cb(struct device *dev, int pasid, u64 addr,
-                              u32 private, int rwxp, int response)
-{
-
-	printk("page fault: pasid %x addr %llx priv %x rwxp %x resp %d\n",
-			pasid, addr, private, rwxp, response);
-}
-
-static struct svm_dev_ops dsa_svm_ops = {
-	.fault_cb = dsa_svm_fault_cb,
-};
-
 static int dsa_ioctl_submit_desc (struct dsa_context *ctx, unsigned long arg)
 {
 	void __user *argp = (void __user *)arg;
@@ -197,6 +203,100 @@ static int dsa_ioctl_submit_desc (struct dsa_context *ctx, unsigned long arg)
 		return -ENOSPC;
 
 	return ret;
+}
+
+static void prq_response(struct work_struct *work)
+{
+	struct dsa_fault_ctx *ctx;
+
+	ctx = container_of(work, struct dsa_fault_ctx, dwork.work);
+
+	pr_debug("PRQ resp gid %d\n", ctx->msg.page_req_group_id);
+	iommu_page_response(ctx->dev, &ctx->msg);
+	pr_debug("PRQ resp gid done %d\n", ctx->msg.page_req_group_id);
+
+	kfree(ctx);
+}
+
+static int dsa_queue_page_response(struct dsadma_device *dsa,
+				struct page_response_msg *msg)
+{
+	int ret;
+	struct dsa_fault_ctx *ctx;
+
+	ctx = kzalloc(sizeof(*ctx), GFP_ATOMIC);
+	if (!ctx)
+		return -ENOMEM;
+	ctx->msg = *msg;
+	ctx->dev = &dsa->pdev->dev;
+	dev_dbg(&dsa->pdev->dev, "Pages faulted in, send response\n");
+	INIT_DELAYED_WORK(&ctx->dwork, prq_response);
+	schedule_delayed_work(&ctx->dwork, 10);
+	dev_dbg(&dsa->pdev->dev, "Page response queued\n");
+	ret = IOMMU_PAGE_RESP_HANDLED;
+	return ret;
+}
+
+static int dsa_iommu_fault_handler(struct iommu_fault_event *event, void *data)
+{
+       struct dsadma_device *dsa = data;
+       int ret = 0;
+       struct vm_area_struct *vma;
+       struct page_response_msg msg;
+
+       dev_dbg(&dsa->pdev->dev,
+               "DSA PRQ reported: type %d, addr %llx, pasid %d, prot %x, last %d\n",
+               event->type, event->addr, event->pasid, event->prot, event->last_req);
+
+       /* prepare page response */
+       if (!tmm) {
+	       dev_err(&dsa->pdev->dev, "No mm to handle page response\n");
+	       return -EINVAL;
+       }
+
+       if (!mmget_not_zero(tmm)) {
+	       pr_err("prq test mm is defunct, no response\n");
+	       return -ENOENT;
+       }
+
+       pr_debug("prepare to handle mm %p\n", tmm);
+
+       down_read(&tmm->mmap_sem);
+       vma = find_extend_vma(tmm, event->addr);
+       if (!vma || event->addr < vma->vm_start) {
+	       pr_debug("invalid vma %p\n", vma);
+	       ret = -EINVAL;
+	       if (vma)
+		       pr_debug("vm_start: 0x%lx\n", vma->vm_start);
+	       goto invalid;
+       }
+       /* fault in pages as if done by the guest */
+       ret = handle_mm_fault(vma, event->addr,
+		       (event->prot & IOMMU_FAULT_WRITE) ? FAULT_FLAG_WRITE : 0);
+       if (ret & VM_FAULT_ERROR) {
+	       dev_err(&dsa->pdev->dev, "Failed handle mm fault\n");
+	       msg.resp_code = IOMMU_PAGE_RESP_INVALID;
+       } else
+	       msg.resp_code = IOMMU_PAGE_RESP_SUCCESS;
+       if (event->last_req) {
+	       /* compose response message */
+	       msg.addr = event->addr;
+	       msg.pasid = event->pasid;
+	       msg.pasid_present = 1;
+	       msg.page_req_group_id = event->page_req_group_id;
+	       ret = dsa_queue_page_response(dsa, &msg);
+#if 0
+	       pr_debug("PRQ resp gid %d\n", msg.page_req_group_id);
+	       return iommu_page_response(&dsa->pdev->dev, &msg);
+	       pr_debug("PRQ resp gid %d done\n", msg.page_req_group_id);
+#endif
+	       /* Tell IOMMU driver no need to respond */
+       }
+invalid:
+       up_read(&tmm->mmap_sem);
+       mmput(tmm);
+
+       return ret;
 }
 
 static int dsa_ioctl_wq_alloc (struct dsa_context *ctx, unsigned long arg)
@@ -225,10 +325,22 @@ static int dsa_ioctl_wq_alloc (struct dsa_context *ctx, unsigned long arg)
 	/* Allocate and bind a PASID */
 	ctx->svm_dev = &dsa->pdev->dev;
 	ctx->tsk = current;
-	get_task_struct(current);
+
+	printk("create test domain\n");
+	tdomain = iommu_domain_alloc(&pci_bus_type);
+	if (!tdomain) {
+		pr_err("alloc domain failed\n");
+		return -ENODEV;
+	}
+	ret = iommu_attach_device(tdomain, ctx->svm_dev);
+	if (ret) {
+		dev_err(ctx->svm_dev, "attach device failed ret %d", ret);
+		iommu_domain_free(tdomain);
+		return ret;
+	}
 
 	printk("calling bind mm\n");
-	ret = intel_svm_bind_mm(ctx->svm_dev, &ctx->pasid, 0, &dsa_svm_ops);
+	ret = intel_svm_bind_mm(ctx->svm_dev, &ctx->pasid, 0);
 	if (ret) {
 		printk("pasid alloc fail: %d\n", ret);
 		ctx->svm_dev = NULL;
@@ -236,8 +348,14 @@ static int dsa_ioctl_wq_alloc (struct dsa_context *ctx, unsigned long arg)
 		put_task_struct(current);
 		goto error_pasid;
 	}
+	dsa_fwq = alloc_ordered_workqueue("dsa_fwq", 0);
+	printk("DSA fault workqueue allocated\n");
+	iommu_register_device_fault_handler(ctx->svm_dev,
+					dsa_iommu_fault_handler, dsa);
 
 	printk("pasid %d\n", ctx->pasid);
+	tmm = get_task_mm(current);
+	printk("record mm of svm_bind_mm %p\n", tmm);
 
 	/* allocate an interrupt for this wq */
 	/* FIXME: save this somewhere? */

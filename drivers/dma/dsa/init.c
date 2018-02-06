@@ -15,6 +15,8 @@
  * the file called "COPYING".
  *
  */
+#define DEBUG
+#define pr_fmt(fmt)	KBUILD_MODNAME ": " fmt
 
 #include <linux/init.h>
 #include <linux/module.h>
@@ -31,6 +33,9 @@
 #include <linux/aer.h>
 #include <linux/fs.h>
 #include <linux/intel-svm.h>
+#include <linux/intel-iommu.h>
+#include <linux/iommu.h>
+#include <linux/sched/mm.h>
 #include "dma.h"
 #include "registers.h"
 #include "hw.h"
@@ -86,6 +91,10 @@ static int selftest = 0;
 module_param(selftest, int, 0644);
 MODULE_PARM_DESC(selftest, "Perform Selftest");
 
+static int triggerfault = 0;
+module_param(triggerfault, int, 0644);
+MODULE_PARM_DESC(triggerfault, "Trigger DMAR fault");
+
 static int dmachan = 1;
 module_param(dmachan, int, 0644);
 MODULE_PARM_DESC(dmachan, "Allocate a WQ for DMAEngine APIs");
@@ -119,7 +128,7 @@ int dsa_enable_wq (struct dsadma_device *dsa, int wq_idx)
 	int iterations = ms_to * 10;
 	union dsa_command_reg cmd;
 	struct dsa_work_queue *wq = &dsa->wqs[wq_idx];
-	u32 cmdsts;
+	u32 cmdsts = 0;
 
 	if (wq->wq_enabled == true)
 		return 0;
@@ -156,7 +165,7 @@ int dsa_disable_wq (struct dsadma_device *dsa, int wq_idx)
 	int iterations = ms_to * 10;
 	union dsa_command_reg cmd;
 	struct dsa_work_queue *wq = &dsa->wqs[wq_idx];
-	u32 cmdsts;
+	u32 cmdsts = 0;
 
 	if (wq->wq_enabled == false)
 		return 0;
@@ -196,13 +205,13 @@ static void dsa_enable_system_pasid(struct dsadma_device *dsa)
         /* Allocate and bind a PASID */
 	flags |= SVM_FLAG_SUPERVISOR_MODE;
 
-        ret = intel_svm_bind_mm(&dsa->pdev->dev, &pasid, flags, NULL);
+        ret = intel_svm_bind_mm(&dsa->pdev->dev, &pasid, flags);
 	if (ret) {
 		printk("sys pasid alloc failed %d: can't use SWQs\n", ret);
 		dsa->pasid_enabled = false;
+		iommu_unregister_device_fault_handler(&dsa->pdev->dev);
 		return;
 	}
-
 	INIT_LIST_HEAD(&ctx->mm_list);
 	INIT_LIST_HEAD(&ctx->wq_list);
 
@@ -245,7 +254,7 @@ static int dsa_disable_device(struct dsadma_device *dsa)
 {
 	int i, err = 0;
 	union dsa_command_reg cmd;
-	u32 cmdsts;
+	u32 cmdsts = 0;
 	struct device *dev = &dsa->pdev->dev;
 	int iterations = ms_to * 10;
 
@@ -280,7 +289,7 @@ static int dsa_enable_wqs(struct dsadma_device *dsa)
 {
 	int i, err = 0;
 	union dsa_command_reg cmd;
-	u32 cmdsts;
+	u32 cmdsts = 0;
 	struct device *dev = &dsa->pdev->dev;
 	int iterations = ms_to * 10;
 
@@ -321,7 +330,7 @@ static int dsa_enable_device(struct dsadma_device *dsa)
 {
 	int i, err = 0;
 	union dsa_command_reg cmd;
-	u32 cmdsts;
+	u32 cmdsts = 0;
 	struct device *dev = &dsa->pdev->dev;
 	int iterations = ms_to * 10;
 
@@ -513,7 +522,7 @@ static int dsa_probe(struct dsadma_device *dsa_dma)
 	printk("DSA device enabled successfully\n");
 
 	if (selftest) {
-		err = dsa_dma_self_test(dsa_dma);
+		err = dsa_dma_self_test(dsa_dma, triggerfault);
 		if (err)
 			goto err_self_test;
 	}
@@ -799,7 +808,7 @@ static int dsa_get_int_handle (struct dsadma_device *dsa, bool ims, int idx)
 	int j;
 	int iterations = ms_to * 10;
 	union dsa_command_reg cmd;
-	u32 cmdsts;
+	u32 cmdsts = 0;
 
 	memset(&cmd, 0, sizeof(cmd));
 

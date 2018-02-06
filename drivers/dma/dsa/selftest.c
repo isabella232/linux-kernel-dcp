@@ -188,7 +188,7 @@ out:
 	return err;
 }
 
-static int dsa_dma_batch_memcpy_self_test(struct dsadma_device *dsa)
+static int dsa_dma_batch_memcpy_self_test(struct dsadma_device *dsa, bool triggerfault)
 {
 	int i, num_descs;
 	u8 *src;
@@ -272,6 +272,10 @@ static int dsa_dma_batch_memcpy_self_test(struct dsadma_device *dsa)
 		init_completion(&cmp);
 		tx->callback = dsa_dma_test_callback;
 		tx->callback_param = &cmp;
+		if (triggerfault) {
+			printk(KERN_ALERT "force dsa unmap to dmar fault\n");
+			dma_unmap_single(dev, dma_dest, buf_size, DMA_FROM_DEVICE);
+		}
 		cookie = tx->tx_submit(tx);
 		if (cookie < 0) {
 			dev_err(dev, "Self-test setup failed, disabling\n");
@@ -1574,7 +1578,7 @@ out:
 }
 
 
-int dsa_dma_self_test (struct dsadma_device *dsa)
+int dsa_dma_self_test (struct dsadma_device *dsa, bool triggerfault)
 {
 	int err;
 
@@ -1586,7 +1590,7 @@ int dsa_dma_self_test (struct dsadma_device *dsa)
 	if (err)
 		goto err_self_test;
 
-	err = dsa_dma_batch_memcpy_self_test(dsa);
+	err = dsa_dma_batch_memcpy_self_test(dsa, triggerfault);
 	if (err)
 		goto err_self_test;
 
