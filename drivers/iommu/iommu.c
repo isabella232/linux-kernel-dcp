@@ -1260,9 +1260,11 @@ int iommu_page_response(struct device *dev,
 		return -EINVAL;
 
 	if (msg->version != IOMMU_PAGE_RESP_VERSION_1 ||
-	    msg->flags & ~IOMMU_PAGE_RESP_PASID_VALID)
+		!(msg->flags & IOMMU_PAGE_RESP_PASID_VALID)) {
+		dev_dbg(dev, "%s:Invalid ver %x: flags %x\n",
+			__func__, msg->version, msg->flags);
 		return -EINVAL;
-
+	}
 	/* Only send response if there is a fault report pending */
 	mutex_lock(&param->fault_param->lock);
 	if (list_empty(&param->fault_param->faults)) {
