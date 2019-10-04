@@ -1232,7 +1232,8 @@ u32 intel_svm_get_pasid(struct iommu_sva *sva)
 	return pasid;
 }
 
-int intel_svm_page_response(struct device *dev,
+int intel_svm_page_response(struct iommu_domain *domain,
+			    struct device *dev,
 			    struct iommu_fault_event *evt,
 			    struct iommu_page_response *msg)
 {
