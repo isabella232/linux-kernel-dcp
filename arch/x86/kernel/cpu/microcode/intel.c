@@ -37,6 +37,8 @@
 #include <asm/setup.h>
 #include <asm/msr.h>
 #include <asm/sgx.h>
+#include <asm/cpu.h>
+
 
 static const char ucode_path[] = "kernel/x86/microcode/GenuineIntel.bin";
 
