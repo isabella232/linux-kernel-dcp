@@ -528,6 +528,35 @@ static enum kernel_gp_hint get_kernel_gp_address(struct pt_regs *regs,
 
 #define GPFSTR "general protection fault"
 
+/*
+ * When a user executes the ENQCMD instruction it will generate #GP
+ * fault if the IA32_PASID MSR has not been set up with a valid PASID.
+ * So if the process has been allocated a PASID (mm->pasid) AND the
+ * IA32_PASID MSR has not been initialized, try to fix this #GP by
+ * initializing the IA32_PASID MSR. If the #GP was for some other reason,
+ * it will trigger again, but this routine will return false and the #GP
+ * will be processed.
+ */
+static bool try_fixup_pasid(void)
+{
+#ifdef CONFIG_INTEL_IOMMU_SVM
+	u32 pasid;
+
+	if (!cpu_feature_enabled(X86_FEATURE_ENQCMD))
+		return false;
+
+	pasid = current->mm->pasid;
+
+	if (pasid != PASID_DISABLED && !current->pasid_activated) {
+		wrmsrl(MSR_IA32_PASID, pasid | MSR_IA32_PASID_VALID);
+		current->pasid_activated = 1;
+
+		return true;
+	}
+#endif
+	return false;
+}
+
 DEFINE_IDTENTRY_ERRORCODE(exc_general_protection)
 {
 	char desc[sizeof(GPFSTR) + 50 + 2*sizeof(unsigned long) + 1] = GPFSTR;
@@ -535,6 +564,9 @@ DEFINE_IDTENTRY_ERRORCODE(exc_general_protection)
 	struct task_struct *tsk;
 	unsigned long gp_addr;
 	int ret;
+
+	if (user_mode(regs) && try_fixup_pasid())
+		return;
 
 	cond_local_irq_enable(regs);
 
