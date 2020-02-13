@@ -49,6 +49,7 @@ config INTEL_IOMMU_SVM
 	select MMU_NOTIFIER
 	select IOASID
 	select IOMMU_SVA_LIB
+	select FREE_PASID_MM_EXIT
 	help
 	  Shared Virtual Memory (SVM) provides a facility for devices
 	  to access DMA resources through process address space by

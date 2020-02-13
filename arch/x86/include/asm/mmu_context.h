@@ -6,6 +6,7 @@
 #include <linux/atomic.h>
 #include <linux/mm_types.h>
 #include <linux/pkeys.h>
+#include <linux/ioasid.h>
 
 #include <trace/events/tlb.h>
 
@@ -119,10 +120,24 @@ static inline int init_new_context(struct task_struct *tsk,
 	return 0;
 }
 
+/* If the mm has a valid PASID, free it on mm exit. */
+static inline void destroy_pasid(struct mm_struct *mm)
+{
+#ifdef CONFIG_FREE_PASID_MM_EXIT
+	if (!cpu_feature_enabled(X86_FEATURE_ENQCMD))
+		return;
+
+	/* Nothing to do if the mm doesn't have a valid PASID. */
+	if (mm->pasid != PASID_DISABLED)
+		ioasid_put(mm->pasid);
+#endif
+}
+
 #define destroy_context destroy_context
 static inline void destroy_context(struct mm_struct *mm)
 {
 	destroy_context_ldt(mm);
+	destroy_pasid(mm);
 }
 
 extern void switch_mm(struct mm_struct *prev, struct mm_struct *next,
