@@ -169,6 +169,14 @@ int copy_thread(unsigned long clone_flags, unsigned long sp, unsigned long arg,
 
 	fpu_clone(p, clone_flags);
 
+	if (static_cpu_has(X86_FEATURE_ENQCMD)) {
+		/*
+		 * Clear the PASID bit in xfeatures so that the PASID MSR
+		 * will be initialized as init state (0).
+		 */
+		p->thread.fpu.fpstate->regs.xsave.header.xfeatures &= ~XFEATURE_MASK_PASID;
+	}
+
 	/* Kernel thread ? */
 	if (unlikely(p->flags & PF_KTHREAD)) {
 		p->thread.pkru = pkru_get_init_value();
