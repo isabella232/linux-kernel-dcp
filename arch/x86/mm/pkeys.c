@@ -452,4 +452,10 @@ void pks_abandon_protections(int pkey)
 }
 EXPORT_SYMBOL_GPL(pks_abandon_protections);
 
+u32 get_current_pkrs(void)
+{
+	return this_cpu_read(pkrs_cache);
+}
+EXPORT_SYMBOL_GPL(get_current_pkrs);
+
 #endif /* CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS */
