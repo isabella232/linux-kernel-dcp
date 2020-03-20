@@ -4,25 +4,30 @@
 Memory Protection Keys
 ======================
 
-Memory Protection Keys for Userspace (PKU aka PKEYs) is a feature
-which is found on Intel's Skylake (and later) "Scalable Processor"
-Server CPUs. It will be available in future non-server Intel parts
-and future AMD processors.
-
-For anyone wishing to test or use this feature, it is available in
-Amazon's EC2 C5 instances and is known to work there using an Ubuntu
-17.04 image.
-
-Memory Protection Keys provides a mechanism for enforcing page-based
+Memory Protection Keys provide a mechanism for enforcing page-based
 protections, but without requiring modification of the page tables
-when an application changes protection domains.  It works by
-dedicating 4 previously ignored bits in each page table entry to a
-"protection key", giving 16 possible keys.
+when an application changes protection domains.
 
-There is also a new user-accessible register (PKRU) with two separate
-bits (Access Disable and Write Disable) for each key.  Being a CPU
-register, PKRU is inherently thread-local, potentially giving each
-thread a different set of protections from every other thread.
+PKeys Userspace (PKU) is a feature which is found on Intel's Skylake "Scalable
+Processor" Server CPUs and later.  And it will be available in future
+non-server Intel parts and future AMD processors.
+
+Protection Keys for Supervisor pages (PKS) is available in the SDM since May
+2020.
+
+pkeys work by dedicating 4 previously Reserved bits in each page table entry to
+a "protection key", giving 16 possible keys.  User and Supervisor pages are
+treated separately.
+
+Protections for each page are controlled with per-CPU registers for each type
+of page User and Supervisor.  Each of these 32-bit register stores two separate
+bits (Access Disable and Write Disable) for each key.
+
+For Userspace the register is user-accessible (rdpkru/wrpkru).  For
+Supervisor, the register (MSR_IA32_PKRS) is accessible only to the kernel.
+
+Being a CPU register, pkeys are inherently thread-local, potentially giving
+each thread an independent set of protections from every other thread.
 
 There are two new instructions (RDPKRU/WRPKRU) for reading and writing
 to the new register.  The feature is only available in 64-bit mode,
@@ -30,8 +35,11 @@ even though there is theoretically space in the PAE PTEs.  These
 permissions are enforced on data access only and have no effect on
 instruction fetches.
 
-Syscalls
-========
+For kernel space rdmsr/wrmsr are used to access the kernel MSRs.
+
+
+Syscalls for user space keys
+============================
 
 There are 3 system calls which directly interact with pkeys::
 
@@ -98,3 +106,80 @@ with a read()::
 The kernel will send a SIGSEGV in both cases, but si_code will be set
 to SEGV_PKERR when violating protection keys versus SEGV_ACCERR when
 the plain mprotect() permissions are violated.
+
+
+Kernel API for PKS support
+==========================
+
+Similar to user space pkeys, supervisor pkeys allow additional protections to
+be defined for a supervisor mappings.  Unlike user space pkeys, violations of
+these protections result in a a kernel oops.
+
+Supervisor Memory Protection Keys (PKS) is a feature which is found on Intel's
+Sapphire Rapids (and later) "Scalable Processor" Server CPUs.  It will also be
+available in future non-server Intel parts.
+
+Also qemu has some support as well: https://www.qemu.org/2021/04/30/qemu-6-0-0/
+
+Kernel users intending to use PKS support should depend on
+ARCH_HAS_SUPERVISOR_PKEYS, and add their config to ARCH_ENABLE_SUPERVISOR_PKEYS
+to turn on this support within the core.
+
+Users reserve a key value by adding an entry to the enum pks_pkey_consumers and
+defining the initial protections in the consumer_defaults[] array.
+
+For example to configure a key for 'MY_FEATURE' with a default of Write
+Disabled.
+
+::
+
+        enum pks_pkey_consumers
+        {
+	        PKS_KEY_DEFAULT,
+	        PKS_KEY_MY_FEATURE,
+	        PKS_KEY_NR_CONSUMERS
+        }
+
+        ...
+        consumer_defaults[PKS_KEY_DEFAULT]     = 0;
+        consumer_defaults[PKS_KEY_MY_FEATURE]  = PKR_DISABLE_WRITE;
+        ...
+
+The following interface is used to manipulate the 'protection domain' defined
+by a pkey within the kernel.  Setting a pkey value in a supervisor PTE adds
+this additional protection to the page.
+
+::
+
+        #define PAGE_KERNEL_PKEY(pkey)
+        #define _PAGE_KEY(pkey)
+        bool pks_enabled(void);
+        void pks_mk_noaccess(int pkey);
+        void pks_mk_readonly(int pkey);
+        void pks_mk_readwrite(int pkey);
+
+pks_enabled() allows users to know if PKS is configured and available on the
+current running system.
+
+Kernel users must set the pkey in the page table entries for the mappings they
+want to protect.  This can be done with PAGE_KERNEL_PKEY() or _PAGE_KEY().
+
+The pks_mk*() family of calls allow indinvidual threads to change the
+protections for the domain identified by the pkey parameter.  3 states are
+available: pks_mk_noaccess(), pks_mk_readonly(), and pks_mk_readwrite() which
+set the access to none, read, and read/write respectively.
+
+The interface sets (Access Disabled (AD=1)) for all keys not in use.
+
+It should be noted that the underlying WRMSR(MSR_IA32_PKRS) is not serializing
+but still maintains ordering properties similar to WRPKRU.  Thus it is safe to
+immediately use a mapping when the pks_mk*() functions return.
+
+Older versions of the SDM on PKRS may be wrong with regard to this
+serialization.  The text should be the same as that of WRPKRU.  From the WRPKRU
+text:
+
+	WRPKRU will never execute transiently. Memory accesses
+	affected by PKRU register will not execute (even transiently)
+	until all prior executions of WRPKRU have completed execution
+	and updated the PKRU register.

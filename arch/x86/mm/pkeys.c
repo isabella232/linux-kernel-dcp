@@ -3,6 +3,9 @@
  * Intel Memory Protection Keys management
  * Copyright (c) 2015, Intel Corporation.
  */
+#undef pr_fmt
+#define pr_fmt(fmt) "x86/pkeys: " fmt
+
 #include <linux/debugfs.h>		/* debugfs_create_u32()		*/
 #include <linux/mm_types.h>             /* mm_struct, vma, etc...       */
 #include <linux/pkeys.h>                /* PKEY_*                       */
@@ -10,6 +13,7 @@
 
 #include <asm/cpufeature.h>             /* boot_cpu_has, ...            */
 #include <asm/mmu_context.h>            /* vma_pkey()                   */
+#include <asm/pks.h>
 
 int __execute_only_pkey(struct mm_struct *mm)
 {
@@ -300,5 +304,67 @@ void pks_init_task(struct task_struct *task)
 {
 	task->thread.saved_pkrs = pkrs_init_value;
 }
+
+bool pks_enabled(void)
+{
+	return cpu_feature_enabled(X86_FEATURE_PKS);
+}
+
+/*
+ * Do not call this directly, see pks_mk*() below.
+ *
+ * @pkey: Key for the domain to change
+ * @protection: protection bits to be used
+ *
+ * Protection utilizes the same protection bits specified for User pkeys
+ *     PKEY_DISABLE_ACCESS
+ *     PKEY_DISABLE_WRITE
+ *
+ */
+static inline void pks_update_protection(int pkey, unsigned long protection)
+{
+	current->thread.saved_pkrs = update_pkey_val(current->thread.saved_pkrs,
+						     pkey, protection);
+	pkrs_write_current();
+}
+
+/**
+ * pks_mk_noaccess() - Disable all access to the domain
+ * @pkey the pkey for which the access should change.
+ *
+ * Disable all access to the domain specified by pkey.  This is not a global
+ * update and only affects the current running thread.
+ */
+void pks_mk_noaccess(int pkey)
+{
+	pks_update_protection(pkey, PKEY_DISABLE_ACCESS);
+}
+EXPORT_SYMBOL_GPL(pks_mk_noaccess);
+
+/**
+ * pks_mk_readonly() - Make the domain Read only
+ * @pkey the pkey for which the access should change.
+ *
+ * Allow read access to the domain specified by pkey.  This is not a global
+ * update and only affects the current running thread.
+ */
+void pks_mk_readonly(int pkey)
+{
+	pks_update_protection(pkey, PKEY_DISABLE_WRITE);
+}
+EXPORT_SYMBOL_GPL(pks_mk_readonly);
+
+/**
+ * pks_mk_readwrite() - Make the domain Read/Write
+ * @pkey the pkey for which the access should change.
+ *
+ * Allow all access, read and write, to the domain specified by pkey.  This is
+ * not a global update and only affects the current running thread.
+ */
+void pks_mk_readwrite(int pkey)
+{
+	pks_update_protection(pkey, 0);
+}
+EXPORT_SYMBOL_GPL(pks_mk_readwrite);
 
 #endif /* CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS */
