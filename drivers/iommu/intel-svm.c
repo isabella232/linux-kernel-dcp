@@ -722,142 +722,156 @@ static bool is_canonical_address(u64 addr)
 	return (((saddr << shift) >> shift) == saddr);
 }
 
+static void process_single_prq(struct intel_iommu *iommu,
+			       struct page_req_dsc *req)
+{
+	int result = QI_RESP_FAILURE;
+	struct intel_svm_dev *sdev;
+	struct vm_area_struct *vma;
+	struct intel_svm *svm;
+	struct qi_desc resp;
+	vm_fault_t ret;
+	u64 address;
+
+	address = (u64)req->addr << VTD_PAGE_SHIFT;
+	if (!req->pasid_present) {
+		pr_err("%s: Page request without PASID: %08llx %08llx\n",
+		       iommu->name, ((unsigned long long *)req)[0],
+		       ((unsigned long long *)req)[1]);
+		goto no_pasid;
+	}
+
+	rcu_read_lock();
+	svm = ioasid_find(NULL, req->pasid, NULL);
+	/*
+	 * It *can't* go away, because the driver is not permitted
+	 * to unbind the mm while any page faults are outstanding.
+	 * So we only need RCU to protect the internal idr code.
+	 */
+	rcu_read_unlock();
+
+	if (IS_ERR_OR_NULL(svm)) {
+		pr_err("%s: Page request for invalid PASID %d: %08llx %08llx\n",
+		       iommu->name, req->pasid, ((unsigned long long *)req)[0],
+		       ((unsigned long long *)req)[1]);
+		goto no_pasid;
+	}
+
+	result = QI_RESP_INVALID;
+	/* Since we're using init_mm.pgd directly, we should never take
+	 * any faults on kernel addresses. */
+	if (!svm->mm)
+		goto bad_req;
+
+	/* If address is not canonical, return invalid response */
+	if (!is_canonical_address(address))
+		goto bad_req;
+
+	/* If the mm is already defunct, don't handle faults. */
+	if (!mmget_not_zero(svm->mm))
+		goto bad_req;
+
+	down_read(&svm->mm->mmap_sem);
+	vma = find_extend_vma(svm->mm, address);
+	if (!vma || address < vma->vm_start)
+		goto invalid;
+
+	if (access_error(vma, req))
+		goto invalid;
+
+	ret = handle_mm_fault(vma, address,
+			      req->wr_req ? FAULT_FLAG_WRITE : 0);
+	if (ret & VM_FAULT_ERROR)
+		goto invalid;
+
+	result = QI_RESP_SUCCESS;
+invalid:
+	up_read(&svm->mm->mmap_sem);
+	mmput(svm->mm);
+bad_req:
+	/* Accounting for major/minor faults? */
+	rcu_read_lock();
+	list_for_each_entry_rcu(sdev, &svm->devs, list) {
+		if (sdev->sid == req->rid)
+			break;
+	}
+
+	/* Other devices can go away, but the drivers are not permitted
+	 * to unbind while any page faults might be in flight. So it's
+	 * OK to drop the 'lock' here now we have it. */
+	rcu_read_unlock();
+
+	if (WARN_ON(&sdev->list == &svm->devs))
+		sdev = NULL;
+
+	if (sdev && sdev->ops && sdev->ops->fault_cb) {
+		int rwxp = (req->rd_req << 3) | (req->wr_req << 2) |
+			(req->exe_req << 1) | (req->pm_req);
+		sdev->ops->fault_cb(sdev->dev, req->pasid, req->addr,
+				    req->priv_data, rwxp, result);
+	}
+
+	/* We get here in the error case where the PASID lookup failed,
+	   and these can be NULL. Do not use them below this point! */
+	sdev = NULL;
+	svm = NULL;
+no_pasid:
+	if (req->lpig || req->priv_data_present) {
+		/*
+		 * Per VT-d spec. v3.0 ch7.7, system software must
+		 * respond with page group response if private data
+		 * is present (PDP) or last page in group (LPIG) bit
+		 * is set. This is an additional VT-d feature beyond
+		 * PCI ATS spec.
+		 */
+		resp.qw0 = QI_PGRP_PASID(req->pasid) |
+			QI_PGRP_DID(req->rid) |
+			QI_PGRP_PASID_P(req->pasid_present) |
+			QI_PGRP_PDP(req->pasid_present) |
+			QI_PGRP_RESP_CODE(result) |
+			QI_PGRP_RESP_TYPE;
+		resp.qw1 = QI_PGRP_IDX(req->prg_index) |
+			QI_PGRP_LPIG(req->lpig);
+
+		if (req->priv_data_present)
+			memcpy(&resp.qw2, req->priv_data,
+			       sizeof(req->priv_data));
+		resp.qw2 = 0;
+		resp.qw3 = 0;
+		qi_submit_sync(iommu, &resp, 1, 0);
+	}
+}
+
+static void intel_svm_process_prq(struct intel_iommu *iommu,
+				  struct page_req_dsc *prq,
+				  int head, int tail)
+{
+	struct page_req_dsc *req;
+
+	while (head != tail) {
+		req = &iommu->prq[head / sizeof(*req)];
+		process_single_prq(iommu, req);
+		head = (head + sizeof(*req)) & PRQ_RING_MASK;
+	}
+}
+
 static irqreturn_t prq_event_thread(int irq, void *d)
 {
 	struct intel_iommu *iommu = d;
-	struct intel_svm *svm = NULL;
-	int head, tail, handled = 0;
+	int head, tail;
 
-	/* Clear PPR bit before reading head/tail registers, to
-	 * ensure that we get a new interrupt if needed. */
+	/*
+	 * Clear PPR bit before reading head/tail registers, to
+	 * ensure that we get a new interrupt if needed.
+	 */
 	writel(DMA_PRS_PPR, iommu->reg + DMAR_PRS_REG);
 
 	tail = dmar_readq(iommu->reg + DMAR_PQT_REG) & PRQ_RING_MASK;
 	head = dmar_readq(iommu->reg + DMAR_PQH_REG) & PRQ_RING_MASK;
-	while (head != tail) {
-		struct intel_svm_dev *sdev;
-		struct vm_area_struct *vma;
-		struct page_req_dsc *req;
-		struct qi_desc resp;
-		int result;
-		vm_fault_t ret;
-		u64 address;
-
-		handled = 1;
-
-		req = &iommu->prq[head / sizeof(*req)];
-
-		result = QI_RESP_FAILURE;
-		address = (u64)req->addr << VTD_PAGE_SHIFT;
-		if (!req->pasid_present) {
-			pr_err("%s: Page request without PASID: %08llx %08llx\n",
-			       iommu->name, ((unsigned long long *)req)[0],
-			       ((unsigned long long *)req)[1]);
-			goto no_pasid;
-		}
-
-		if (!svm || svm->pasid != req->pasid) {
-			rcu_read_lock();
-			svm = ioasid_find(NULL, req->pasid, NULL);
-			/* It *can't* go away, because the driver is not permitted
-			 * to unbind the mm while any page faults are outstanding.
-			 * So we only need RCU to protect the internal idr code. */
-			rcu_read_unlock();
-			if (IS_ERR_OR_NULL(svm)) {
-				pr_err("%s: Page request for invalid PASID %d: %08llx %08llx\n",
-				       iommu->name, req->pasid, ((unsigned long long *)req)[0],
-				       ((unsigned long long *)req)[1]);
-				goto no_pasid;
-			}
-		}
-
-		result = QI_RESP_INVALID;
-		/* Since we're using init_mm.pgd directly, we should never take
-		 * any faults on kernel addresses. */
-		if (!svm->mm)
-			goto bad_req;
-
-		/* If address is not canonical, return invalid response */
-		if (!is_canonical_address(address))
-			goto bad_req;
-
-		/* If the mm is already defunct, don't handle faults. */
-		if (!mmget_not_zero(svm->mm))
-			goto bad_req;
-
-		down_read(&svm->mm->mmap_sem);
-		vma = find_extend_vma(svm->mm, address);
-		if (!vma || address < vma->vm_start)
-			goto invalid;
-
-		if (access_error(vma, req))
-			goto invalid;
-
-		ret = handle_mm_fault(vma, address,
-				      req->wr_req ? FAULT_FLAG_WRITE : 0);
-		if (ret & VM_FAULT_ERROR)
-			goto invalid;
-
-		result = QI_RESP_SUCCESS;
-	invalid:
-		up_read(&svm->mm->mmap_sem);
-		mmput(svm->mm);
-	bad_req:
-		/* Accounting for major/minor faults? */
-		rcu_read_lock();
-		list_for_each_entry_rcu(sdev, &svm->devs, list) {
-			if (sdev->sid == req->rid)
-				break;
-		}
-		/* Other devices can go away, but the drivers are not permitted
-		 * to unbind while any page faults might be in flight. So it's
-		 * OK to drop the 'lock' here now we have it. */
-		rcu_read_unlock();
-
-		if (WARN_ON(&sdev->list == &svm->devs))
-			sdev = NULL;
-
-		if (sdev && sdev->ops && sdev->ops->fault_cb) {
-			int rwxp = (req->rd_req << 3) | (req->wr_req << 2) |
-				(req->exe_req << 1) | (req->pm_req);
-			sdev->ops->fault_cb(sdev->dev, req->pasid, req->addr,
-					    req->priv_data, rwxp, result);
-		}
-		/* We get here in the error case where the PASID lookup failed,
-		   and these can be NULL. Do not use them below this point! */
-		sdev = NULL;
-		svm = NULL;
-	no_pasid:
-		if (req->lpig || req->priv_data_present) {
-			/*
-			 * Per VT-d spec. v3.0 ch7.7, system software must
-			 * respond with page group response if private data
-			 * is present (PDP) or last page in group (LPIG) bit
-			 * is set. This is an additional VT-d feature beyond
-			 * PCI ATS spec.
-			 */
-			resp.qw0 = QI_PGRP_PASID(req->pasid) |
-				QI_PGRP_DID(req->rid) |
-				QI_PGRP_PASID_P(req->pasid_present) |
-				QI_PGRP_PDP(req->pasid_present) |
-				QI_PGRP_RESP_CODE(result) |
-				QI_PGRP_RESP_TYPE;
-			resp.qw1 = QI_PGRP_IDX(req->prg_index) |
-				QI_PGRP_LPIG(req->lpig);
-
-			if (req->priv_data_present)
-				memcpy(&resp.qw2, req->priv_data,
-				       sizeof(req->priv_data));
-			resp.qw2 = 0;
-			resp.qw3 = 0;
-			qi_submit_sync(iommu, &resp, 1, 0);
-		}
-		head = (head + sizeof(*req)) & PRQ_RING_MASK;
-	}
-
+	intel_svm_process_prq(iommu, iommu->prq, head, tail);
 	dmar_writeq(iommu->reg + DMAR_PQH_REG, tail);
 
-	return IRQ_RETVAL(handled);
+	return IRQ_RETVAL(1);
 }
 
 #define to_intel_svm_dev(handle) container_of(handle, struct intel_svm_dev, sva)
