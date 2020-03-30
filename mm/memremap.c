@@ -6,6 +6,7 @@
 #include <linux/memory_hotplug.h>
 #include <linux/mm.h>
 #include <linux/pfn_t.h>
+#include <linux/pkeys.h>
 #include <linux/swap.h>
 #include <linux/mmzone.h>
 #include <linux/swapops.h>
@@ -62,6 +63,68 @@ static void devmap_managed_enable_put(struct dev_pagemap *pgmap)
 {
 }
 #endif /* CONFIG_DEV_PAGEMAP_OPS */
+
+#ifdef CONFIG_DEVMAP_ACCESS_PROTECTION
+/*
+ * Note; all devices which have asked for protections share the same key.  The
+ * key may, or may not, have been provided by the core.  If not, protection
+ * will be disabled.  The key acquisition is attempted when the first ZONE
+ * DEVICE requests it and freed when all zones have been unmapped.
+ *
+ * Also this must be EXPORT_SYMBOL rather than EXPORT_SYMBOL_GPL because it is
+ * intended to be used in the kmap API.
+ */
+DEFINE_STATIC_KEY_FALSE(dev_pgmap_protection_static_key);
+EXPORT_SYMBOL(dev_pgmap_protection_static_key);
+
+static void devmap_protection_enable(void)
+{
+	static_branch_inc(&dev_pgmap_protection_static_key);
+}
+
+static pgprot_t devmap_protection_adjust_pgprot(pgprot_t prot)
+{
+	pgprotval_t val;
+
+	val = pgprot_val(prot);
+	return __pgprot(val | _PAGE_PKEY(PKS_KEY_PGMAP_PROTECTION));
+}
+
+static void devmap_protection_disable(void)
+{
+	static_branch_dec(&dev_pgmap_protection_static_key);
+}
+
+void __pgmap_mk_readwrite(struct dev_pagemap *pgmap)
+{
+	if (!current->pgmap_prot_count++)
+		pks_mk_readwrite(PKS_KEY_PGMAP_PROTECTION);
+}
+EXPORT_SYMBOL_GPL(__pgmap_mk_readwrite);
+
+void __pgmap_mk_noaccess(struct dev_pagemap *pgmap)
+{
+	if (!--current->pgmap_prot_count)
+		pks_mk_noaccess(PKS_KEY_PGMAP_PROTECTION);
+}
+EXPORT_SYMBOL_GPL(__pgmap_mk_noaccess);
+
+bool pgmap_protection_enabled(void)
+{
+	return pks_enabled();
+}
+EXPORT_SYMBOL_GPL(pgmap_protection_enabled);
+
+#else /* !CONFIG_DEVMAP_ACCESS_PROTECTION */
+
+static void devmap_protection_enable(void) { }
+static void devmap_protection_disable(void) { }
+
+static pgprot_t devmap_protection_adjust_pgprot(pgprot_t prot)
+{
+	return prot;
+}
+#endif /* CONFIG_DEVMAP_ACCESS_PROTECTION */
 
 static void pgmap_array_delete(struct range *range)
 {
@@ -178,6 +241,9 @@ void memunmap_pages(struct dev_pagemap *pgmap)
 
 	WARN_ONCE(pgmap->altmap.alloc, "failed to free all reserved pages\n");
 	devmap_managed_enable_put(pgmap);
+
+	if (pgmap->flags & PGMAP_PROTECTION)
+		devmap_protection_disable();
 }
 EXPORT_SYMBOL_GPL(memunmap_pages);
 
@@ -325,6 +391,13 @@ void *memremap_pages(struct dev_pagemap *pgmap, int nid)
 
 	if (WARN_ONCE(!nr_range, "nr_range must be specified\n"))
 		return ERR_PTR(-EINVAL);
+
+	if (pgmap->flags & PGMAP_PROTECTION) {
+		if (!pgmap_protection_enabled())
+			return ERR_PTR(-EINVAL);
+		devmap_protection_enable();
+		params.pgprot = devmap_protection_adjust_pgprot(params.pgprot);
+	}
 
 	switch (pgmap->type) {
 	case MEMORY_DEVICE_PRIVATE:

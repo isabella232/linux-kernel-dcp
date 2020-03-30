@@ -294,7 +294,8 @@ static int __init create_initial_pkrs_value(void)
 	};
 	int i;
 
-	consumer_defaults[PKS_KEY_DEFAULT] = PKR_RW_BIT;
+	consumer_defaults[PKS_KEY_DEFAULT]          = PKR_RW_BIT;
+	consumer_defaults[PKS_KEY_PGMAP_PROTECTION] = PKR_AD_BIT;
 
 	/* Ensure the number of consumers is less than the number of keys */
 	BUILD_BUG_ON(PKS_KEY_NR_CONSUMERS > PKS_NUM_PKEYS);
