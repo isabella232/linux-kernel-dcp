@@ -7138,6 +7138,16 @@ static int vmx_vm_init(struct kvm *kvm)
 	return 0;
 }
 
+static void vmx_vm_teardown(struct kvm *kvm)
+{
+
+}
+
+static void vmx_vm_destroy(struct kvm *kvm)
+{
+
+}
+
 static int __init vmx_check_processor_compat(void)
 {
 	struct vmcs_config vmcs_conf;
@@ -7786,6 +7796,7 @@ static struct kvm_x86_ops vmx_x86_ops __initdata = {
 	.is_vm_type_supported = vmx_is_vm_type_supported,
 	.vm_size = sizeof(struct kvm_vmx),
 	.vm_init = vmx_vm_init,
+	.vm_teardown = vmx_vm_teardown,
 	.vm_destroy = vmx_vm_destroy,
 
 	.vcpu_create = vmx_create_vcpu,
