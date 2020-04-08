@@ -50,6 +50,8 @@ int intel_svm_enable_prq(struct intel_iommu *iommu)
 		return ret;
 	}
 	iommu->pr_irq = irq;
+	INIT_LIST_HEAD(&iommu->prq_list);
+	spin_lock_init(&iommu->prq_lock);
 
 	snprintf(iommu->prq_name, sizeof(iommu->prq_name), "dmar%d-prq", iommu->seq_id);
 
@@ -698,6 +700,14 @@ struct page_req_dsc {
 
 #define PRQ_RING_MASK	((0x1000 << PRQ_ORDER) - 0x20)
 
+struct page_req {
+	struct list_head list;
+	struct page_req_dsc desc;
+	unsigned int processing:1;
+	unsigned int drained:1;
+	unsigned int completed:1;
+};
+
 static bool access_error(struct vm_area_struct *vma, struct page_req_dsc *req)
 {
 	unsigned long requested = 0;
@@ -842,34 +852,60 @@ no_pasid:
 	}
 }
 
-static void intel_svm_process_prq(struct intel_iommu *iommu,
-				  struct page_req_dsc *prq,
-				  int head, int tail)
+static void intel_svm_process_prq(struct intel_iommu *iommu)
 {
-	struct page_req_dsc *req;
+	struct page_req *req;
+	unsigned long flags;
 
-	while (head != tail) {
-		req = &iommu->prq[head / sizeof(*req)];
-		process_single_prq(iommu, req);
-		head = (head + sizeof(*req)) & PRQ_RING_MASK;
+	spin_lock_irqsave(&iommu->prq_lock, flags);
+	while (!list_empty(&iommu->prq_list)) {
+		req = list_first_entry(&iommu->prq_list, struct page_req, list);
+		if (!req->processing) {
+			req->processing = true;
+			spin_unlock_irqrestore(&iommu->prq_lock, flags);
+			process_single_prq(iommu, &req->desc);
+			spin_lock_irqsave(&iommu->prq_lock, flags);
+			req->completed = true;
+		} else if (req->completed) {
+			list_del(&req->list);
+			kfree(req);
+		} else {
+			break;
+		}
 	}
+	spin_unlock_irqrestore(&iommu->prq_lock, flags);
 }
 
 static irqreturn_t prq_event_thread(int irq, void *d)
 {
 	struct intel_iommu *iommu = d;
+	unsigned long flags;
 	int head, tail;
 
+	spin_lock_irqsave(&iommu->prq_lock, flags);
 	/*
 	 * Clear PPR bit before reading head/tail registers, to
 	 * ensure that we get a new interrupt if needed.
 	 */
 	writel(DMA_PRS_PPR, iommu->reg + DMAR_PRS_REG);
-
 	tail = dmar_readq(iommu->reg + DMAR_PQT_REG) & PRQ_RING_MASK;
 	head = dmar_readq(iommu->reg + DMAR_PQH_REG) & PRQ_RING_MASK;
-	intel_svm_process_prq(iommu, iommu->prq, head, tail);
+	while (head != tail) {
+		struct page_req_dsc *dsc;
+		struct page_req *req;
+
+		dsc = &iommu->prq[head / sizeof(*dsc)];
+		req = kzalloc(sizeof (*req), GFP_ATOMIC);
+		if (!req)
+			break;
+		req->desc = *dsc;
+		list_add_tail(&req->list, &iommu->prq_list);
+		head = (head + sizeof(*dsc)) & PRQ_RING_MASK;
+	}
 	dmar_writeq(iommu->reg + DMAR_PQH_REG, tail);
+	spin_unlock_irqrestore(&iommu->prq_lock, flags);
+
+	intel_svm_process_prq(iommu);
 
 	return IRQ_RETVAL(1);
 }
