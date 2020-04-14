@@ -60,6 +60,13 @@
 #define ECAP_QI_MASK		BIT_ULL(1)
 #define ECAP_C_MASK		BIT_ULL(0)
 
+/* Capabilities related to nested translation */
+#define VTD_CAP_MASK		(CAP_FL1GP_MASK | CAP_FL5LP_MASK)
+
+#define VTD_ECAP_MASK		(ECAP_PRS_MASK | ECAP_ERS_MASK | \
+				 ECAP_SRS_MASK | ECAP_EAFS_MASK | \
+				 ECAP_PASID_MASK)
+
 /*
  * u64 intel_iommu_cap_sanity, intel_iommu_ecap_sanity will be adjusted as each
  * IOMMU gets audited.
