@@ -74,6 +74,7 @@ struct vfio_iommu {
 	uint64_t		pgsize_bitmap;
 	uint64_t		num_non_pinned_groups;
 	wait_queue_head_t	vaddr_wait;
+	struct iommu_nesting_info	*nesting_info;
 	bool			v2;
 	bool			nesting;
 	bool			dirty_page_tracking;
@@ -144,6 +145,9 @@ struct vfio_regions {
 
 #define IS_IOMMU_CAP_DOMAIN_IN_CONTAINER(iommu)	\
 					(!list_empty(&iommu->domain_list))
+
+#define CONTAINER_HAS_DOMAIN(iommu)	(((iommu)->external_domain) || \
+					 (!list_empty(&(iommu)->domain_list)))
 
 #define DIRTY_BITMAP_BYTES(n)	(ALIGN(n, BITS_PER_TYPE(u64)) / BITS_PER_BYTE)
 
@@ -2309,6 +2313,12 @@ static void vfio_iommu_iova_insert_copy(struct vfio_iommu *iommu,
 	list_splice_tail(iova_copy, iova);
 }
 
+static void vfio_iommu_release_nesting_info(struct vfio_iommu *iommu)
+{
+	kfree(iommu->nesting_info);
+	iommu->nesting_info = NULL;
+}
+
 static int vfio_iommu_type1_attach_group(void *iommu_data,
 					 struct iommu_group *iommu_group)
 {
@@ -2327,6 +2337,12 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 
 	/* Check for duplicates */
 	if (vfio_iommu_find_iommu_group(iommu, iommu_group)) {
+		mutex_unlock(&iommu->lock);
+		return -EINVAL;
+	}
+
+	/* Nesting type container can include only one group */
+	if (iommu->nesting && CONTAINER_HAS_DOMAIN(iommu)) {
 		mutex_unlock(&iommu->lock);
 		return -EINVAL;
 	}
@@ -2398,6 +2414,31 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 	ret = vfio_iommu_attach_group(domain, group);
 	if (ret)
 		goto out_domain;
+
+	/* Nesting cap info is available only after attaching */
+	if (iommu->nesting) {
+		int size = sizeof(struct iommu_nesting_info);
+
+		iommu->nesting_info = kzalloc(size, GFP_KERNEL);
+		if (!iommu->nesting_info) {
+			ret = -ENOMEM;
+			goto out_detach;
+		}
+
+		/* Now get the nesting info */
+		iommu->nesting_info->argsz = size;
+		ret = iommu_domain_get_attr(domain->domain,
+					    DOMAIN_ATTR_NESTING,
+					    iommu->nesting_info);
+		if (ret)
+			goto out_detach;
+
+		/* when @format of nesting_info is 0, fail the attach */
+		if (iommu->nesting_info->format == 0) {
+			ret = -ENOENT;
+			goto out_detach;
+		}
+	}
 
 	/* Get aperture info */
 	geo = &domain->domain->geometry;
@@ -2513,6 +2554,7 @@ done:
 	return 0;
 
 out_detach:
+	vfio_iommu_release_nesting_info(iommu);
 	vfio_iommu_detach_group(domain, group);
 out_domain:
 	iommu_domain_free(domain->domain);
@@ -2699,6 +2741,8 @@ static void vfio_iommu_type1_detach_group(void *iommu_data,
 				} else {
 					vfio_iommu_unmap_unpin_reaccount(iommu);
 				}
+
+				vfio_iommu_release_nesting_info(iommu);
 			}
 			iommu_domain_free(domain->domain);
 			list_del(&domain->next);
@@ -2929,6 +2973,28 @@ static int vfio_iommu_dma_avail_build_caps(struct vfio_iommu *iommu,
 					sizeof(cap_dma_avail));
 }
 
+static int vfio_iommu_nesting_build_caps(struct vfio_iommu *iommu,
+					 struct vfio_info_cap *caps)
+{
+	struct vfio_iommu_type1_info_cap_nesting nesting_cap;
+	size_t size;
+
+	/* when nesting_info is null, no need to go further */
+	if (!iommu->nesting_info)
+		return 0;
+
+	size = offsetof(struct vfio_iommu_type1_info_cap_nesting, info) +
+	       iommu->nesting_info->argsz;
+
+	nesting_cap.header.id = VFIO_IOMMU_TYPE1_INFO_CAP_NESTING;
+	nesting_cap.header.version = 1;
+
+	memcpy(&nesting_cap.info, iommu->nesting_info,
+	       iommu->nesting_info->argsz);
+
+	return vfio_info_add_capability(caps, &nesting_cap.header, size);
+}
+
 static int vfio_iommu_type1_get_info(struct vfio_iommu *iommu,
 				     unsigned long arg)
 {
@@ -2966,6 +3032,9 @@ static int vfio_iommu_type1_get_info(struct vfio_iommu *iommu,
 
 	if (!ret)
 		ret = vfio_iommu_iova_build_caps(iommu, &caps);
+
+	if (!ret)
+		ret = vfio_iommu_nesting_build_caps(iommu, &caps);
 
 	mutex_unlock(&iommu->lock);
 
