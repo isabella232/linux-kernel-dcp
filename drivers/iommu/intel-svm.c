@@ -23,6 +23,7 @@
 #include "intel-pasid.h"
 
 static irqreturn_t prq_event_thread(int irq, void *d);
+static void intel_svm_drain_prq(struct device *dev, int pasid);
 
 #define PRQ_ORDER 0
 
@@ -210,6 +211,7 @@ static void intel_mm_release(struct mmu_notifier *mn, struct mm_struct *mm)
 	rcu_read_lock();
 	list_for_each_entry_rcu(sdev, &svm->devs, list) {
 		intel_pasid_tear_down_entry(svm->iommu, sdev->dev, svm->pasid);
+		intel_svm_drain_prq(sdev->dev, svm->pasid);
 		intel_flush_svm_range_dev(svm, sdev, 0, -1, 0);
 	}
 	rcu_read_unlock();
@@ -403,12 +405,8 @@ int intel_svm_unbind_gpasid(struct device *dev, int pasid)
 		if (!sdev->users) {
 			list_del_rcu(&sdev->list);
 			intel_pasid_tear_down_entry(iommu, dev, svm->pasid);
+			intel_svm_drain_prq(dev, svm->pasid);
 			intel_flush_svm_range_dev(svm, sdev, 0, -1, 0);
-			/* TODO: Drain in flight PRQ for the PASID since it
-			 * may get reused soon, we don't want to
-			 * confuse with its previous life.
-			 * intel_svm_drain_prq(dev, pasid);
-			 */
 			kfree_rcu(sdev, rcu);
 
 			if (list_empty(&svm->devs)) {
@@ -646,6 +644,7 @@ int intel_svm_unbind_mm(struct device *dev, int pasid)
 			 * large and has to be physically contiguous. So it's
 			 * hard to be as defensive as we might like. */
 			intel_pasid_tear_down_entry(iommu, dev, svm->pasid);
+			intel_svm_drain_prq(dev, svm->pasid);
 			intel_flush_svm_range_dev(svm, sdev, 0, -1, 0);
 			kfree_rcu(sdev, rcu);
 
@@ -703,6 +702,7 @@ struct page_req_dsc {
 struct page_req {
 	struct list_head list;
 	struct page_req_dsc desc;
+	struct completion complete;
 	unsigned int processing:1;
 	unsigned int drained:1;
 	unsigned int completed:1;
@@ -732,9 +732,83 @@ static bool is_canonical_address(u64 addr)
 	return (((saddr << shift) >> shift) == saddr);
 }
 
+/**
+ * intel_svm_drain_prq:
+ *
+ * Drain all pending page requests related to a specific pasid in both
+ * software and hardware. The caller must guarantee that no more page
+ * requests related to this pasid coming.
+ */
+static void intel_svm_drain_prq(struct device *dev, int pasid)
+{
+	struct device_domain_info *info;
+	struct dmar_domain *domain;
+	struct intel_iommu *iommu;
+	struct qi_desc desc[3];
+	struct pci_dev *pdev;
+	struct page_req *req;
+	unsigned long flags;
+	u16 sid, did;
+	int qdep;
+
+	info = get_domain_info(dev);
+	if (WARN_ON(!info || !dev_is_pci(dev)))
+		return;
+
+	iommu = info->iommu;
+	domain = info->domain;
+	pdev = to_pci_dev(dev);
+
+	/* Mark all related pending requests drained. */
+	spin_lock_irqsave(&iommu->prq_lock, flags);
+	list_for_each_entry(req, &iommu->prq_list, list)
+		if (req->desc.pasid_present && req->desc.pasid == pasid)
+			req->drained = true;
+	spin_unlock_irqrestore(&iommu->prq_lock, flags);
+
+	/* Wait until all related pending requests complete. */
+retry:
+	spin_lock_irqsave(&iommu->prq_lock, flags);
+	list_for_each_entry(req, &iommu->prq_list, list) {
+		if (req->desc.pasid_present &&
+		    req->desc.pasid == pasid &&
+		    !req->completed) {
+			spin_unlock_irqrestore(&iommu->prq_lock, flags);
+			wait_for_completion_timeout(&req->complete, 5 * HZ);
+			goto retry;
+		}
+	}
+	spin_unlock_irqrestore(&iommu->prq_lock, flags);
+
+	/*
+	 * Perform steps described in VT-d spec CH7.10 to drain page
+	 * request and responses in hardware.
+	 */
+	sid = PCI_DEVID(info->bus, info->devfn);
+	did = domain->iommu_did[iommu->seq_id];
+	qdep = pci_ats_queue_depth(pdev);
+
+	memset(desc, 0, sizeof(desc));
+	desc[0].qw0 = QI_IWD_STATUS_DATA(QI_DONE) |
+			QI_IWD_FENCE |
+			QI_IWD_TYPE;
+	desc[1].qw0 = QI_EIOTLB_PASID(pasid) |
+			QI_EIOTLB_DID(did) |
+			QI_EIOTLB_GRAN(QI_GRAN_NONG_PASID) |
+			QI_EIOTLB_TYPE;
+	desc[2].qw0 = QI_DEV_EIOTLB_PASID(pasid) |
+			QI_DEV_EIOTLB_SID(sid) |
+			QI_DEV_EIOTLB_QDEP(qdep) |
+			QI_DEIOTLB_TYPE |
+			QI_DEV_IOTLB_PFSID(info->pfsid);
+
+	qi_submit_sync(iommu, desc, 3, QI_OPT_WAIT_DRAIN);
+}
+
 static void process_single_prq(struct intel_iommu *iommu,
 			       struct page_req_dsc *req)
 {
+	struct page_req *p_req = container_of(req, struct page_req, desc);
 	int result = QI_RESP_FAILURE;
 	struct intel_svm_dev *sdev;
 	struct vm_area_struct *vma;
@@ -768,6 +842,10 @@ static void process_single_prq(struct intel_iommu *iommu,
 	}
 
 	result = QI_RESP_INVALID;
+
+	if (p_req->drained)
+		goto bad_req;
+
 	/* Since we're using init_mm.pgd directly, we should never take
 	 * any faults on kernel addresses. */
 	if (!svm->mm)
@@ -868,6 +946,7 @@ static void intel_svm_process_prq(struct intel_iommu *iommu)
 			req->completed = true;
 		} else if (req->completed) {
 			list_del(&req->list);
+			complete(&req->complete);
 			kfree(req);
 		} else {
 			break;
@@ -899,6 +978,7 @@ static irqreturn_t prq_event_thread(int irq, void *d)
 		if (!req)
 			break;
 		req->desc = *dsc;
+		init_completion(&req->complete);
 		list_add_tail(&req->list, &iommu->prq_list);
 		head = (head + sizeof(*dsc)) & PRQ_RING_MASK;
 	}
