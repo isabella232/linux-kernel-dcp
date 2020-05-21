@@ -4591,12 +4591,12 @@ static void update_permission_bitmask(struct kvm_mmu *mmu, bool ept)
 * away both AD and WD.  For all reads or if the last condition holds, WD
 * only will be masked away.
 */
-static void update_pkru_bitmask(struct kvm_mmu *mmu)
+static void update_pkr_bitmask(struct kvm_mmu *mmu)
 {
 	unsigned bit;
 	bool wp;
 
-	mmu->pkru_mask = 0;
+	mmu->pkr_mask = 0;
 
 	if (!is_cr4_pke(mmu))
 		return;
@@ -4631,7 +4631,7 @@ static void update_pkru_bitmask(struct kvm_mmu *mmu)
 		/* PKRU.WD stops write access. */
 		pkey_bits |= (!!check_write) << 1;
 
-		mmu->pkru_mask |= (pkey_bits & 3) << pfec;
+		mmu->pkr_mask |= (pkey_bits & 3) << pfec;
 	}
 }
 
@@ -4643,7 +4643,7 @@ static void reset_guest_paging_metadata(struct kvm_vcpu *vcpu,
 
 	reset_rsvds_bits_mask(vcpu, mmu);
 	update_permission_bitmask(mmu, false);
-	update_pkru_bitmask(mmu);
+	update_pkr_bitmask(mmu);
 }
 
 static void paging64_init_context(struct kvm_mmu *context)
@@ -4915,7 +4915,7 @@ void kvm_init_shadow_ept_mmu(struct kvm_vcpu *vcpu, bool execonly,
 	context->direct_map = false;
 
 	update_permission_bitmask(context, true);
-	update_pkru_bitmask(context);
+	update_pkr_bitmask(context);
 	reset_rsvds_bits_mask_ept(vcpu, context, execonly);
 	reset_ept_shadow_zero_bits_mask(vcpu, context, execonly);
 }
