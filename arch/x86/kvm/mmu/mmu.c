@@ -216,6 +216,7 @@ BUILD_MMU_ROLE_REGS_ACCESSOR(cr4, smep, X86_CR4_SMEP);
 BUILD_MMU_ROLE_REGS_ACCESSOR(cr4, smap, X86_CR4_SMAP);
 BUILD_MMU_ROLE_REGS_ACCESSOR(cr4, pke, X86_CR4_PKE);
 BUILD_MMU_ROLE_REGS_ACCESSOR(cr4, la57, X86_CR4_LA57);
+BUILD_MMU_ROLE_REGS_ACCESSOR(cr4, pks, X86_CR4_PKS);
 BUILD_MMU_ROLE_REGS_ACCESSOR(efer, nx, EFER_NX);
 BUILD_MMU_ROLE_REGS_ACCESSOR(efer, lma, EFER_LMA);
 
@@ -238,6 +239,7 @@ BUILD_MMU_ROLE_ACCESSOR(ext,  cr4, smep);
 BUILD_MMU_ROLE_ACCESSOR(ext,  cr4, smap);
 BUILD_MMU_ROLE_ACCESSOR(ext,  cr4, pke);
 BUILD_MMU_ROLE_ACCESSOR(ext,  cr4, la57);
+BUILD_MMU_ROLE_ACCESSOR(ext,  cr4, pks);
 BUILD_MMU_ROLE_ACCESSOR(base, efer, nx);
 
 static struct kvm_mmu_role_regs vcpu_to_role_regs(struct kvm_vcpu *vcpu)
@@ -4568,37 +4570,43 @@ static void update_permission_bitmask(struct kvm_mmu *mmu, bool ept)
 }
 
 /*
-* PKU is an additional mechanism by which the paging controls access to
-* user-mode addresses based on the value in the PKRU register.  Protection
-* key violations are reported through a bit in the page fault error code.
+* Protection Keys (PKEY) is an additional mechanism by which
+* the paging controls access to user-mode/supervisor-mode address
+* based on the values in PKEY registers (PKRU/PKRS). Protection key
+* violations are reported through a bit in the page fault error code.
 * Unlike other bits of the error code, the PK bit is not known at the
 * call site of e.g. gva_to_gpa; it must be computed directly in
-* permission_fault based on two bits of PKRU, on some machine state (CR4,
-* CR0, EFER, CPL), and on other bits of the error code and the page tables.
+* permission_fault based on two bits of PKRU/PKRS, on some machine
+* state (CR4, CR0, EFER, CPL), and on other bits of the error code
+* and the page tables.
 *
 * In particular the following conditions come from the error code, the
 * page tables and the machine state:
-* - PK is always zero unless CR4.PKE=1 and EFER.LMA=1
+* - PK is always zero unless CR4.PKE=1/CR4.PKS=1 and EFER.LMA=1
 * - PK is always zero if RSVD=1 (reserved bit set) or F=1 (instruction fetch)
-* - PK is always zero if U=0 in the page tables
-* - PKRU.WD is ignored if CR0.WP=0 and the access is a supervisor access.
+* - PK is always zero if
+*       - U=0 in the page tables and CR4.PKS=0
+*       - U=1 in the page tables and CR4.PKU=0
+* - (PKRU/PKRS).WD is ignored if CR0.WP=0 and the access is a supervisor access.
 *
-* The PKRU bitmask caches the result of these four conditions.  The error
-* code (minus the P bit) and the page table's U bit form an index into the
-* PKRU bitmask.  Two bits of the PKRU bitmask are then extracted and ANDed
-* with the two bits of the PKRU register corresponding to the protection key.
-* For the first three conditions above the bits will be 00, thus masking
-* away both AD and WD.  For all reads or if the last condition holds, WD
-* only will be masked away.
+* The pkr_mask caches the result of these three conditions. The error
+* code (minus the P bit) and the page table's U bit form an index into
+* the pkr_mask. Two bits of the pkr_mask are then extracted and ANDed with
+* the two bits of the PKEY register corresponding to the protection key.
+* For the first three conditions above the bits will be 00, thus masking away
+* both AD and WD. For all reads or if the last condition holds, WD only will be
+* masked away.
 */
 static void update_pkr_bitmask(struct kvm_mmu *mmu)
 {
 	unsigned bit;
 	bool wp;
+	bool cr4_pke = is_cr4_pke(mmu);
+	bool cr4_pks = is_cr4_pks(mmu);
 
 	mmu->pkr_mask = 0;
 
-	if (!is_cr4_pke(mmu))
+	if (!cr4_pke && !cr4_pks)
 		return;
 
 	wp = is_cr0_wp(mmu);
@@ -4616,19 +4624,22 @@ static void update_pkr_bitmask(struct kvm_mmu *mmu)
 		pte_user = pfec & PFERR_RSVD_MASK;
 
 		/*
-		 * Only need to check the access which is not an
-		 * instruction fetch and is to a user page.
+		 * need to check the access which is not an
+		 * instruction fetch and
+		 * - if cr4_pke 1-setting when accessing a user page.
+		 * - if cr4_pks 1-setting when accessing a supervisor page.
 		 */
-		check_pkey = (!ff && pte_user);
+		check_pkey = !ff && (pte_user ? cr4_pke : cr4_pks);
+
 		/*
-		 * write access is controlled by PKRU if it is a
-		 * user access or CR0.WP = 1.
+		 * write access is controlled by PKRU/PKRS if
+		 * it is a user access or CR0.WP = 1.
 		 */
 		check_write = check_pkey && wf && (uf || wp);
 
-		/* PKRU.AD stops both read and write access. */
+		/* PKRU/PKRS.AD stops both read and write access. */
 		pkey_bits = !!check_pkey;
-		/* PKRU.WD stops write access. */
+		/* PKRU/PKRS.WD stops write access. */
 		pkey_bits |= (!!check_write) << 1;
 
 		mmu->pkr_mask |= (pkey_bits & 3) << pfec;
@@ -4679,6 +4690,7 @@ static union kvm_mmu_extended_role kvm_calc_mmu_role_ext(struct kvm_vcpu *vcpu,
 		/* PKEY and LA57 are active iff long mode is active. */
 		ext.cr4_pke = ____is_efer_lma(regs) && ____is_cr4_pke(regs);
 		ext.cr4_la57 = ____is_efer_lma(regs) && ____is_cr4_la57(regs);
+		ext.cr4_pks = ____is_efer_lma(regs) && ____is_cr4_pks(regs);
 	}
 
 	ext.valid = 1;
