@@ -138,6 +138,18 @@ static blk_status_t read_pmem(struct page *page, unsigned int off,
 	return BLK_STS_OK;
 }
 
+static void pmem_set_readwrite(struct pmem_device *pmem)
+{
+	if (pmem->pgmap.flags & PGMAP_PROTECTION)
+		__pgmap_set_readwrite(&pmem->pgmap);
+}
+
+static void pmem_set_noaccess(struct pmem_device *pmem)
+{
+	if (pmem->pgmap.flags & PGMAP_PROTECTION)
+		__pgmap_set_noaccess(&pmem->pgmap);
+}
+
 static blk_status_t pmem_do_read(struct pmem_device *pmem,
 			struct page *page, unsigned int page_off,
 			sector_t sector, unsigned int len)
@@ -149,7 +161,11 @@ static blk_status_t pmem_do_read(struct pmem_device *pmem,
 	if (unlikely(is_bad_pmem(&pmem->bb, sector, len)))
 		return BLK_STS_IOERR;
 
+	/* Enable direct use of pmem->virt_addr */
+	pmem_set_readwrite(pmem);
 	rc = read_pmem(page, page_off, pmem_addr, len);
+	pmem_set_noaccess(pmem);
+
 	flush_dcache_page(page);
 	return rc;
 }
@@ -181,11 +197,15 @@ static blk_status_t pmem_do_write(struct pmem_device *pmem,
 	 * after clear poison.
 	 */
 	flush_dcache_page(page);
+
+	/* Enable direct use of pmem->virt_addr */
+	pmem_set_readwrite(pmem);
 	write_pmem(pmem_addr, page, page_off, len);
 	if (unlikely(bad_pmem)) {
 		rc = pmem_clear_poison(pmem, pmem_off, len);
 		write_pmem(pmem_addr, page, page_off, len);
 	}
+	pmem_set_noaccess(pmem);
 
 	return rc;
 }
@@ -406,6 +426,8 @@ static int pmem_attach_disk(struct device *dev,
 	pmem->pfn_flags = PFN_DEV;
 	if (is_nd_pfn(dev)) {
 		pmem->pgmap.type = MEMORY_DEVICE_FS_DAX;
+		if (pgmap_protection_available())
+			pmem->pgmap.flags |= PGMAP_PROTECTION;
 		addr = devm_memremap_pages(dev, &pmem->pgmap);
 		pfn_sb = nd_pfn->pfn_sb;
 		pmem->data_offset = le64_to_cpu(pfn_sb->dataoff);
@@ -419,6 +441,8 @@ static int pmem_attach_disk(struct device *dev,
 		pmem->pgmap.range.end = res->end;
 		pmem->pgmap.nr_range = 1;
 		pmem->pgmap.type = MEMORY_DEVICE_FS_DAX;
+		if (pgmap_protection_available())
+			pmem->pgmap.flags |= PGMAP_PROTECTION;
 		addr = devm_memremap_pages(dev, &pmem->pgmap);
 		pmem->pfn_flags |= PFN_MAP;
 		bb_range = pmem->pgmap.range;
@@ -458,6 +482,8 @@ static int pmem_attach_disk(struct device *dev,
 		return PTR_ERR(dax_dev);
 	}
 	dax_write_cache(dax_dev, nvdimm_has_cache(nd_region));
+	if (pmem->pgmap.flags & PGMAP_PROTECTION)
+		set_dax_pgmap(dax_dev, &pmem->pgmap);
 	pmem->dax_dev = dax_dev;
 
 	device_add_disk(dev, disk, pmem_attribute_groups);
