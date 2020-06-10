@@ -2190,6 +2190,9 @@ static void prepare_vmcs02_constant_state(struct vcpu_vmx *vmx)
 	if (cpu_has_vmx_encls_vmexit())
 		vmcs_write64(ENCLS_EXITING_BITMAP, -1ull);
 
+	if (cpu_has_notify_vm_exiting() && notify_window >= 0)
+		vmcs_write32(NOTIFY_WINDOW, notify_window);
+
 	/*
 	 * Set the MSR load/store lists to match L0's settings.  Only the
 	 * addresses are constant (for vmcs02), the counts can change based
@@ -6070,6 +6073,9 @@ static bool nested_vmx_l1_wants_exit(struct kvm_vcpu *vcpu,
 			SECONDARY_EXEC_ENABLE_USR_WAIT_PAUSE);
 	case EXIT_REASON_ENCLS:
 		return nested_vmx_exit_handled_encls(vcpu, vmcs12);
+	case EXIT_REASON_NOTIFY:
+		return nested_cpu_has2(vmcs12,
+			SECONDARY_EXEC_NOTIFY_VM_EXITING);
 	default:
 		return true;
 	}
