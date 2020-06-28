@@ -311,7 +311,9 @@ struct iommu_ops {
 	int (*cache_invalidate)(struct iommu_domain *domain, struct device *dev,
 				struct iommu_cache_invalidate_info *inv_info);
 	int (*sva_bind_gpasid)(struct iommu_domain *domain,
-			struct device *dev, struct iommu_gpasid_bind_data *data);
+				struct device *dev,
+				struct iommu_gpasid_bind_data *data,
+				void *fault_data);
 
 	int (*sva_unbind_gpasid)(struct device *dev, u32 pasid);
 
@@ -447,7 +449,9 @@ extern int iommu_uapi_cache_invalidate(struct iommu_domain *domain,
 				       void __user *uinfo);
 
 extern int iommu_uapi_sva_bind_gpasid(struct iommu_domain *domain,
-				      struct device *dev, void __user *udata);
+				      struct device *dev,
+				      void __user *udata,
+				      void *fault_data);
 extern int iommu_uapi_sva_unbind_gpasid(struct iommu_domain *domain,
 					struct device *dev, void __user *udata);
 extern int iommu_sva_unbind_gpasid(struct iommu_domain *domain,
@@ -1097,7 +1101,8 @@ iommu_uapi_cache_invalidate(struct iommu_domain *domain,
 }
 
 static inline int iommu_uapi_sva_bind_gpasid(struct iommu_domain *domain,
-					     struct device *dev, void __user *udata)
+					     struct device *dev, void __user *udata,
+					     void *fault_data)
 {
 	return -ENODEV;
 }
