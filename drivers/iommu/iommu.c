@@ -1317,16 +1317,52 @@ done_unlock:
 }
 EXPORT_SYMBOL_GPL(iommu_report_device_fault);
 
+static int iommu_page_response_prepare_msg(void __user *udata,
+					   struct iommu_page_response *msg)
+{
+	unsigned long minsz, maxsz;
+
+	/* Current kernel data size is the max to be copied from user */
+	maxsz = sizeof(struct iommu_page_response);
+	memset((void *)msg, 0, maxsz);
+	minsz = offsetofend(struct iommu_page_response, code);
+
+	if (copy_from_user(msg, udata, minsz))
+		return -EFAULT;
+
+	if (msg->argsz < minsz)
+		return -EINVAL;
+
+	if (msg->argsz > maxsz)
+		msg->argsz = maxsz;
+
+	if (msg->version != IOMMU_PAGE_RESP_VERSION_1 ||
+		!(msg->flags & IOMMU_PAGE_RESP_PASID_VALID)) {
+		pr_debug("%s:Invalid ver %x: flags %x\n",
+			__func__, msg->version, msg->flags);
+		return -EINVAL;
+	}
+
+	/* Copy the remaining user data _after_ minsz if there is */
+	if ((msg->argsz - minsz) &&
+	    copy_from_user((void *)msg + minsz, udata + minsz,
+				msg->argsz - minsz))
+		return -EFAULT;
+
+	return 0;
+}
+
 int iommu_page_response(struct device *dev,
-			struct iommu_page_response *msg)
+			void __user *uinfo)
 {
 	bool needs_pasid;
 	int ret = -EINVAL;
+	struct iommu_page_response msg;
 	struct iommu_fault_event *evt;
 	struct iommu_fault_page_request *prm;
 	struct dev_iommu *param = dev->iommu;
-	bool has_pasid = msg->flags & IOMMU_PAGE_RESP_PASID_VALID;
 	struct iommu_domain *domain = iommu_get_domain_for_dev(dev);
+	bool has_pasid;
 
 	if (!domain || !domain->ops->page_response)
 		return -ENODEV;
@@ -1334,12 +1370,12 @@ int iommu_page_response(struct device *dev,
 	if (!param || !param->fault_param)
 		return -EINVAL;
 
-	if (msg->version != IOMMU_PAGE_RESP_VERSION_1 ||
-		!(msg->flags & IOMMU_PAGE_RESP_PASID_VALID)) {
-		dev_dbg(dev, "%s:Invalid ver %x: flags %x\n",
-			__func__, msg->version, msg->flags);
-		return -EINVAL;
-	}
+	ret = iommu_page_response_prepare_msg(uinfo, &msg);
+	if (ret)
+		return ret;
+
+	has_pasid = msg.flags & IOMMU_PAGE_RESP_PASID_VALID;
+
 	/* Only send response if there is a fault report pending */
 	mutex_lock(&param->fault_param->lock);
 	if (list_empty(&param->fault_param->faults)) {
@@ -1352,7 +1388,7 @@ int iommu_page_response(struct device *dev,
 	 */
 	list_for_each_entry(evt, &param->fault_param->faults, list) {
 		prm = &evt->fault.prm;
-		if (prm->grpid != msg->grpid)
+		if (prm->grpid != msg.grpid)
 			continue;
 
 		/*
@@ -1362,17 +1398,17 @@ int iommu_page_response(struct device *dev,
 		 * response.
 		 */
 		needs_pasid = prm->flags & IOMMU_FAULT_PAGE_RESPONSE_NEEDS_PASID;
-		if (needs_pasid && (!has_pasid || msg->pasid != prm->pasid))
+		if (needs_pasid && (!has_pasid || msg.pasid != prm->pasid))
 			continue;
 
 		if (!needs_pasid && has_pasid) {
 			/* No big deal, just clear it. */
-			msg->flags &= ~IOMMU_PAGE_RESP_PASID_VALID;
-			msg->pasid = 0;
+			msg.flags &= ~IOMMU_PAGE_RESP_PASID_VALID;
+			msg.pasid = 0;
 		}
 
-		ret = domain->ops->page_response(dev, evt, msg);
-		trace_dev_page_response(dev, msg);
+		ret = domain->ops->page_response(dev, evt, &msg);
+		trace_dev_page_response(dev, &msg);
 		list_del(&evt->list);
 		kfree(evt);
 		break;
