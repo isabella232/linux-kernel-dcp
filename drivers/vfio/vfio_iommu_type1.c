@@ -3478,8 +3478,14 @@ static int vfio_dev_page_resp_fn(struct device *dev, void *data)
 {
 	struct domain_capsule *dc = (struct domain_capsule *)data;
 	unsigned long arg = *(unsigned long *) dc->data;
+	struct device *iommu_device;
 
-	return iommu_page_response(dc->domain, dev, (void __user *) arg);
+	iommu_device = vfio_get_iommu_device(dc->group, dev);
+	if (!iommu_device)
+		return -EINVAL;
+
+	return iommu_page_response(dc->domain, iommu_device,
+				   (void __user *) arg);
 }
 
 static long vfio_iommu_page_response(struct vfio_iommu *iommu,
