@@ -1310,6 +1310,8 @@ struct vfio_iommu_type1_dirty_bitmap_get {
  * +-----------------+-----------------------------------------------+
  * | CACHE_INVLD     |      struct iommu_cache_invalidate_info       |
  * +-----------------+-----------------------------------------------+
+ * | PAGE_RESP       |      struct iommu_page_response               |
+ * +-----------------+-----------------------------------------------+
  *
  * returns: 0 on success, -errno on failure.
  */
@@ -1324,6 +1326,7 @@ enum {
 	VFIO_IOMMU_NESTING_OP_BIND_PGTBL,
 	VFIO_IOMMU_NESTING_OP_UNBIND_PGTBL,
 	VFIO_IOMMU_NESTING_OP_CACHE_INVLD,
+	VFIO_IOMMU_NESTING_OP_PAGE_RESP,
 };
 
 #define VFIO_IOMMU_NESTING_OP		_IO(VFIO_TYPE, VFIO_BASE + 18)
