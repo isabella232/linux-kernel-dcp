@@ -3468,6 +3468,40 @@ out_unlock:
 	return ret;
 }
 
+static int vfio_dev_page_resp_fn(struct device *dev, void *data)
+{
+	struct domain_capsule *dc = (struct domain_capsule *)data;
+	unsigned long arg = *(unsigned long *) dc->data;
+
+	return iommu_page_response(dc->domain, dev, (void __user *) arg);
+}
+
+static long vfio_iommu_page_response(struct vfio_iommu *iommu,
+				     unsigned long arg)
+{
+	struct domain_capsule dc = { .data = &arg };
+	struct iommu_nesting_info *info;
+	int ret;
+
+	mutex_lock(&iommu->lock);
+	info = iommu->nesting_info;
+	if (!info || !(info->features & IOMMU_NESTING_FEAT_PAGE_RESP)) {
+		ret = -EOPNOTSUPP;
+		goto out_unlock;
+	}
+
+	ret = vfio_prepare_nesting_domain_capsule(iommu, &dc);
+	if (ret)
+		goto out_unlock;
+
+	ret = iommu_group_for_each_dev(dc.group->iommu_group, &dc,
+				       vfio_dev_page_resp_fn);
+
+out_unlock:
+	mutex_unlock(&iommu->lock);
+	return ret;
+}
+
 static long vfio_iommu_type1_nesting_op(struct vfio_iommu *iommu,
 					unsigned long arg)
 {
@@ -3492,6 +3526,9 @@ static long vfio_iommu_type1_nesting_op(struct vfio_iommu *iommu,
 		break;
 	case VFIO_IOMMU_NESTING_OP_CACHE_INVLD:
 		ret = vfio_iommu_invalidate_cache(iommu, arg + minsz);
+		break;
+	case VFIO_IOMMU_NESTING_OP_PAGE_RESP:
+		ret = vfio_iommu_page_response(iommu, arg + minsz);
 		break;
 	default:
 		ret = -EINVAL;
