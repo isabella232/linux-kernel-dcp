@@ -2731,14 +2731,20 @@ static int vfio_dev_bind_gpasid_fn(struct device *dev, void *data)
 {
 	struct domain_capsule *dc = (struct domain_capsule *)data;
 	unsigned long arg = *(unsigned long *)dc->data;
+	struct mdev_device *mdev = to_mdev_device(dev);
 	struct device *iommu_device;
+	void *iommu_fault_data = NULL;
 
 	iommu_device = vfio_get_iommu_device(dc->group, dev);
 	if (!iommu_device)
 		return -EINVAL;
 
+	if (iommu_device != dev)
+		iommu_fault_data = mdev_get_iommu_fault_data(mdev);
+
 	return iommu_uapi_sva_bind_gpasid(dc->domain, iommu_device,
-					  (void __user *)arg);
+					  (void __user *)arg,
+					  iommu_fault_data);
 }
 
 static int vfio_dev_unbind_gpasid_fn(struct device *dev, void *data)
