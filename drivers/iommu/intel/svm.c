@@ -422,8 +422,10 @@ out:
 	return 0;
 }
 
-int intel_svm_bind_gpasid(struct iommu_domain *domain, struct device *dev,
-			  struct iommu_gpasid_bind_data *data)
+int intel_svm_bind_gpasid(struct iommu_domain *domain,
+			  struct device *dev,
+			  struct iommu_gpasid_bind_data *data,
+			  void *fault_data)
 {
 	struct intel_iommu *iommu = device_to_iommu(dev, NULL, NULL);
 	struct intel_svm_dev *sdev = NULL;
@@ -497,6 +499,12 @@ int intel_svm_bind_gpasid(struct iommu_domain *domain, struct device *dev,
 			svm->gpasid = data->gpasid;
 			svm->flags |= SVM_FLAG_GUEST_PASID;
 			ioasid_attach_spid(data->hpasid, data->gpasid);
+			/*
+			 * Partial assignment needs to add fault data per-pasid
+			 */
+			if (is_aux_domain(dev, domain) && fault_data)
+				iommu_add_device_fault_data(dev, data->hpasid,
+							    fault_data);
 		}
 		ioasid_attach_data(data->hpasid, svm);
 		ioasid_get(NULL, svm->pasid);
@@ -588,6 +596,11 @@ int intel_svm_unbind_gpasid(struct device *dev, u32 pasid)
 			intel_pasid_tear_down_entry(iommu, dev,
 						    svm->pasid, false);
 			intel_svm_drain_prq(dev, svm->pasid);
+			/*
+			 * Partial assignment needs to delete fault data
+			 */
+			if (is_aux_domain(dev, domain))
+				iommu_delete_device_fault_data(dev, pasid);
 			kfree_rcu(sdev, rcu);
 
 			if (list_empty(&svm->devs)) {

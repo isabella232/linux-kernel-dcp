@@ -4595,8 +4595,8 @@ static void intel_iommu_domain_free(struct iommu_domain *domain)
  * Check whether a @domain could be attached to the @dev through the
  * aux-domain attach/detach APIs.
  */
-static inline bool
-is_aux_domain(struct device *dev, struct iommu_domain *domain)
+inline bool is_aux_domain(struct device *dev,
+			  struct iommu_domain *domain)
 {
 	struct device_domain_info *info = get_domain_info(dev);
 
