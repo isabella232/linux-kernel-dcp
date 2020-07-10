@@ -284,5 +284,21 @@ void setup_pks(void)
 	write_pkrs(pkrs_init_value);
 	cr4_set_bits(X86_CR4_PKS);
 }
+;
+
+/*
+ * PKRS is only temporarily changed during specific code paths.  Only a
+ * preemption during these windows away from the default value would
+ * require updating the MSR.  write_pkrs() handles this optimization.
+ */
+void pkrs_write_current(void)
+{
+	write_pkrs(current->thread.saved_pkrs);
+}
+
+void pks_init_task(struct task_struct *task)
+{
+	task->thread.saved_pkrs = pkrs_init_value;
+}
 
 #endif /* CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS */
