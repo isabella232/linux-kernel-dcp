@@ -11368,6 +11368,12 @@ int kvm_arch_hardware_setup(void *opaque)
 	if (!kvm_pasid_supported())
 		kvm_cpu_cap_clear(X86_FEATURE_ENQCMD);
 
+	/* Update CET features now that supported_xss is finalized. */
+	if (!kvm_cet_supported()) {
+		kvm_cpu_cap_clear(X86_FEATURE_SHSTK);
+		kvm_cpu_cap_clear(X86_FEATURE_IBT);
+	}
+
 #define __kvm_cpu_cap_has(UNUSED_, f) kvm_cpu_cap_has(f)
 	cr4_reserved_bits = __cr4_reserved_bits(__kvm_cpu_cap_has, UNUSED_);
 #undef __kvm_cpu_cap_has

@@ -113,6 +113,12 @@ static inline bool cpu_has_load_ia32_pkrs(void)
 	       (vmcs_config.vmexit_ctrl & VM_EXIT_LOAD_IA32_PKRS);
 }
 
+static inline bool cpu_has_load_cet_ctrl(void)
+{
+	return (vmcs_config.vmentry_ctrl & VM_ENTRY_LOAD_CET_STATE) &&
+	       (vmcs_config.vmexit_ctrl & VM_EXIT_LOAD_CET_STATE);
+}
+
 static inline bool cpu_has_vmx_mpx(void)
 {
 	return (vmcs_config.vmexit_ctrl & VM_EXIT_CLEAR_BNDCFGS) &&
