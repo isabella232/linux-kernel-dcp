@@ -1367,6 +1367,8 @@ static const u32 msrs_to_save_all[] = {
 	MSR_IA32_XSS,
 	MSR_ARCH_LBR_CTL, MSR_ARCH_LBR_DEPTH,
 	MSR_IA32_XFD, MSR_IA32_XFD_ERR,
+	MSR_IA32_U_CET, MSR_IA32_S_CET, MSR_IA32_INT_SSP_TAB, MSR_KVM_GUEST_SSP,
+	MSR_IA32_PL0_SSP, MSR_IA32_PL1_SSP, MSR_IA32_PL2_SSP, MSR_IA32_PL3_SSP,
 };
 
 static u32 msrs_to_save[ARRAY_SIZE(msrs_to_save_all)];
@@ -6482,6 +6484,14 @@ static void kvm_init_msr_list(void)
 		case MSR_IA32_XFD:
 		case MSR_IA32_XFD_ERR:
 			if (!kvm_cpu_cap_has(X86_FEATURE_XFD))
+				continue;
+			break;
+		case MSR_KVM_GUEST_SSP:
+		case MSR_IA32_U_CET:
+		case MSR_IA32_S_CET:
+		case MSR_IA32_INT_SSP_TAB:
+		case MSR_IA32_PL0_SSP ... MSR_IA32_PL3_SSP:
+			if (!kvm_cet_supported())
 				continue;
 			break;
 		default:
