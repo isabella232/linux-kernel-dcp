@@ -341,6 +341,11 @@ static inline bool kvm_pasid_supported(void)
 	return supported_xss & XFEATURE_MASK_PASID;
 }
 
+static inline bool kvm_cet_supported(void)
+{
+	return supported_xss & XFEATURE_MASK_CET_USER;
+}
+
 extern unsigned int min_timer_period_us;
 
 extern bool enable_vmware_backdoor;
