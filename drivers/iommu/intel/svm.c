@@ -623,6 +623,7 @@ int intel_svm_unbind_gpasid(struct iommu_domain *domain,
 			sdev->users--;
 		if (!sdev->users) {
 			list_del_rcu(&sdev->list);
+			iommu->flags |= VTD_FLAG_PGTT_SL_ONLY;
 			intel_pasid_tear_down_entry(iommu, dev,
 						    svm->pasid, false);
 			intel_svm_drain_prq(dev, svm->pasid);

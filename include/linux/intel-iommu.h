@@ -478,6 +478,7 @@ enum {
 #define VTD_FLAG_TRANS_PRE_ENABLED	(1 << 0)
 #define VTD_FLAG_IRQ_REMAP_PRE_ENABLED	(1 << 1)
 #define VTD_FLAG_SVM_CAPABLE		(1 << 2)
+#define VTD_FLAG_PGTT_SL_ONLY		(1 << 3)
 
 extern int intel_iommu_sm;
 extern spinlock_t device_domain_lock;
