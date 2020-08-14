@@ -309,13 +309,30 @@ static inline void pasid_clear_entry_with_fpd(struct pasid_entry *pe)
 }
 
 static void
-intel_pasid_clear_entry(struct device *dev, u32 pasid, bool fault_ignore)
+intel_pasid_clear_entry(struct intel_iommu *iommu, struct device *dev,
+			u32 pasid, bool fault_ignore)
 {
 	struct pasid_entry *pe;
+	u64 pe_val;
+	bool nested;
 
 	pe = intel_pasid_get_entry(dev, pasid);
 	if (WARN_ON(!pe))
 		return;
+
+	/*
+	 * The guest may reboot from scalable mode to legacy mode. During this
+	 * phase, there is no chance to setup SLT. So, we should only reset PGTT
+	 * from NESTED to SL and keep other bits when unbind gpasid is executed.
+	 */
+	pe_val = READ_ONCE(pe->val[0]);
+	nested = (((pe_val >> 6) & 0x7) == PASID_ENTRY_PGTT_NESTED) ? true : false;
+	if (nested && (iommu->flags & VTD_FLAG_PGTT_SL_ONLY)) {
+		pe_val &= 0xfffffffffffffebf;
+		WRITE_ONCE(pe->val[0], pe_val);
+		iommu->flags &= ~VTD_FLAG_PGTT_SL_ONLY;
+		return;
+	}
 
 	if (fault_ignore && pasid_pte_is_present(pe))
 		pasid_clear_entry_with_fpd(pe);
@@ -521,9 +538,7 @@ void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
 		return;
 
 	did = pasid_get_domain_id(pte);
-	pgtt = pasid_pte_get_pgtt(pte);
-
-	intel_pasid_clear_entry(dev, pasid, fault_ignore);
+	intel_pasid_clear_entry(iommu, dev, pasid, fault_ignore);
 
 	if (!ecap_coherent(iommu->ecap))
 		clflush_cache_range(pte, sizeof(*pte));
