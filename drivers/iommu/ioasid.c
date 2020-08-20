@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * I/O Address Space ID allocator. There is one global IOASID space, split into
- * subsets. Users create a subset with DECLARE_IOASID_SET, then allocate and
- * free IOASIDs with ioasid_alloc and ioasid_put.
+ * sets. Users create a set with ioasid_set_alloc, then allocate/free IDs
+ * with ioasid_alloc, ioasid_put, and ioasid_free.
  */
 #include <linux/ioasid.h>
 #include <linux/module.h>
@@ -14,6 +14,7 @@
 #define PCI_PASID_MAX 0x100000
 static ioasid_t ioasid_capacity = PCI_PASID_MAX;
 static ioasid_t ioasid_capacity_avail = PCI_PASID_MAX;
+static DEFINE_XARRAY_ALLOC(ioasid_sets);
 struct ioasid_data {
 	ioasid_t id;
 	struct ioasid_set *set;
@@ -394,6 +395,151 @@ done_unlock:
 }
 EXPORT_SYMBOL_GPL(ioasid_detach_data);
 
+static inline bool ioasid_set_is_valid(struct ioasid_set *set)
+{
+	return xa_load(&ioasid_sets, set->id) == set;
+}
+
+/**
+ * ioasid_set_alloc - Allocate a new IOASID set for a given token
+ *
+ * @token:	An optional arbitrary number that can be associated with the
+ *		IOASID set. @token can be NULL if the type is
+ *		IOASID_SET_TYPE_NULL
+ * @quota:	Quota allowed in this set, 0 indicates no limit for the set
+ * @type:	The type of the token used to create the IOASID set
+ *
+ * IOASID is limited system-wide resource that requires quota management.
+ * Token will be stored in the ioasid_set returned. A reference will be taken
+ * on the newly created set. Subsequent IOASID allocation within the set need
+ * to use the returned ioasid_set pointer.
+ */
+struct ioasid_set *ioasid_set_alloc(void *token, ioasid_t quota, int type)
+{
+	struct ioasid_set *set;
+	unsigned long index;
+	ioasid_t id;
+
+	if (type >= IOASID_SET_TYPE_NR)
+		return ERR_PTR(-EINVAL);
+
+	/* No limit for the set, use whatever is available on the system */
+	if (!quota)
+		quota = ioasid_capacity_avail;
+
+	spin_lock(&ioasid_allocator_lock);
+	if (quota > ioasid_capacity_avail) {
+		pr_warn("Out of IOASID capacity! ask %d, avail %d\n",
+			quota, ioasid_capacity_avail);
+		set = ERR_PTR(-ENOSPC);
+		goto exit_unlock;
+	}
+
+	/*
+	 * Token is only unique within its types but right now we have only
+	 * mm type. If we have more token types, we have to match type as well.
+	 */
+	switch (type) {
+	case IOASID_SET_TYPE_MM:
+		if (!token) {
+			set = ERR_PTR(-EINVAL);
+			goto exit_unlock;
+		}
+		/* Search existing set tokens, reject duplicates */
+		xa_for_each(&ioasid_sets, index, set) {
+			if (set->token == token && set->type == IOASID_SET_TYPE_MM) {
+				set = ERR_PTR(-EEXIST);
+				goto exit_unlock;
+			}
+		}
+		break;
+	case IOASID_SET_TYPE_NULL:
+		if (!token)
+			break;
+		fallthrough;
+	default:
+		pr_err("Invalid token and IOASID type\n");
+		set = ERR_PTR(-EINVAL);
+		goto exit_unlock;
+	}
+
+	set = kzalloc(sizeof(*set), GFP_ATOMIC);
+	if (!set) {
+		set = ERR_PTR(-ENOMEM);
+		goto exit_unlock;
+	}
+
+	if (xa_alloc(&ioasid_sets, &id, set,
+		     XA_LIMIT(0, ioasid_capacity_avail),
+		     GFP_ATOMIC)) {
+		kfree(set);
+		set = ERR_PTR(-ENOSPC);
+		goto exit_unlock;
+	}
+
+	set->token = token;
+	set->type = type;
+	set->quota = quota;
+	set->id = id;
+	atomic_set(&set->nr_ioasids, 0);
+	/*
+	 * Per set XA is used to store private IDs within the set, get ready
+	 * for ioasid_set private ID and system-wide IOASID allocation
+	 * results.
+	 */
+	xa_init(&set->xa);
+	ioasid_capacity_avail -= quota;
+
+exit_unlock:
+	spin_unlock(&ioasid_allocator_lock);
+
+	return set;
+}
+EXPORT_SYMBOL_GPL(ioasid_set_alloc);
+
+static int ioasid_set_free_locked(struct ioasid_set *set)
+{
+	int ret = 0;
+
+	if (!ioasid_set_is_valid(set)) {
+		ret = -EINVAL;
+		goto exit_done;
+	}
+
+	if (atomic_read(&set->nr_ioasids)) {
+		ret = -EBUSY;
+		goto exit_done;
+	}
+
+	WARN_ON(!xa_empty(&set->xa));
+	/*
+	 * Token got released right away after the ioasid_set is freed.
+	 * If a new set is created immediately with the newly released token,
+	 * it will not allocate the same IOASIDs unless they are reclaimed.
+	 */
+	xa_erase(&ioasid_sets, set->id);
+	kfree_rcu(set, rcu);
+exit_done:
+	return ret;
+};
+
+/**
+ * @brief Free an ioasid_set if empty. Restore pending notification list.
+ *
+ * @param set to be freed
+ * @return
+ */
+int ioasid_set_free(struct ioasid_set *set)
+{
+	int ret = 0;
+
+	spin_lock(&ioasid_allocator_lock);
+	ret = ioasid_set_free_locked(set);
+	spin_unlock(&ioasid_allocator_lock);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(ioasid_set_free);
+
 /**
  * ioasid_alloc - Allocate an IOASID
  * @set: the IOASID set
@@ -411,11 +557,22 @@ ioasid_t ioasid_alloc(struct ioasid_set *set, ioasid_t min, ioasid_t max,
 {
 	struct ioasid_data *data;
 	void *adata;
-	ioasid_t id;
+	ioasid_t id = INVALID_IOASID;
+
+	spin_lock(&ioasid_allocator_lock);
+	/* Check if the IOASID set has been allocated and initialized */
+	if (!ioasid_set_is_valid(set))
+		goto done_unlock;
+
+	if (set->quota <= atomic_read(&set->nr_ioasids)) {
+		pr_err_ratelimited("IOASID set out of quota %d\n",
+				   set->quota);
+		goto done_unlock;
+	}
 
 	data = kzalloc(sizeof(*data), GFP_ATOMIC);
 	if (!data)
-		return INVALID_IOASID;
+		goto done_unlock;
 
 	data->set = set;
 	data->private = private;
@@ -425,7 +582,6 @@ ioasid_t ioasid_alloc(struct ioasid_set *set, ioasid_t min, ioasid_t max,
 	 * Custom allocator needs allocator data to perform platform specific
 	 * operations.
 	 */
-	spin_lock(&ioasid_allocator_lock);
 	adata = active_allocator->flags & IOASID_ALLOCATOR_CUSTOM ? active_allocator->ops->pdata : data;
 	id = active_allocator->ops->alloc(min, max, adata);
 	if (id == INVALID_IOASID) {
@@ -442,67 +598,121 @@ ioasid_t ioasid_alloc(struct ioasid_set *set, ioasid_t min, ioasid_t max,
 	}
 	data->id = id;
 
+	/* Store IOASID in the per set data */
+	if (xa_err(xa_store(&set->xa, id, data, GFP_ATOMIC))) {
+		pr_err_ratelimited("Failed to store ioasid %d in set\n", id);
+		active_allocator->ops->free(id, active_allocator->ops->pdata);
+		goto exit_free;
+	}
+	atomic_inc(&set->nr_ioasids);
+	goto done_unlock;
+exit_free:
+	kfree(data);
+done_unlock:
 	spin_unlock(&ioasid_allocator_lock);
 	return id;
-exit_free:
-	spin_unlock(&ioasid_allocator_lock);
-	kfree(data);
-	return INVALID_IOASID;
 }
 EXPORT_SYMBOL_GPL(ioasid_alloc);
 
-/**
- * ioasid_get - obtain a reference to the IOASID
- */
-void ioasid_get(ioasid_t ioasid)
+static void ioasid_do_free_locked(struct ioasid_data *data)
 {
 	struct ioasid_data *ioasid_data;
 
+	active_allocator->ops->free(data->id, active_allocator->ops->pdata);
+	/* Custom allocator needs additional steps to free the xa element */
+	if (active_allocator->flags & IOASID_ALLOCATOR_CUSTOM) {
+		ioasid_data = xa_erase(&active_allocator->xa, data->id);
+		kfree_rcu(ioasid_data, rcu);
+	}
+	atomic_dec(&data->set->nr_ioasids);
+	xa_erase(&data->set->xa, data->id);
+	/* Destroy the set if empty */
+	if (!atomic_read(&data->set->nr_ioasids))
+		ioasid_set_free_locked(data->set);
+}
+
+int ioasid_get_locked(struct ioasid_set *set, ioasid_t ioasid)
+{
+	struct ioasid_data *data;
+
+	data = xa_load(&active_allocator->xa, ioasid);
+	if (!data) {
+		pr_err("Trying to get unknown IOASID %u\n", ioasid);
+		return -EINVAL;
+	}
+
+	/* Check set ownership if the set is non-null */
+	if (set && data->set != set) {
+		pr_err("Trying to get IOASID %u outside the set\n", ioasid);
+		/* data found but does not belong to the set */
+		return -EACCES;
+	}
+	refcount_inc(&data->refs);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(ioasid_get_locked);
+
+/**
+ * ioasid_get - obtain a reference to the IOASID
+ * @set:	the ioasid_set to check permission against if not NULL
+ * @ioasid:	the IOASID to get reference
+ *
+ *
+ * Return: 0 on success, error if failed.
+ */
+int ioasid_get(struct ioasid_set *set, ioasid_t ioasid)
+{
+	int ret;
+
 	spin_lock(&ioasid_allocator_lock);
-	ioasid_data = xa_load(&active_allocator->xa, ioasid);
-	if (ioasid_data)
-		refcount_inc(&ioasid_data->refs);
-	else
-		WARN_ON(1);
+	ret = ioasid_get_locked(set, ioasid);
 	spin_unlock(&ioasid_allocator_lock);
+
+	return ret;
 }
 EXPORT_SYMBOL_GPL(ioasid_get);
 
+bool ioasid_put_locked(struct ioasid_set *set, ioasid_t ioasid)
+{
+	struct ioasid_data *data;
+
+	data = xa_load(&active_allocator->xa, ioasid);
+	if (!data) {
+		pr_err("Trying to put unknown IOASID %u\n", ioasid);
+		return false;
+	}
+	if (set && data->set != set) {
+		pr_err("Trying to drop IOASID %u outside the set\n", ioasid);
+		return false;
+	}
+	if (!refcount_dec_and_test(&data->refs))
+		return false;
+
+	ioasid_do_free_locked(data);
+
+	return true;
+}
+EXPORT_SYMBOL_GPL(ioasid_put_locked);
+
 /**
  * ioasid_put - Release a reference to an ioasid
- * @ioasid: the ID to remove
+ * @set:	the ioasid_set to check permission against if not NULL
+ * @ioasid:	the IOASID to drop reference
  *
  * Put a reference to the IOASID, free it when the number of references drops to
  * zero.
  *
  * Return: %true if the IOASID was freed, %false otherwise.
  */
-bool ioasid_put(ioasid_t ioasid)
+bool ioasid_put(struct ioasid_set *set, ioasid_t ioasid)
 {
-	bool free = false;
-	struct ioasid_data *ioasid_data;
+	bool ret;
 
 	spin_lock(&ioasid_allocator_lock);
-	ioasid_data = xa_load(&active_allocator->xa, ioasid);
-	if (!ioasid_data) {
-		pr_err("Trying to free unknown IOASID %u\n", ioasid);
-		goto exit_unlock;
-	}
-
-	free = refcount_dec_and_test(&ioasid_data->refs);
-	if (!free)
-		goto exit_unlock;
-
-	active_allocator->ops->free(ioasid, active_allocator->ops->pdata);
-	/* Custom allocator needs additional steps to free the xa element */
-	if (active_allocator->flags & IOASID_ALLOCATOR_CUSTOM) {
-		ioasid_data = xa_erase(&active_allocator->xa, ioasid);
-		kfree_rcu(ioasid_data, rcu);
-	}
-
-exit_unlock:
+	ret = ioasid_put_locked(set, ioasid);
 	spin_unlock(&ioasid_allocator_lock);
-	return free;
+	return ret;
 }
 EXPORT_SYMBOL_GPL(ioasid_put);
 

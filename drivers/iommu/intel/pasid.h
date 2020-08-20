@@ -106,6 +106,10 @@ static inline u16 pasid_pte_get_pgtt(struct pasid_entry *pte)
 }
 
 extern unsigned int intel_pasid_max_id;
+extern struct ioasid_set *host_pasid_set;
+int intel_pasid_alloc_id(void *ptr, int start, int end, gfp_t gfp);
+void intel_pasid_free_id(u32 pasid);
+void *intel_pasid_lookup_id(u32 pasid);
 int intel_pasid_alloc_table(struct device *dev);
 void intel_pasid_free_table(struct device *dev);
 struct pasid_table *intel_pasid_get_table(struct device *dev);

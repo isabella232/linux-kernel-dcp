@@ -87,6 +87,27 @@
 #define LEVEL_STRIDE		(9)
 #define LEVEL_MASK		(((u64)1 << LEVEL_STRIDE) - 1)
 
+/*
+ * This bitmap is used to advertise the page sizes our hardware support
+ * to the IOMMU core, which will then use this information to split
+ * physically contiguous memory regions it is mapping into page sizes
+ * that we support.
+ *
+ * Traditionally the IOMMU core just handed us the mappings directly,
+ * after making sure the size is an order of a 4KiB page and that the
+ * mapping has natural alignment.
+ *
+ * To retain this behavior, we currently advertise that we support
+ * all page sizes that are an order of 4KiB.
+ *
+ * If at some point we'd like to utilize the IOMMU core's new behavior,
+ * we could change this to advertise the real page sizes we support.
+ */
+#define INTEL_IOMMU_PGSIZES	(~0xFFFUL)
+
+/* PASIDs used by host SVM */
+struct ioasid_set *host_pasid_set;
+
 static inline int agaw_to_level(int agaw)
 {
 	return agaw + 2;
@@ -157,6 +178,7 @@ static struct intel_iommu **g_iommus;
 
 static void __init check_tylersburg_isoch(void);
 static int rwbf_quirk;
+static bool scalable_mode_support(void);
 
 /*
  * set to 1 to panic kernel if can't successfully enable VT-d
@@ -3135,8 +3157,8 @@ static void intel_vcmd_ioasid_free(ioasid_t ioasid, void *data)
 	 * Sanity check the ioasid owner is done at upper layer, e.g. VFIO
 	 * We can only free the PASID when all the devices are unbound.
 	 */
-	if (ioasid_find(NULL, ioasid, NULL)) {
-		pr_alert("Cannot free active IOASID %d\n", ioasid);
+	if (IS_ERR(ioasid_find(host_pasid_set, ioasid, NULL))) {
+		pr_err("IOASID %d to be freed but not in system set\n", ioasid);
 		return;
 	}
 	vcmd_free_pasid(iommu, ioasid);
@@ -3324,8 +3346,17 @@ static int __init init_dmars(void)
 		goto free_iommu;
 
 	/* PASID is needed for scalable mode irrespective to SVM */
-	if (intel_iommu_sm)
+	if (scalable_mode_support()) {
 		ioasid_install_capacity(intel_pasid_max_id);
+		/* We should not run out of IOASIDs at boot */
+		host_pasid_set = ioasid_set_alloc(NULL, PID_MAX_DEFAULT,
+						  IOASID_SET_TYPE_NULL);
+		if (IS_ERR_OR_NULL(host_pasid_set)) {
+			pr_err("Failed to allocate host PASID set %lu\n",
+				PTR_ERR(host_pasid_set));
+			intel_iommu_sm = 0;
+		}
+	}
 
 	/*
 	 * for each drhd
@@ -3372,7 +3403,7 @@ free_iommu:
 		disable_dmar_iommu(iommu);
 		free_dmar_iommu(iommu);
 	}
-
+	ioasid_set_free(host_pasid_set);
 	kfree(g_iommus);
 
 error:
@@ -4645,7 +4676,7 @@ static int aux_domain_add_dev(struct dmar_domain *domain,
 		u32 pasid;
 
 		/* No private data needed for the default pasid */
-		pasid = ioasid_alloc(NULL, PASID_MIN,
+		pasid = ioasid_alloc(host_pasid_set, PASID_MIN,
 				     pci_max_pasids(to_pci_dev(dev)) - 1,
 				     NULL);
 		if (pasid == INVALID_IOASID) {
@@ -4702,7 +4733,7 @@ attach_failed:
 link_failed:
 	spin_unlock_irqrestore(&device_domain_lock, flags);
 	if (list_empty(&domain->subdevices) && domain->default_pasid > 0)
-		ioasid_put(domain->default_pasid);
+		ioasid_put(host_pasid_set, domain->default_pasid);
 
 	return ret;
 }
@@ -4732,7 +4763,7 @@ static void aux_domain_remove_dev(struct dmar_domain *domain,
 	spin_unlock_irqrestore(&device_domain_lock, flags);
 
 	if (list_empty(&domain->subdevices) && domain->default_pasid > 0)
-		ioasid_put(domain->default_pasid);
+		ioasid_put(host_pasid_set, domain->default_pasid);
 }
 
 static int prepare_domain_attach_device(struct iommu_domain *domain,
