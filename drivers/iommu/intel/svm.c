@@ -173,6 +173,104 @@ static inline bool intel_svm_capable(struct intel_iommu *iommu)
 	return iommu->flags & VTD_FLAG_SVM_CAPABLE;
 }
 
+static inline void intel_svm_drop_pasid(ioasid_t pasid)
+{
+	/*
+	 * Detaching SPID results in UNBIND notification on the set, we must
+	 * do this before dropping the IOASID reference, otherwise the
+	 * notification chain may get destroyed.
+	 */
+	ioasid_detach_spid(pasid);
+	ioasid_detach_data(pasid);
+	ioasid_put(NULL, pasid);
+}
+
+static DEFINE_MUTEX(pasid_mutex);
+#define pasid_lock_held() lock_is_held(&pasid_mutex.dep_map)
+
+static void intel_svm_free_async_fn(struct work_struct *work)
+{
+	struct intel_svm *svm = container_of(work, struct intel_svm, work);
+	struct intel_svm_dev *sdev;
+
+	/*
+	 * Unbind all devices associated with this PASID which is
+	 * being freed by other users such as VFIO.
+	 */
+	mutex_lock(&pasid_mutex);
+	list_for_each_entry_rcu(sdev, &svm->devs, list, pasid_lock_held()) {
+		/* Does not poison forward pointer */
+		list_del_rcu(&sdev->list);
+		spin_lock(&sdev->iommu->lock);
+		intel_pasid_tear_down_entry(sdev->iommu, sdev->dev,
+					svm->pasid, true);
+		intel_svm_drain_prq(sdev->dev, svm->pasid);
+		spin_unlock(&sdev->iommu->lock);
+		kfree_rcu(sdev, rcu);
+	}
+	/*
+	 * We may not be the last user to drop the reference but since
+	 * the PASID is in FREE_PENDING state, no one can get new reference.
+	 * Therefore, we can safely free the private data svm.
+	 */
+	intel_svm_drop_pasid(svm->pasid);
+
+	/*
+	 * Free before unbind can only happen with host PASIDs used for
+	 * guest SVM. We get here because ioasid_free is called with
+	 * outstanding references. So we need to drop the reference
+	 * such that the PASID can be reclaimed. unbind_gpasid() after this
+	 * will not result in dropping refcount since the private data is
+	 * already detached.
+	 */
+	kfree(svm);
+
+	mutex_unlock(&pasid_mutex);
+}
+
+
+static int pasid_status_change(struct notifier_block *nb,
+				unsigned long code, void *data)
+{
+	struct ioasid_nb_args *args = (struct ioasid_nb_args *)data;
+	struct intel_svm *svm = (struct intel_svm *)args->pdata;
+	int ret = NOTIFY_DONE;
+
+	/*
+	 * Notification private data is a choice of vendor driver when the
+	 * IOASID is allocated or attached after allocation. When the data
+	 * type changes, we must make modifications here accordingly.
+	 */
+	if (code == IOASID_NOTIFY_FREE) {
+		/*
+		 * If PASID UNBIND happens before FREE, private data of the
+		 * IOASID should be NULL, then we don't need to do anything.
+		 */
+		if (!svm)
+			goto done;
+		if (args->id != svm->pasid) {
+			pr_warn("Notify PASID does not match data %d : %d\n",
+				args->id, svm->pasid);
+			goto done;
+		}
+		if (!ioasid_queue_work(&svm->work))
+			pr_warn("Cleanup work already queued\n");
+		return NOTIFY_OK;
+	}
+done:
+	return ret;
+}
+
+static struct notifier_block pasid_nb = {
+	.notifier_call = pasid_status_change,
+};
+
+void intel_svm_add_pasid_notifier(void)
+{
+	/* Listen to all PASIDs, not specific to a set */
+	ioasid_register_notifier(NULL, &pasid_nb);
+}
+
 void intel_svm_check(struct intel_iommu *iommu)
 {
 	if (!pasid_supported(iommu))
@@ -280,7 +378,11 @@ static const struct mmu_notifier_ops intel_mmuops = {
 	.invalidate_range = intel_invalidate_range,
 };
 
-static DEFINE_MUTEX(pasid_mutex);
+static LIST_HEAD(global_svm_list);
+
+#define for_each_svm_dev(sdev, svm, d)			\
+	list_for_each_entry((sdev), &(svm)->devs, list)	\
+		if ((d) != (sdev)->dev) {} else
 
 static int pasid_to_svm_sdev(struct device *dev,
 			     struct ioasid_set *set,
@@ -394,8 +496,15 @@ int intel_svm_bind_gpasid(struct iommu_domain *domain, struct device *dev,
 		if (data->flags & IOMMU_SVA_GPASID_VAL) {
 			svm->gpasid = data->gpasid;
 			svm->flags |= SVM_FLAG_GUEST_PASID;
+			ioasid_attach_spid(data->hpasid, data->gpasid);
 		}
 		ioasid_attach_data(data->hpasid, svm);
+		ioasid_get(NULL, svm->pasid);
+		/*
+		 * Set up cleanup async work in case IOASID core notify us PASID
+		 * is freed before unbind.
+		 */
+		INIT_WORK(&svm->work, intel_svm_free_async_fn);
 		INIT_LIST_HEAD_RCU(&svm->devs);
 	}
 	sdev = kzalloc(sizeof(*sdev), GFP_KERNEL);
@@ -491,7 +600,7 @@ int intel_svm_unbind_gpasid(struct device *dev, u32 pasid)
 				 * the unbind, IOMMU driver will get notified
 				 * and perform cleanup.
 				 */
-				ioasid_detach_data(pasid);
+				intel_svm_drop_pasid(pasid);
 				kfree(svm);
 			}
 		}
