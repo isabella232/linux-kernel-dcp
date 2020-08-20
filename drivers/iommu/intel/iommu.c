@@ -3355,6 +3355,8 @@ static int __init init_dmars(void)
 			pr_err("Failed to allocate host PASID set %lu\n",
 				PTR_ERR(host_pasid_set));
 			intel_iommu_sm = 0;
+		} else {
+			intel_svm_add_pasid_notifier();
 		}
 	}
 
