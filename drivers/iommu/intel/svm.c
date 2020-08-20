@@ -282,7 +282,9 @@ static const struct mmu_notifier_ops intel_mmuops = {
 
 static DEFINE_MUTEX(pasid_mutex);
 
-static int pasid_to_svm_sdev(struct device *dev, unsigned int pasid,
+static int pasid_to_svm_sdev(struct device *dev,
+			     struct ioasid_set *set,
+			     unsigned int pasid,
 			     struct intel_svm **rsvm,
 			     struct intel_svm_dev **rsdev)
 {
@@ -296,7 +298,7 @@ static int pasid_to_svm_sdev(struct device *dev, unsigned int pasid,
 	if (pasid == INVALID_IOASID || pasid >= PASID_MAX)
 		return -EINVAL;
 
-	svm = pasid_private_find(pasid);
+	svm = ioasid_find(set, pasid, NULL);
 	if (IS_ERR(svm))
 		return PTR_ERR(svm);
 
@@ -364,7 +366,8 @@ int intel_svm_bind_gpasid(struct iommu_domain *domain, struct device *dev,
 	dmar_domain = to_dmar_domain(domain);
 
 	mutex_lock(&pasid_mutex);
-	ret = pasid_to_svm_sdev(dev, data->hpasid, &svm, &sdev);
+	ret = pasid_to_svm_sdev(dev, NULL,
+				data->hpasid, &svm, &sdev);
 	if (ret)
 		goto out;
 
@@ -471,7 +474,7 @@ int intel_svm_unbind_gpasid(struct device *dev, u32 pasid)
 		return -EINVAL;
 
 	mutex_lock(&pasid_mutex);
-	ret = pasid_to_svm_sdev(dev, pasid, &svm, &sdev);
+	ret = pasid_to_svm_sdev(dev, NULL, pasid, &svm, &sdev);
 	if (ret)
 		goto out;
 
@@ -587,17 +590,63 @@ static struct iommu_sva *intel_svm_bind_mm(struct intel_iommu *iommu,
 			sdev->qdep = 0;
 	}
 
-	/* Setup the pasid table: */
-	sflags = (flags & SVM_FLAG_SUPERVISOR_MODE) ?
-			PASID_FLAG_SUPERVISOR_MODE : 0;
-	sflags |= cpu_feature_enabled(X86_FEATURE_LA57) ? PASID_FLAG_FL5LP : 0;
-	spin_lock_irqsave(&iommu->lock, iflags);
-	ret = intel_pasid_setup_first_level(iommu, dev, mm->pgd, mm->pasid,
-					    FLPT_DEFAULT_DID, sflags);
-	spin_unlock_irqrestore(&iommu->lock, iflags);
+	/* Finish the setup now we know we're keeping it */
+	sdev->users = 1;
+	sdev->ops = ops;
+	init_rcu_head(&sdev->rcu);
 
-	if (ret)
-		goto free_sdev;
+	if (!svm) {
+		svm = kzalloc(sizeof(*svm), GFP_KERNEL);
+		if (!svm) {
+			ret = -ENOMEM;
+			kfree(sdev);
+			goto out;
+		}
+
+		if (pasid_max > intel_pasid_max_id)
+			pasid_max = intel_pasid_max_id;
+
+		/* Do not use PASID 0, reserved for RID to PASID */
+		svm->pasid = ioasid_alloc(host_pasid_set, PASID_MIN,
+					  pasid_max - 1, svm);
+		if (svm->pasid == INVALID_IOASID) {
+			kfree(svm);
+			kfree(sdev);
+			ret = -ENOSPC;
+			goto out;
+		}
+		svm->notifier.ops = &intel_mmuops;
+		svm->mm = mm;
+		svm->flags = flags;
+		INIT_LIST_HEAD_RCU(&svm->devs);
+		INIT_LIST_HEAD(&svm->list);
+		ret = -ENOMEM;
+		if (mm) {
+			ret = mmu_notifier_register(&svm->notifier, mm);
+			if (ret) {
+				ioasid_put(host_pasid_set, svm->pasid);
+				kfree(svm);
+				kfree(sdev);
+				goto out;
+			}
+		}
+
+		spin_lock_irqsave(&iommu->lock, iflags);
+		ret = intel_pasid_setup_first_level(iommu, dev,
+				mm ? mm->pgd : init_mm.pgd,
+				svm->pasid, FLPT_DEFAULT_DID,
+				(mm ? 0 : PASID_FLAG_SUPERVISOR_MODE) |
+				(cpu_feature_enabled(X86_FEATURE_LA57) ?
+				 PASID_FLAG_FL5LP : 0));
+		spin_unlock_irqrestore(&iommu->lock, iflags);
+		if (ret) {
+			if (mm)
+				mmu_notifier_unregister(&svm->notifier, mm);
+			ioasid_put(host_pasid_set, svm->pasid);
+			kfree(svm);
+			kfree(sdev);
+			goto out;
+		}
 
 	list_add_rcu(&sdev->list, &svm->devs);
 success:
@@ -629,7 +678,8 @@ static int intel_svm_unbind_mm(struct device *dev, u32 pasid)
 	if (!iommu)
 		goto out;
 
-	ret = pasid_to_svm_sdev(dev, pasid, &svm, &sdev);
+	ret = pasid_to_svm_sdev(dev, host_pasid_set,
+				pasid, &svm, &sdev);
 	if (ret)
 		goto out;
 	mm = svm->mm;
@@ -651,9 +701,13 @@ static int intel_svm_unbind_mm(struct device *dev, u32 pasid)
 			kfree_rcu(sdev, rcu);
 
 			if (list_empty(&svm->devs)) {
-				if (svm->notifier.ops)
-					mmu_notifier_unregister(&svm->notifier, mm);
-				pasid_private_remove(svm->pasid);
+				ioasid_put(host_pasid_set, svm->pasid);
+				if (svm->mm) {
+					mmu_notifier_unregister(&svm->notifier, svm->mm);
+					/* Clear mm's pasid. */
+					load_pasid(svm->mm, PASID_DISABLED);
+				}
+				list_del(&svm->list);
 				/* We mandate that no page faults may be outstanding
 				 * for the PASID when intel_svm_unbind_mm() is called.
 				 * If that is not obeyed, subtle errors will happen.
@@ -1119,7 +1173,8 @@ int intel_svm_page_response(struct device *dev,
 		goto out;
 	}
 
-	ret = pasid_to_svm_sdev(dev, prm->pasid, &svm, &sdev);
+	ret = pasid_to_svm_sdev(dev, host_pasid_set,
+				prm->pasid, &svm, &sdev);
 	if (ret || !sdev) {
 		ret = -ENODEV;
 		goto out;

@@ -506,9 +506,8 @@ int arm_smmu_master_enable_sva(struct arm_smmu_master *master)
 	int ret;
 
 	mutex_lock(&sva_lock);
-	ret = arm_smmu_master_sva_enable_iopf(master);
-	if (!ret)
-		master->sva_enabled = true;
+	master->sva_enabled = true;
+	iommu_sva_init();
 	mutex_unlock(&sva_lock);
 
 	return ret;
