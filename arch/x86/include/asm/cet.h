@@ -25,6 +25,7 @@ int shstk_setup_rstor_token(bool proc32, unsigned long restorer,
 int shstk_check_rstor_token(bool proc32, unsigned long *new_ssp);
 int setup_signal_shadow_stack(int proc32, void __user *restorer);
 int restore_signal_shadow_stack(void);
+unsigned long cet_alloc_shstk(unsigned long size);
 #else
 static inline void shstk_setup(void) {}
 static inline int shstk_alloc_thread_stack(struct task_struct *p,

@@ -27,6 +27,28 @@ static int elf_feat_copy_status_to_user(struct thread_shstk *shstk, u64 __user *
 	return copy_to_user(ubuf, buf, sizeof(buf));
 }
 
+#ifdef CONFIG_X86_SHADOW_STACK
+static int handle_alloc_shstk(u64 arg2)
+{
+	unsigned long addr, size;
+
+	if (get_user(size, (unsigned long __user *)arg2))
+		return -EFAULT;
+
+	addr = cet_alloc_shstk(size);
+	if (IS_ERR_VALUE(addr))
+		return PTR_ERR((void *)addr);
+
+	if (put_user((u64)addr, (u64 __user *)arg2)) {
+		vm_munmap(addr, size);
+		return -EFAULT;
+	}
+
+	return 0;
+}
+#endif
+
+
 int prctl_elf_feature(int option, u64 arg2)
 {
 	struct thread_struct *thread = &current->thread;
@@ -42,7 +64,7 @@ int prctl_elf_feature(int option, u64 arg2)
 			return -EPERM;
 
 		if (arg2 & LINUX_X86_FEATURE_SHSTK)
-			shstk_disable()
+			shstk_disable();
 		if (arg2 & LINUX_X86_FEATURE_WRSS)
 			wrss_control(false);
 
@@ -58,6 +80,10 @@ int prctl_elf_feature(int option, u64 arg2)
 	case ARCH_X86_FEATURE_LOCK:
 		thread->feat_prctl_locked |= arg2;
 		return 0;
+#ifdef CONFIG_X86_SHADOW_STACK
+	case ARCH_X86_CET_ALLOC_SHSTK:
+		return handle_alloc_shstk(arg2);
+#endif
 
 	default:
 		return -EINVAL;
