@@ -81,7 +81,7 @@
 #define KVM_REQ_PMI			KVM_ARCH_REQ(11)
 #define KVM_REQ_SMI			KVM_ARCH_REQ(12)
 #define KVM_REQ_MASTERCLOCK_UPDATE	KVM_ARCH_REQ(13)
-#define KVM_REQ_MCLOCK_INPROGRESS \
+#define KVM_REQ_BLOCK_VMENTRY \
 	KVM_ARCH_REQ_FLAGS(14, KVM_REQUEST_WAIT | KVM_REQUEST_NO_WAKEUP)
 #define KVM_REQ_SCAN_IOAPIC \
 	KVM_ARCH_REQ_FLAGS(15, KVM_REQUEST_WAIT | KVM_REQUEST_NO_WAKEUP)
@@ -2025,6 +2025,9 @@ static inline int kvm_cpu_get_apicid(int mps_cpu)
 	return BAD_APICID;
 #endif
 }
+
+void kvm_make_block_vmentry_request(struct kvm *kvm);
+void kvm_clear_block_vmentry_request(struct kvm *kvm);
 
 #define put_smstate(type, buf, offset, val)                      \
 	*(type *)((buf) + (offset) - 0x7e00) = val
