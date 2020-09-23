@@ -42,6 +42,7 @@
 #include <linux/dma-direct.h>
 #include <linux/crash_dump.h>
 #include <linux/numa.h>
+#include <linux/ioasid.h>
 #include <asm/irq_remapping.h>
 #include <asm/cacheflush.h>
 #include <asm/iommu.h>
@@ -3321,6 +3322,10 @@ static int __init init_dmars(void)
 	ret = si_domain_init(hw_pass_through);
 	if (ret)
 		goto free_iommu;
+
+	/* PASID is needed for scalable mode irrespective to SVM */
+	if (intel_iommu_sm)
+		ioasid_install_capacity(intel_pasid_max_id);
 
 	/*
 	 * for each drhd
