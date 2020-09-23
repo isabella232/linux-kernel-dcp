@@ -10,6 +10,10 @@
 #include <linux/spinlock.h>
 #include <linux/xarray.h>
 
+/* Default to PCIe standard 20 bit PASID */
+#define PCI_PASID_MAX 0x100000
+static ioasid_t ioasid_capacity = PCI_PASID_MAX;
+static ioasid_t ioasid_capacity_avail = PCI_PASID_MAX;
 struct ioasid_data {
 	ioasid_t id;
 	struct ioasid_set *set;
@@ -257,6 +261,72 @@ exit_unlock:
 	spin_unlock(&ioasid_allocator_lock);
 }
 EXPORT_SYMBOL_GPL(ioasid_unregister_allocator);
+
+void ioasid_install_capacity(ioasid_t total)
+{
+	spin_lock(&ioasid_allocator_lock);
+	if (ioasid_capacity && ioasid_capacity != PCI_PASID_MAX) {
+		pr_warn("IOASID capacity is already set.\n");
+		goto done_unlock;
+	}
+	ioasid_capacity = ioasid_capacity_avail = total;
+done_unlock:
+	spin_unlock(&ioasid_allocator_lock);
+}
+EXPORT_SYMBOL_GPL(ioasid_install_capacity);
+
+/**
+ * @brief Reserve capacity from the system pool
+ *
+ * @param nr_ioasid Number of IOASIDs requested to be reserved, 0 means
+ *	reserve all remaining IDs.
+ *
+ * @return the remaining capacity on success, or errno
+ */
+int ioasid_reserve_capacity(ioasid_t nr_ioasid)
+{
+	int ret = 0;
+
+	spin_lock(&ioasid_allocator_lock);
+	if (nr_ioasid > ioasid_capacity_avail) {
+		ret = -ENOSPC;
+		goto done_unlock;
+	}
+	if (!nr_ioasid)
+		nr_ioasid = ioasid_capacity_avail;
+	ioasid_capacity_avail -= nr_ioasid;
+	ret = nr_ioasid;
+done_unlock:
+	spin_unlock(&ioasid_allocator_lock);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(ioasid_reserve_capacity);
+
+/**
+ * @brief Return capacity to the system pool
+ * 	We trust the caller not to return more than it has reserved, we could
+ * 	also track reservation if needed.
+ *
+ * @param nr_ioasid Number of IOASIDs requested to be returned
+ *
+ * @return the remaining capacity on success, or errno
+ */
+int ioasid_cancel_capacity(ioasid_t nr_ioasid)
+{
+	int ret = 0;
+
+	spin_lock(&ioasid_allocator_lock);
+	if (nr_ioasid + ioasid_capacity_avail > ioasid_capacity) {
+		ret = -EINVAL;
+		goto done_unlock;
+	}
+	ioasid_capacity_avail += nr_ioasid;
+	ret = ioasid_capacity_avail;
+done_unlock:
+	spin_unlock(&ioasid_allocator_lock);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(ioasid_cancel_capacity);
 
 /**
  * ioasid_attach_data - Set private data for an allocated ioasid
