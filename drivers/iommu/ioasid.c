@@ -700,6 +700,61 @@ void ioasid_free(struct ioasid_set *set, ioasid_t ioasid)
 	spin_unlock(&ioasid_allocator_lock);
 }
 EXPORT_SYMBOL_GPL(ioasid_free);
+
+/**
+ * ioasid_free_all_in_set
+ *
+ * @brief
+ * Free all PASIDs from system-wide IOASID pool, all subscribers gets
+ * notified and do cleanup of their own.
+ * Note that some references of the IOASIDs within the set can still
+ * be held after the free call. This is OK in that the IOASIDs will be
+ * marked inactive, the only operations can be done is ioasid_put.
+ * No need to track IOASID set states since there is no reclaim phase.
+ *
+ * @param
+ * struct ioasid_set where all IOASIDs within the set will be freed.
+ */
+void ioasid_free_all_in_set(struct ioasid_set *set)
+{
+	struct ioasid_data *entry;
+	unsigned long index;
+
+	if (!ioasid_set_is_valid(set))
+		return;
+
+	if (xa_empty(&set->xa))
+		return;
+
+	if (!atomic_read(&set->nr_ioasids))
+		return;
+	spin_lock(&ioasid_allocator_lock);
+	xa_for_each(&set->xa, index, entry) {
+		ioasid_free_locked(set, index);
+		/* Free from per set private pool */
+		xa_erase(&set->xa, index);
+	}
+	spin_unlock(&ioasid_allocator_lock);
+}
+EXPORT_SYMBOL_GPL(ioasid_free_all_in_set);
+
+/**
+ * ioasid_set_for_each_ioasid
+ * @brief
+ * Iterate over all the IOASIDs within the set
+ */
+void ioasid_set_for_each_ioasid(struct ioasid_set *set,
+				void (*fn)(ioasid_t id, void *data),
+				void *data)
+{
+	struct ioasid_data *entry;
+	unsigned long index;
+
+	xa_for_each(&set->xa, index, entry)
+		fn(index, data);
+}
+EXPORT_SYMBOL_GPL(ioasid_set_for_each_ioasid);
+
 int ioasid_get_locked(struct ioasid_set *set, ioasid_t ioasid)
 {
 	struct ioasid_data *data;
@@ -788,6 +843,35 @@ bool ioasid_put(struct ioasid_set *set, ioasid_t ioasid)
 	return ret;
 }
 EXPORT_SYMBOL_GPL(ioasid_put);
+
+/**
+ * @brief
+ * Find the ioasid_set of an IOASID. As long as the IOASID is valid,
+ * the set must be valid since the refcounting is based on the number of IOASID
+ * in the set.
+ *
+ * @param ioasid
+ * @return struct ioasid_set*
+ */
+struct ioasid_set *ioasid_find_set(ioasid_t ioasid)
+{
+	struct ioasid_allocator_data *idata;
+	struct ioasid_data *ioasid_data;
+	struct ioasid_set *set = NULL;
+
+	rcu_read_lock();
+	idata = rcu_dereference(active_allocator);
+	ioasid_data = xa_load(&idata->xa, ioasid);
+	if (!ioasid_data) {
+		set = ERR_PTR(-ENOENT);
+		goto unlock;
+	}
+	set = ioasid_data->set;
+unlock:
+	rcu_read_unlock();
+	return set;
+}
+EXPORT_SYMBOL_GPL(ioasid_find_set);
 
 /**
  * ioasid_find - Find IOASID data
