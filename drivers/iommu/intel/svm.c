@@ -1275,33 +1275,11 @@ int intel_svm_page_response(struct device *dev,
 		goto out;
 	}
 
-	ret = pasid_to_svm_sdev(dev, host_pasid_set,
+	ret = pasid_to_svm_sdev(dev, NULL,
 				prm->pasid, &svm, &sdev);
 	if (ret || !sdev) {
 		ret = -ENODEV;
 		goto out;
-	}
-
-	/*
-	 * For responses from userspace, need to make sure that the
-	 * pasid has been bound to its mm.
-	 */
-	if (svm->flags & SVM_FLAG_GUEST_MODE) {
-		struct mm_struct *mm;
-
-		mm = get_task_mm(current);
-		if (!mm) {
-			ret = -EINVAL;
-			goto out;
-		}
-
-		if (mm != svm->mm) {
-			ret = -ENODEV;
-			mmput(mm);
-			goto out;
-		}
-
-		mmput(mm);
 	}
 
 	/*
