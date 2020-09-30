@@ -5632,8 +5632,21 @@ static int intel_iommu_get_nesting_info(struct iommu_domain *domain,
 	 * related capabilities should be consistent across iommu
 	 * units.
 	 */
-	domain_info = list_first_entry(&dmar_domain->devices,
-				       struct device_domain_info, link);
+	/*
+	 * Check full-device list first, and then sub-device list
+	 */
+	if (!list_empty(&dmar_domain->devices))
+		domain_info = list_first_entry(&dmar_domain->devices,
+					struct device_domain_info, link);
+	else if (!list_empty(&dmar_domain->subdevices)) {
+		struct subdev_domain_info *sinfo;
+
+		sinfo = list_first_entry(&dmar_domain->subdevices,
+					struct subdev_domain_info, link_domain);
+		domain_info = get_domain_info(sinfo->pdev);
+	} else
+		return -ENODEV;
+
 	cap &= domain_info->iommu->cap;
 	ecap &= domain_info->iommu->ecap;
 
