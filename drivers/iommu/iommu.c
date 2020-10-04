@@ -1365,6 +1365,7 @@ int iommu_unregister_device_fault_handler(struct device *dev)
 		 * 2. unbind, free, flush and drain
 		 * 3. unregister fault handler.
 		 */
+		printk("%s, there is pending faults on dev: %s, here we force to free the fault events and unregister the fault handler, but this changes should be reverted when page response path is ready\n", __func__, dev_name(dev));
 		mutex_lock(&param->fault_param->lock);
 		list_for_each_entry_safe(evt, next, &param->fault_param->faults, list) {
 			dev_dbg(dev, "%s, free fault event: 0x%lx\n", __func__, (unsigned long) evt);
