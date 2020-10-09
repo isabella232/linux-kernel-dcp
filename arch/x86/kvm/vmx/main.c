@@ -138,6 +138,8 @@ static void vt_vm_destroy(struct kvm *kvm)
 {
 	if (is_td(kvm))
 		return tdx_vm_destroy(kvm);
+
+	return vmx_vm_destroy(kvm);
 }
 
 static int vt_vcpu_create(struct kvm_vcpu *vcpu)
