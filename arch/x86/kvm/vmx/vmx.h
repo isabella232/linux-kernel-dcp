@@ -348,6 +348,11 @@ struct kvm_vmx {
 	/* PID table for IPI virtualization */
 	u64 *pid_table;
 	u16 pid_last_index;
+
+	struct page *pasid_dirs;
+	spinlock_t pasid_lock;
+	struct notifier_block pasid_nb;
+	struct mm_struct *mm;
 };
 
 bool nested_vmx_allowed(struct kvm_vcpu *vcpu);
