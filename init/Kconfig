@@ -1056,6 +1056,13 @@ config CGROUP_PIDS
 	  since the PIDs limit only affects a process's ability to fork, not to
 	  attach to a cgroup.
 
+config CGROUP_IOASIDS
+	bool "IOASIDs controller"
+	depends on IOASID
+	help
+	  Provides enforcement of IO Address Space ID limits in the scope of a
+	  cgroup.
+
 config CGROUP_RDMA
 	bool "RDMA controller"
 	help

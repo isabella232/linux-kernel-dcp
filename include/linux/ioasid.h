@@ -135,8 +135,25 @@ void ioasid_set_for_each_ioasid(struct ioasid_set *sdata,
 				void *data);
 int ioasid_register_notifier_mm(struct mm_struct *mm, struct notifier_block *nb);
 void ioasid_unregister_notifier_mm(struct mm_struct *mm, struct notifier_block *nb);
+#ifdef CONFIG_CGROUP_IOASIDS
+int ioasid_cg_charge(struct ioasid_set *set);
+void ioasid_cg_uncharge(struct ioasid_set *set);
+#else
+/* No cgroup control, allocation will proceed until run out total pool */
+static inline int ioasid_cg_charge(struct ioasid_set *set)
+{
+	return 0;
+}
+
+static inline int ioasid_cg_uncharge(struct ioasid_set *set)
+{
+	return 0;
+}
+#endif /* CGROUP_IOASIDS */
 bool ioasid_queue_work(struct work_struct *work);
+
 #else /* !CONFIG_IOASID */
+
 static inline void ioasid_install_capacity(ioasid_t total)
 {
 }
