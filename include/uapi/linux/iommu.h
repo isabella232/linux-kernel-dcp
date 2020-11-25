@@ -328,6 +328,7 @@ struct iommu_gpasid_bind_data {
 	__u32 format;
 	__u32 addr_width;
 #define IOMMU_SVA_GPASID_VAL	(1 << 0) /* guest PASID valid */
+#define IOMMU_SVA_HPASID_DEF	(1 << 1) /* use default host PASID */
 	__u64 flags;
 	__u64 gpgd;
 	__u64 hpasid;
