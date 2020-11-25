@@ -4991,12 +4991,21 @@ intel_iommu_sva_invalidate(struct iommu_domain *domain, struct device *dev,
 		 * PASID is stored in different locations based on the
 		 * granularity.
 		 */
-		if (inv_info->granularity == IOMMU_INV_GRANU_PASID &&
-		    (inv_info->granu.pasid_info.flags & IOMMU_INV_PASID_FLAGS_PASID))
-			pasid = inv_info->granu.pasid_info.pasid;
-		else if (inv_info->granularity == IOMMU_INV_GRANU_ADDR &&
-			 (inv_info->granu.addr_info.flags & IOMMU_INV_ADDR_FLAGS_PASID))
-			pasid = inv_info->granu.addr_info.pasid;
+		if (inv_info->granularity == IOMMU_INV_GRANU_PASID) {
+			if (inv_info->granu.pasid_info.flags &
+			    IOMMU_INV_PASID_FLAGS_PASID) {
+				pasid = inv_info->granu.pasid_info.pasid;
+			} else {
+				pasid = domain_get_pasid(domain, dev);
+			}
+		} else if (inv_info->granularity == IOMMU_INV_GRANU_ADDR) {
+			if (inv_info->granu.addr_info.flags &
+			    IOMMU_INV_ADDR_FLAGS_PASID) {
+				pasid = inv_info->granu.addr_info.pasid;
+			} else {
+				pasid = domain_get_pasid(domain, dev);
+			}
+		}
 
 		ret = ioasid_get_if_owned(pasid);
 		if (ret)
