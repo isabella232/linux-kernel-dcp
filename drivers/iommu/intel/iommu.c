@@ -3357,6 +3357,9 @@ static int __init init_dmars(void)
 			intel_iommu_sm = 0;
 		} else {
 			intel_svm_add_pasid_notifier();
+			/* TODO: where to free? */
+			ioasid_alloc(host_pasid_set, PASID_RID2PASID,
+				     PASID_RID2PASID, NULL);
 		}
 	}
 
@@ -5546,6 +5549,14 @@ intel_iommu_aux_get_pasid(struct iommu_domain *domain, struct device *dev)
 
 	return dmar_domain->default_pasid > 0 ?
 			dmar_domain->default_pasid : -EINVAL;
+}
+
+int domain_get_pasid(struct iommu_domain *domain, struct device *dev)
+{
+	if (is_aux_domain(dev, domain))
+		return intel_iommu_aux_get_pasid(domain, dev);
+
+	return PASID_RID2PASID;
 }
 
 static bool intel_iommu_is_attach_deferred(struct iommu_domain *domain,

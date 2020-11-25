@@ -173,14 +173,15 @@ static inline bool intel_svm_capable(struct intel_iommu *iommu)
 	return iommu->flags & VTD_FLAG_SVM_CAPABLE;
 }
 
-static inline void intel_svm_drop_pasid(ioasid_t pasid)
+static inline void intel_svm_drop_pasid(ioasid_t pasid, u64 flags)
 {
 	/*
 	 * Detaching SPID results in UNBIND notification on the set, we must
 	 * do this before dropping the IOASID reference, otherwise the
 	 * notification chain may get destroyed.
 	 */
-	ioasid_detach_spid(pasid);
+	if (!(flags & IOMMU_SVA_HPASID_DEF))
+		ioasid_detach_spid(pasid);
 	ioasid_detach_data(pasid);
 	ioasid_put(NULL, pasid);
 }
@@ -213,7 +214,7 @@ static void intel_svm_free_async_fn(struct work_struct *work)
 	 * the PASID is in FREE_PENDING state, no one can get new reference.
 	 * Therefore, we can safely free the private data svm.
 	 */
-	intel_svm_drop_pasid(svm->pasid);
+	intel_svm_drop_pasid(svm->pasid, 0);
 
 	/*
 	 * Free before unbind can only happen with host PASIDs used for
@@ -401,8 +402,13 @@ static int pasid_to_svm_sdev(struct device *dev,
 		return -EINVAL;
 
 	svm = ioasid_find(set, pasid, NULL);
-	if (IS_ERR(svm))
-		return PTR_ERR(svm);
+	if (IS_ERR(svm)) {
+		if (pasid == PASID_RID2PASID) {
+			svm = NULL;
+		} else {
+			return PTR_ERR(svm);
+		}
+	}
 
 	if (!svm)
 		goto out;
@@ -434,6 +440,7 @@ int intel_svm_bind_gpasid(struct iommu_domain *domain,
 	struct intel_svm *svm = NULL;
 	unsigned long iflags;
 	int ret = 0;
+	struct ioasid_set *pasid_set;
 
 	if (WARN_ON(!iommu) || !data)
 		return -EINVAL;
@@ -456,21 +463,29 @@ int intel_svm_bind_gpasid(struct iommu_domain *domain,
 	if (pci_max_pasids(to_pci_dev(dev)) != PASID_MAX)
 		return -EINVAL;
 
+	dmar_domain = to_dmar_domain(domain);
+	pasid_set = NULL; //dmar_domain->pasid_set;
+
 	/*
 	 * We only check host PASID range, we have no knowledge to check
 	 * guest PASID range.
 	 */
-	if (data->hpasid <= 0 || data->hpasid >= PASID_MAX)
+	if (data->flags & IOMMU_SVA_HPASID_DEF) {
+		ret = domain_get_pasid(domain, dev);
+		if (ret < 0)
+			return ret;
+		data->hpasid = ret;
+		/* TODO: may consider to use NULL because host_pasid_set is native scope */
+		pasid_set = host_pasid_set;
+	} else if (data->hpasid <= 0 || data->hpasid >= PASID_MAX)
 		return -EINVAL;
 
 	info = get_domain_info(dev);
 	if (!info)
 		return -EINVAL;
 
-	dmar_domain = to_dmar_domain(domain);
-
 	mutex_lock(&pasid_mutex);
-	ret = pasid_to_svm_sdev(dev, NULL,
+	ret = pasid_to_svm_sdev(dev, pasid_set,
 				data->hpasid, &svm, &sdev);
 	if (ret)
 		goto out;
@@ -498,7 +513,8 @@ int intel_svm_bind_gpasid(struct iommu_domain *domain,
 		if (data->flags & IOMMU_SVA_GPASID_VAL) {
 			svm->gpasid = data->gpasid;
 			svm->flags |= SVM_FLAG_GUEST_PASID;
-			ioasid_attach_spid(data->hpasid, data->gpasid);
+			if (!(data->flags & IOMMU_SVA_HPASID_DEF))
+				ioasid_attach_spid(data->hpasid, data->gpasid);
 			/*
 			 * Partial assignment needs to add fault data per-pasid
 			 */
@@ -573,18 +589,32 @@ int intel_svm_bind_gpasid(struct iommu_domain *domain,
 	return ret;
 }
 
-int intel_svm_unbind_gpasid(struct device *dev, u32 pasid)
+int intel_svm_unbind_gpasid(struct iommu_domain *domain,
+			    struct device *dev, u32 pasid, u64 user_flags)
 {
 	struct intel_iommu *iommu = device_to_iommu(dev, NULL, NULL);
 	struct intel_svm_dev *sdev;
 	struct intel_svm *svm;
 	int ret;
+	struct dmar_domain *dmar_domain;
+	struct ioasid_set *pasid_set;
 
 	if (WARN_ON(!iommu))
 		return -EINVAL;
 
+	dmar_domain = to_dmar_domain(domain);
+	pasid_set = NULL; // dmar_domain->pasid_set;
+
+	if (user_flags & IOMMU_SVA_HPASID_DEF) {
+		ret = domain_get_pasid(domain, dev);
+		if (ret < 0)
+			return ret;
+		pasid = ret;
+		pasid_set = host_pasid_set;
+	}
+
 	mutex_lock(&pasid_mutex);
-	ret = pasid_to_svm_sdev(dev, NULL, pasid, &svm, &sdev);
+	ret = pasid_to_svm_sdev(dev, pasid_set, pasid, &svm, &sdev);
 	if (ret)
 		goto out;
 
@@ -613,7 +643,7 @@ int intel_svm_unbind_gpasid(struct device *dev, u32 pasid)
 				 * the unbind, IOMMU driver will get notified
 				 * and perform cleanup.
 				 */
-				intel_svm_drop_pasid(pasid);
+				intel_svm_drop_pasid(pasid, user_flags);
 				kfree(svm);
 			}
 		}

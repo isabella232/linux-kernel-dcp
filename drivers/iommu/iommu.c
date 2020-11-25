@@ -2449,7 +2449,7 @@ static int iommu_check_bind_data(struct iommu_gpasid_bind_data *data)
 		return -EINVAL;
 
 	/* Check all flags */
-	mask = IOMMU_SVA_GPASID_VAL;
+	mask = IOMMU_SVA_GPASID_VAL | IOMMU_SVA_HPASID_DEF;
 	if (data->flags & ~mask)
 		return -EINVAL;
 
@@ -2525,7 +2525,7 @@ int iommu_uapi_sva_bind_gpasid(struct iommu_domain *domain, struct device *dev,
 EXPORT_SYMBOL_GPL(iommu_uapi_sva_bind_gpasid);
 
 int iommu_sva_unbind_gpasid(struct iommu_domain *domain, struct device *dev,
-			     ioasid_t pasid)
+			     ioasid_t pasid, u64 flags)
 {
 	pr_warn("%s: FIXME need to clear all pending faults!\n", __func__);
 #if 0
@@ -2576,7 +2576,7 @@ done_unlock:
 	if (unlikely(!domain->ops->sva_unbind_gpasid))
 		return -ENODEV;
 
-	return domain->ops->sva_unbind_gpasid(dev, pasid);
+	return domain->ops->sva_unbind_gpasid(domain, dev, pasid, flags);
 }
 EXPORT_SYMBOL_GPL(iommu_sva_unbind_gpasid);
 
@@ -2596,7 +2596,7 @@ int iommu_uapi_sva_unbind_gpasid(struct iommu_domain *domain, struct device *dev
 	ret = ioasid_get_if_owned(data.hpasid);
 	if (ret)
 		return ret;
-	ret = iommu_sva_unbind_gpasid(domain, dev, data.hpasid);
+	ret = iommu_sva_unbind_gpasid(domain, dev, data.hpasid, data.flags);
 	ioasid_put(NULL, data.hpasid);
 
 	return ret;
