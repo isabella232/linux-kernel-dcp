@@ -851,10 +851,11 @@ int intel_pasid_setup_nested(struct intel_iommu *iommu, struct device *dev,
 		return -EINVAL;
 
 	/*
-	 * Caller must ensure PASID entry is not in use, i.e. not bind the
-	 * same PASID to the same device twice.
+	 * PASID entries with nesting translation type should not be set
+	 * multiple times. If caller tries to setup nesting for a PASID
+	 * entry which is already nested mode, should fail it.
 	 */
-	if (pasid_pte_is_present(pte))
+	if (pasid_pte_is_present(pte) && pasid_pte_is_nested(pte))
 		return -EBUSY;
 
 	pasid_clear_entry(pte);
