@@ -3358,8 +3358,16 @@ static int __init init_dmars(void)
 		} else {
 			intel_svm_add_pasid_notifier();
 			/* TODO: where to free? */
-			ioasid_alloc(host_pasid_set, PASID_RID2PASID,
-				     PASID_RID2PASID, NULL);
+			/* If do this allocation in guest, then it may encounter
+			 * failure as guest allocation will go into host, while
+			 * PASID#0 should have been allocated before VM boot. So
+			 * Add this check. And in future, we may want to let ioasid
+			 * provide a way to only reserve PASID #0 in its own ioasid
+			 * space.
+			 */
+			if (!cap_caching_mode(iommu->cap))
+				ioasid_alloc(host_pasid_set, PASID_RID2PASID,
+					     PASID_RID2PASID, NULL);
 		}
 	}
 
