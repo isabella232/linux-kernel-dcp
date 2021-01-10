@@ -355,6 +355,9 @@ static phys_addr_t intel_iommu_iova_to_phys(struct iommu_domain *domain,
 int dmar_disabled = !IS_ENABLED(CONFIG_INTEL_IOMMU_DEFAULT_ON);
 int intel_iommu_sm = IS_ENABLED(CONFIG_INTEL_IOMMU_SCALABLE_MODE_DEFAULT_ON);
 
+/* == 0 --> use FL for IOVA (default), != 0 --> use SL for IOVA */
+static int default_iova = 0;
+
 int intel_iommu_enabled = 0;
 EXPORT_SYMBOL_GPL(intel_iommu_enabled);
 
@@ -465,6 +468,12 @@ static int __init intel_iommu_setup(char *str)
 		} else if (!strncmp(str, "tboot_noforce", 13)) {
 			pr_info("Intel-IOMMU: not forcing on after tboot. This could expose security risk for tboot\n");
 			intel_iommu_tboot_noforce = 1;
+		} else if (!strncmp(str, "qi_done_no_cpu_relax", 19)) {
+			pr_info("Intel-IOMMU: no cpu_relax() in qi\n");
+			qi_done_no_cpu_relax = 1;
+		} else if (!strncmp(str, "iova_sl", 7)) {
+			pr_info("Intel-IOMMU: default SL IOVA enabled\n");
+			default_iova = 1;
 		}
 
 		str += strcspn(str, ",");
@@ -1900,6 +1909,10 @@ static void free_dmar_iommu(struct intel_iommu *iommu)
  */
 static bool first_level_by_default(void)
 {
+	/* Change IOVA mapping to SL instead of FL */
+	if (default_iova)
+		return false;
+
 	return scalable_mode_support() && intel_cap_flts_sanity();
 }
 
