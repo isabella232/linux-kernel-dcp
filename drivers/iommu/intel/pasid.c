@@ -795,8 +795,10 @@ intel_pasid_setup_bind_data(struct intel_iommu *iommu, struct pasid_entry *pte,
 		}
 		pasid_set_sre(pte);
 		/* Enable write protect WP if guest requested */
-		if (pasid_data->flags & IOMMU_SVA_VTD_GPASID_WPE)
-			pasid_set_wpe(pte);
+		if (pasid_data->flags & IOMMU_SVA_VTD_GPASID_WPE) {
+			if (pasid_enable_wpe(pte))
+				return -EINVAL;
+		}
 	}
 
 	if (pasid_data->flags & IOMMU_SVA_VTD_GPASID_EAFE) {
