@@ -27,7 +27,7 @@ place where this information is gathered.
    iommu
    media/index
    sysfs-platform_profile
-   vduse
+   ioasid
 
 .. only::  subproject and html
 
