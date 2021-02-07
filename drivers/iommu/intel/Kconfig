@@ -16,6 +16,7 @@ config INTEL_IOMMU
 	select DMAR_TABLE
 	select SWIOTLB
 	select IOASID
+	select IOASID_USER
 	select IOMMU_DMA
 	select PCI_ATS
 	help

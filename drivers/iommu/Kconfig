@@ -7,6 +7,11 @@ config IOMMU_IOVA
 config IOASID
 	tristate
 
+config IOASID_USER
+	tristate
+	depends on IOASID
+	default n
+
 # IOMMU_API always gets selected by whoever wants it.
 config IOMMU_API
 	bool
