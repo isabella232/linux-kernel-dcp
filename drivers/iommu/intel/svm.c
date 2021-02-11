@@ -1122,9 +1122,8 @@ static irqreturn_t prq_event_thread(int irq, void *d)
 	struct intel_svm_dev *sdev = NULL;
 	struct intel_iommu *iommu = d;
 	struct intel_svm *svm = NULL;
-	struct page_req_dsc *req;
-	int head, tail, handled;
-	u64 address;
+	int head, tail, handled = 0;
+	unsigned int flags = 0;
 
 	/*
 	 * Clear PPR bit before reading head/tail registers, to ensure that
@@ -1207,12 +1206,13 @@ static irqreturn_t prq_event_thread(int irq, void *d)
 
 		sdev->prq_seq_number++;
 
-		/*
-		 * If prq is to be handled outside iommu driver via receiver of
-		 * the fault notifiers, we skip the page response here.
-		 */
-		if (intel_svm_prq_report(iommu, sdev->dev, req))
-			handle_bad_prq_event(iommu, req, QI_RESP_INVALID);
+		flags = FAULT_FLAG_USER | FAULT_FLAG_REMOTE;
+		if (req->wr_req)
+			flags |= FAULT_FLAG_WRITE;
+
+		ret = handle_mm_fault(vma, address, flags, NULL);
+		if (ret & VM_FAULT_ERROR)
+			goto invalid;
 
 		trace_prq_report(iommu, sdev->dev, req->qw_0, req->qw_1,
 				 req->priv_data[0], req->priv_data[1],
