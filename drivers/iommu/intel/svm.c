@@ -1138,15 +1138,36 @@ static irqreturn_t prq_event_thread(int irq, void *d)
 	while (head != tail) {
 		req = &iommu->prq[head / sizeof(*req)];
 		address = (u64)req->addr << VTD_PAGE_SHIFT;
-
-		if (unlikely(!req->pasid_present)) {
-			pr_err("IOMMU: %s: Page request without PASID\n",
-			       iommu->name);
-bad_req:
-			svm = NULL;
-			sdev = NULL;
-			handle_bad_prq_event(iommu, req, QI_RESP_INVALID);
-			goto prq_advance;
+		if (!req->pasid_present) {
+			pr_err("%s: Page request without PASID: %08llx %08llx\n",
+			       iommu->name, ((unsigned long long *)req)[0],
+			       ((unsigned long long *)req)[1]);
+			goto no_pasid;
+		}
+		/* We shall not receive page request for supervisor SVM */
+		if (req->pm_req && (req->rd_req | req->wr_req)) {
+			pr_err("Unexpected page request in Privilege Mode");
+			/* No need to find the matching sdev as for bad_req */
+			goto no_pasid;
+		}
+		/* DMA read with exec requeset is not supported. */
+		if (req->exe_req && req->rd_req) {
+			pr_err("Execution request not supported\n");
+			goto no_pasid;
+		}
+		if (!svm || svm->pasid != req->pasid) {
+			rcu_read_lock();
+			svm = ioasid_find(NULL, req->pasid, NULL);
+			/* It *can't* go away, because the driver is not permitted
+			 * to unbind the mm while any page faults are outstanding.
+			 * So we only need RCU to protect the internal idr code. */
+			rcu_read_unlock();
+			if (IS_ERR_OR_NULL(svm)) {
+				pr_err("%s: Page request for invalid PASID %d: %08llx %08llx\n",
+				       iommu->name, req->pasid, ((unsigned long long *)req)[0],
+				       ((unsigned long long *)req)[1]);
+				goto no_pasid;
+			}
 		}
 
 		if (unlikely(!is_canonical_address(address))) {
