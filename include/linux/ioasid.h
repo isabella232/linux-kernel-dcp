@@ -72,6 +72,7 @@ int ioasid_get(struct ioasid_set *set, ioasid_t ioasid);
 int ioasid_get_locked(struct ioasid_set *set, ioasid_t ioasid);
 bool ioasid_put(struct ioasid_set *set, ioasid_t ioasid);
 bool ioasid_put_locked(struct ioasid_set *set, ioasid_t ioasid);
+void ioasid_free(struct ioasid_set *set, ioasid_t ioasid);
 void *ioasid_find(struct ioasid_set *set, ioasid_t ioasid,
 		  bool (*getter)(void *));
 int ioasid_register_allocator(struct ioasid_allocator_ops *allocator);
@@ -103,6 +104,10 @@ static inline struct ioasid_set *ioasid_set_alloc(void *token, ioasid_t quota,
 						  ioasid_set_type type)
 {
 	return ERR_PTR(-ENOTSUPP);
+}
+
+static inline void ioasid_free(struct ioasid_set *set, ioasid_t ioasid)
+{
 }
 
 static inline struct ioasid_set *ioasid_find_mm_set(struct mm_struct *token)
