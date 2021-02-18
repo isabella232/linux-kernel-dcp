@@ -32,6 +32,9 @@ static ioasid_t ioasid_capacity = PCI_PASID_MAX;
 static ioasid_t ioasid_capacity_avail = PCI_PASID_MAX;
 static DEFINE_XARRAY_ALLOC(ioasid_sets);
 
+/* Workqueue for IOASID users to do cleanup upon notification */
+static struct workqueue_struct *ioasid_wq;
+
 struct ioasid_set_nb {
 	struct list_head	list;
 	struct notifier_block	*nb;
@@ -1281,6 +1284,12 @@ exit_unlock:
 }
 EXPORT_SYMBOL_GPL(ioasid_register_notifier_mm);
 
+bool ioasid_queue_work(struct work_struct *work)
+{
+	return queue_work(ioasid_wq, work);
+}
+EXPORT_SYMBOL_GPL(ioasid_queue_work);
+
 void ioasid_unregister_notifier_mm(struct mm_struct *mm, struct notifier_block *nb)
 {
 	struct ioasid_set_nb *curr;
@@ -1303,7 +1312,23 @@ void ioasid_unregister_notifier_mm(struct mm_struct *mm, struct notifier_block *
 }
 EXPORT_SYMBOL_GPL(ioasid_unregister_notifier_mm);
 
+static int __init ioasid_init(void)
+{
+	ioasid_wq = alloc_ordered_workqueue("ioasid_wq", 0);
+	if (!ioasid_wq)
+		return -ENOMEM;
+
+	return 0;
+}
+
+static void __exit ioasid_cleanup(void)
+{
+	destroy_workqueue(ioasid_wq);
+}
+
 MODULE_AUTHOR("Jean-Philippe Brucker <jean-philippe.brucker@arm.com>");
 MODULE_AUTHOR("Jacob Pan <jacob.jun.pan@linux.intel.com>");
 MODULE_DESCRIPTION("IO Address Space ID (IOASID) allocator");
 MODULE_LICENSE("GPL");
+module_init(ioasid_init);
+module_exit(ioasid_cleanup);
