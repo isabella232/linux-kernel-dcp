@@ -799,6 +799,7 @@ config DEVMAP_ACCESS_PROTECTION
 	bool "Access protection for memremap_pages()"
 	depends on NVDIMM_PFN
 	depends on ARCH_HAS_SUPERVISOR_PKEYS
+	depends on !HIGHMEM
 	select GENERAL_PKS_USER
 	default y
 
