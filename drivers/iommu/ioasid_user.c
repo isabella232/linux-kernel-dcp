@@ -125,10 +125,11 @@ static int ioasid_fops_open(struct inode *inode, struct file *filep)
 	 * the token and create a IOASID set per mm_struct. All the
 	 * containers of the process share the same IOASID set.
 	 */
-	iset = ioasid_set_alloc(mm, 0, IOASID_SET_TYPE_MM);
+	iset = ioasid_set_alloc(mm, 1000, IOASID_SET_TYPE_MM);
 	if (IS_ERR(iset)) {
 		kfree(iuser);
 		ret = PTR_ERR(iset);
+		printk("%s, ret: %d\n", __func__, ret);
 		goto out;
 	}
 
