@@ -4987,6 +4987,10 @@ intel_iommu_sva_invalidate(struct iommu_domain *domain, struct device *dev,
 			 (inv_info->granu.addr_info.flags & IOMMU_INV_ADDR_FLAGS_PASID))
 			pasid = inv_info->granu.addr_info.pasid;
 
+		ret = ioasid_get_if_owned(pasid);
+		if (ret)
+			goto out_unlock;
+
 		switch (BIT(cache_type)) {
 		case IOMMU_CACHE_INV_TYPE_IOTLB:
 			/* HW will ignore LSB bits based on address mask */
@@ -5043,6 +5047,7 @@ intel_iommu_sva_invalidate(struct iommu_domain *domain, struct device *dev,
 					    cache_type);
 			ret = -EINVAL;
 		}
+		ioasid_put(NULL, pasid);
 	}
 out_unlock:
 	spin_unlock(&iommu->lock);
