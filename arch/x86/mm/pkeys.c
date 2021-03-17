@@ -211,3 +211,78 @@ u32 update_pkey_val(u32 pk_reg, int pkey, unsigned int flags)
 
 	return pk_reg;
 }
+
+#ifdef CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS
+
+static DEFINE_PER_CPU(u32, pkrs_cache);
+u32 __read_mostly pkrs_init_value;
+
+/*
+ * write_pkrs() optimizes MSR writes by maintaining a per cpu cache which can
+ * be checked quickly.
+ *
+ * It should also be noted that the underlying WRMSR(MSR_IA32_PKRS) is not
+ * serializing but still maintains ordering properties similar to WRPKRU.
+ * The current SDM section on PKRS needs updating but should be the same as
+ * that of WRPKRU.  So to quote from the WRPKRU text:
+ *
+ *     WRPKRU will never execute transiently. Memory accesses
+ *     affected by PKRU register will not execute (even transiently)
+ *     until all prior executions of WRPKRU have completed execution
+ *     and updated the PKRU register.
+ */
+void write_pkrs(u32 new_pkrs)
+{
+	u32 *pkrs;
+
+	if (!static_cpu_has(X86_FEATURE_PKS))
+		return;
+
+	pkrs = get_cpu_ptr(&pkrs_cache);
+	if (*pkrs != new_pkrs) {
+		*pkrs = new_pkrs;
+		wrmsrl(MSR_IA32_PKRS, new_pkrs);
+	}
+	put_cpu_ptr(pkrs);
+}
+
+/*
+ * Build a default PKRS value from the array specified by consumers
+ */
+static int __init create_initial_pkrs_value(void)
+{
+	/* All users get Access Disabled unless changed below */
+	u8 consumer_defaults[PKS_NUM_PKEYS] = {
+		[0 ... PKS_NUM_PKEYS-1] = PKR_AD_BIT
+	};
+	int i;
+
+	consumer_defaults[PKS_KEY_DEFAULT] = PKR_RW_BIT;
+
+	/* Ensure the number of consumers is less than the number of keys */
+	BUILD_BUG_ON(PKS_KEY_NR_CONSUMERS > PKS_NUM_PKEYS);
+
+	pkrs_init_value = 0;
+
+	/* Fill the defaults for the consumers */
+	for (i = 0; i < PKS_NUM_PKEYS; i++)
+		pkrs_init_value |= PKR_VALUE(i, consumer_defaults[i]);
+
+	return 0;
+}
+early_initcall(create_initial_pkrs_value);
+
+/*
+ * PKS is independent of PKU and either or both may be supported on a CPU.
+ * Configure PKS if the CPU supports the feature.
+ */
+void setup_pks(void)
+{
+	if (!cpu_feature_enabled(X86_FEATURE_PKS))
+		return;
+
+	write_pkrs(pkrs_init_value);
+	cr4_set_bits(X86_CR4_PKS);
+}
+
+#endif /* CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS */
