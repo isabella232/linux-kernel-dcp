@@ -4949,6 +4949,7 @@ intel_iommu_sva_invalidate(struct iommu_domain *domain, struct device *dev,
 	u16 did, sid;
 	int ret = 0;
 	u64 size = 0;
+	bool default_pasid = false;
 
 	if (!inv_info || !dmar_domain)
 		return -EINVAL;
@@ -5002,6 +5003,7 @@ intel_iommu_sva_invalidate(struct iommu_domain *domain, struct device *dev,
 				pasid = inv_info->granu.pasid_info.pasid;
 			} else {
 				pasid = domain_get_pasid(domain, dev);
+				default_pasid = true;
 			}
 		} else if (inv_info->granularity == IOMMU_INV_GRANU_ADDR) {
 			if (inv_info->granu.addr_info.flags &
@@ -5009,10 +5011,15 @@ intel_iommu_sva_invalidate(struct iommu_domain *domain, struct device *dev,
 				pasid = inv_info->granu.addr_info.pasid;
 			} else {
 				pasid = domain_get_pasid(domain, dev);
+				default_pasid = true;
 			}
 		}
 
-		ret = ioasid_get_if_owned(pasid);
+		if (default_pasid)
+			ret = ioasid_get(NULL, pasid);
+		else
+			ret = ioasid_get_if_owned(pasid);
+
 		if (ret)
 			goto out_unlock;
 

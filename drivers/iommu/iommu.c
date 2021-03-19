@@ -2514,9 +2514,10 @@ int iommu_uapi_sva_bind_gpasid(struct iommu_domain *domain, struct device *dev,
 	if (ret)
 		return ret;
 
-	ret = ioasid_get_if_owned(data.hpasid);
+	ret = ioasid_get(NULL, data.hpasid);
 	if (ret)
 		return ret;
+
 	ret = domain->ops->sva_bind_gpasid(domain, dev, &data, fault_data);
 	ioasid_put(NULL, data.hpasid);
 
@@ -2593,7 +2594,7 @@ int iommu_uapi_sva_unbind_gpasid(struct iommu_domain *domain, struct device *dev
 	if (ret)
 		return ret;
 
-	ret = ioasid_get_if_owned(data.hpasid);
+	ret = ioasid_get(NULL, data.hpasid);
 	if (ret)
 		return ret;
 	ret = iommu_sva_unbind_gpasid(domain, dev, data.hpasid, data.flags);
