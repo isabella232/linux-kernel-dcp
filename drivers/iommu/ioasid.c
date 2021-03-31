@@ -1250,11 +1250,16 @@ int ioasid_register_notifier_mm(struct mm_struct *mm, struct notifier_block *nb)
 			goto exit_unlock;
 		}
 	}
+
 	curr = kzalloc(sizeof(*curr), GFP_ATOMIC);
 	if (!curr) {
 		ret = -ENOMEM;
 		goto exit_unlock;
 	}
+
+	curr->token = mm;
+	curr->nb = nb;
+
 	/* Check if the token has an existing set */
 	set = ioasid_find_mm_set(mm);
 	if (!set) {
@@ -1270,8 +1275,6 @@ int ioasid_register_notifier_mm(struct mm_struct *mm, struct notifier_block *nb)
 			ret = -EBUSY;
 			goto exit_free;
 		}
-		curr->token = mm;
-		curr->nb = nb;
 		curr->active = true;
 		curr->set = set;
 
