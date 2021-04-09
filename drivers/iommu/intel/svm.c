@@ -441,6 +441,7 @@ int intel_svm_bind_gpasid(struct iommu_domain *domain,
 	unsigned long iflags;
 	int ret = 0;
 	struct ioasid_set *pasid_set;
+	u64 hpasid_org;
 
 	if (WARN_ON(!iommu) || !data)
 		return -EINVAL;
@@ -474,6 +475,7 @@ int intel_svm_bind_gpasid(struct iommu_domain *domain,
 		ret = domain_get_pasid(domain, dev);
 		if (ret < 0)
 			return ret;
+		hpasid_org = data->hpasid;
 		data->hpasid = ret;
 		/* TODO: may consider to use NULL because host_pasid_set is native scope */
 		pasid_set = host_pasid_set;
@@ -584,6 +586,9 @@ int intel_svm_bind_gpasid(struct iommu_domain *domain,
 		ioasid_detach_data(data->hpasid);
 		kfree(svm);
 	}
+
+	if (data->flags & IOMMU_SVA_HPASID_DEF)
+		data->hpasid = hpasid_org;
 
 	mutex_unlock(&pasid_mutex);
 	return ret;
