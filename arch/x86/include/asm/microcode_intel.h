@@ -77,6 +77,7 @@ void reload_ucode_intel(void);
 int collect_cpu_info_early(struct ucode_cpu_info *uci);
 bool cpu_signatures_match(unsigned int s1, unsigned int p1,
 			  unsigned int s2, unsigned int p2);
+int update_cpusvn_intel(void);
 #else
 static inline __init void load_ucode_intel_bsp(void) {}
 static inline void load_ucode_intel_ap(void) {}
@@ -86,6 +87,7 @@ static inline void reload_ucode_intel(void) {}
 static inline void collect_cpu_info_early(struct ucode_cpu_info *uci) {}
 static inline void cpu_signatures_match(unsigned int s1, unsigned int p1,
 					unsigned int s2, unsigned int p2) {}
+static inline int update_cpusvn_intel(void) { return -1; }
 #endif
 
 #endif /* _ASM_X86_MICROCODE_INTEL_H */
