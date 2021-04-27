@@ -74,12 +74,14 @@ extern void load_ucode_intel_ap(void);
 extern void show_ucode_info_early(void);
 extern int __init save_microcode_in_initrd_intel(void);
 void reload_ucode_intel(void);
+int update_cpusvn_intel(void);
 #else
 static inline __init void load_ucode_intel_bsp(void) {}
 static inline void load_ucode_intel_ap(void) {}
 static inline void show_ucode_info_early(void) {}
 static inline int __init save_microcode_in_initrd_intel(void) { return -EINVAL; }
 static inline void reload_ucode_intel(void) {}
+static inline int update_cpusvn_intel(void) { return -1; }
 #endif
 
 #endif /* _ASM_X86_MICROCODE_INTEL_H */

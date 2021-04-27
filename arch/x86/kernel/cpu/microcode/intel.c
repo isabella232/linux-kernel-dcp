@@ -36,6 +36,7 @@
 #include <asm/tlbflush.h>
 #include <asm/setup.h>
 #include <asm/msr.h>
+#include <asm/sgx.h>
 
 static const char ucode_path[] = "kernel/x86/microcode/GenuineIntel.bin";
 
@@ -999,4 +1000,27 @@ struct microcode_ops * __init init_intel_microcode(void)
 	llc_size_per_core = calc_llc_size_per_core(c);
 
 	return &microcode_intel_ops;
+}
+
+int update_cpusvn_intel(void)
+{
+	int ret;
+
+	sgx_lock_epc();
+	ret = sgx_zap_pages();
+	if (!ret)
+		ret = sgx_updatesvn();
+	sgx_unlock_epc();
+
+	if (ret == SGX_NO_UPDATE)
+		ret = 0;
+	else if (ret == SGX_EPC_NOT_READY)
+		ret = -EBUSY;
+	else if (ret > 0)
+		ret = -1;
+
+	if (!ret)
+		pr_info("CPUSVN update is complete\n");
+
+	return ret;
 }
