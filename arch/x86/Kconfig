@@ -45,7 +45,7 @@ config FORCE_DYNAMIC_FTRACE
 	 in order to test the non static function tracing in the
 	 generic code, as other architectures still use it. But we
 	 only need to keep it around for x86_64. No need to keep it
-	 for x86_32. For x86_32, force DYNAMIC_FTRACE. 
+	 for x86_32. For x86_32, force DYNAMIC_FTRACE.
 #
 # Arch settings
 #
@@ -1377,6 +1377,21 @@ config MICROCODE_OLD_INTERFACE
 	  load microcode on a machine and it needs special tools. Instead, you
 	  should've switched to the early loading method with the initrd or
 	  builtin microcode by now: Documentation/x86/microcode.rst
+
+config INTEL_TDX_HOST
+	bool "Intel Trust Domain eXtensions(TDX) host support"
+	default n
+	depends on CPU_SUP_INTEL
+	depends on X86_64
+	select CONTIG_ALLOC
+	select MEMORY_ISOLATION
+	help
+	  Intel's Trust Domain Extensions (TDX) protect guest VMs from malicious
+	  hosts and some physical attacks.  This option enables initialization
+	  necessary for TDX host support.  For details see
+	  <file:Documentations/x86/tdx-module.rst>.
+
+	  If unsure, say N.
 
 config X86_MSR
 	tristate "/dev/cpu/*/msr - Model-specific register support"
