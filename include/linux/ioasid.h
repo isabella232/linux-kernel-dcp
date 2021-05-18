@@ -202,7 +202,7 @@ static inline ioasid_t ioasid_alloc(struct ioasid_set *set, ioasid_t min,
 }
 
 static inline struct ioasid_set *ioasid_set_alloc(void *token, ioasid_t quota,
-						  ioasid_set_type type)
+						  int type)
 {
 	return ERR_PTR(-ENOTSUPP);
 }
@@ -318,6 +318,21 @@ static inline void ioasid_unregister_notifier_mm(struct mm_struct *mm,
 static inline bool ioasid_queue_work(struct work_struct *work)
 {
 	return false;
+}
+struct ioasid_user {};
+static inline struct ioasid_user *
+ioasid_user_get_from_task(struct task_struct *task)
+{
+	return ERR_PTR(-ENOTTY);
+}
+
+static inline void ioasid_user_put(struct ioasid_user *iuser)
+{
+}
+
+static inline void ioasid_user_for_each_id(struct ioasid_user *iuser, void *data,
+					  void (*fn)(ioasid_t id, void *data))
+{
 }
 #endif /* CONFIG_IOASID */
 #endif /* __LINUX_IOASID_H */

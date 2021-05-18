@@ -124,9 +124,9 @@
 #define DMAR_MTRR_PHYSMASK8_REG 0x208
 #define DMAR_MTRR_PHYSBASE9_REG 0x210
 #define DMAR_MTRR_PHYSMASK9_REG 0x218
-#define DMAR_VCCAP_REG		0xe30 /* Virtual command capability register */
-#define DMAR_VCMD_REG		0xe00 /* Virtual command register */
-#define DMAR_VCRSP_REG		0xe10 /* Virtual command response register */
+#define DMAR_VCCAP_REG		0xe00 /* Virtual command capability register */
+#define DMAR_VCMD_REG		0xe10 /* Virtual command register */
+#define DMAR_VCRSP_REG		0xe20 /* Virtual command response register */
 
 #define DMAR_IQER_REG_IQEI(reg)		FIELD_GET(GENMASK_ULL(3, 0), reg)
 #define DMAR_IQER_REG_ITESID(reg)	FIELD_GET(GENMASK_ULL(47, 32), reg)
@@ -428,13 +428,31 @@ struct qi_desc {
 	u64 qw3;
 };
 
+#ifdef CONFIG_INTEL_IOMMU_DEBUGFS
+enum {
+	QI_COUNTS_1 = 0,
+	QI_COUNTS_10,
+	QI_COUNTS_100,
+	QI_COUNTS_1000,
+	QI_COUNTS_10000,
+	QI_COUNTS_100000,
+	QI_COUNTS_100000_plus,
+	QI_COUNTS_NUM
+};
+#endif
+
 struct q_inval {
 	raw_spinlock_t  q_lock;
-	void		*desc;          /* invalidation queue */
-	int             *desc_status;   /* desc status */
-	int             free_head;      /* first free entry */
-	int             free_tail;      /* last free entry */
+	void		*desc;			/* invalidation queue */
+	int             *desc_status;		/* desc status */
+	int             free_head;		/* first free entry */
+	int             free_tail;		/* last free entry */
 	int             free_cnt;
+#ifdef CONFIG_INTEL_IOMMU_DEBUGFS
+	s64		start_ktime_100ns;	/* start time of qi */
+	u64		iotlb_qi_counts[QI_COUNTS_NUM];
+	u64		diotlb_qi_counts[QI_COUNTS_NUM];
+#endif
 };
 
 struct dmar_pci_notify_info;
@@ -478,7 +496,6 @@ enum {
 #define VTD_FLAG_TRANS_PRE_ENABLED	(1 << 0)
 #define VTD_FLAG_IRQ_REMAP_PRE_ENABLED	(1 << 1)
 #define VTD_FLAG_SVM_CAPABLE		(1 << 2)
-#define VTD_FLAG_PGTT_SL_ONLY		(1 << 3)
 
 extern int intel_iommu_sm;
 extern spinlock_t device_domain_lock;
@@ -538,7 +555,7 @@ struct context_entry {
 struct dmar_domain {
 	int	nid;			/* node id */
 
-	unsigned int iommu_refcnt[DMAR_UNITS_SUPPORTED];
+	unsigned	iommu_refcnt[DMAR_UNITS_SUPPORTED];
 					/* Refcount of devices per iommu */
 
 
@@ -547,10 +564,7 @@ struct dmar_domain {
 					 * domain ids are 16 bit wide according
 					 * to VT-d spec, section 9.3 */
 
-	u8 has_iotlb_device: 1;
-	u8 iommu_coherency: 1;		/* indicate coherency of iommu access */
-	u8 iommu_snooping: 1;		/* indicate snooping control feature */
-
+	bool has_iotlb_device;
 	struct list_head devices;	/* all devices' list */
 	struct list_head subdevices;	/* all subdevices' list */
 	struct iova_domain iovad;	/* iova's that belong to this domain */
@@ -562,6 +576,10 @@ struct dmar_domain {
 	int		agaw;
 
 	int		flags;		/* flags to find out type of domain */
+
+	int		iommu_coherency;/* indicate coherency of iommu access */
+	int		iommu_snooping; /* indicate snooping control feature*/
+	int		iommu_count;	/* reference count of iommu */
 	int		iommu_superpage;/* Level of superpages supported:
 					   0 == 4KiB (no superpages), 1 == 2MiB,
 					   2 == 1GiB, 3 == 512GiB, 4 == 1TiB */
@@ -606,8 +624,6 @@ struct intel_iommu {
 	struct completion prq_complete;
 	struct ioasid_allocator_ops pasid_allocator; /* Custom allocator for PASIDs */
 #endif
-	struct iopf_queue *iopf_queue;
-	unsigned char iopfq_name[16];
 	struct q_inval  *qi;            /* Queued invalidation info */
 	u32 *iommu_state; /* Store iommu states between suspend and resume.*/
 
@@ -788,7 +804,6 @@ struct intel_svm_dev {
 	struct intel_iommu *iommu;
 	struct dmar_domain *domain;
 	struct iommu_sva sva;
-	unsigned long prq_seq_number;
 	u32 pasid;
 	int users;
 	u16 did;
@@ -811,10 +826,16 @@ struct intel_svm {
 static inline void intel_svm_check(struct intel_iommu *iommu) {}
 #endif
 
+extern int qi_done_no_cpu_relax;
+
 #ifdef CONFIG_INTEL_IOMMU_DEBUGFS
 void intel_iommu_debugfs_init(void);
+void log_qi_done_start(struct intel_iommu *iommu);
+void log_qi_done_end(struct intel_iommu *iommu, u64 qw0);
 #else
 static inline void intel_iommu_debugfs_init(void) {}
+static inline void log_qi_done_start(struct intel_iommu *iommu) {}
+static inline void log_qi_done_end(struct intel_iommu *iommu, u64 qw0) {}
 #endif /* CONFIG_INTEL_IOMMU_DEBUGFS */
 
 extern const struct attribute_group *intel_iommu_groups[];
@@ -840,33 +861,5 @@ static inline int iommu_calculate_max_sagaw(struct intel_iommu *iommu)
 #define dmar_disabled	(1)
 #define intel_iommu_enabled (0)
 #endif
-
-static inline const char *decode_prq_descriptor(char *str, size_t size,
-		u64 dw0, u64 dw1, u64 dw2, u64 dw3)
-{
-	char *buf = str;
-	int bytes;
-
-	bytes = snprintf(buf, size,
-			 "rid=0x%llx addr=0x%llx %c%c%c%c%c pasid=0x%llx index=0x%llx",
-			 FIELD_GET(GENMASK_ULL(31, 16), dw0),
-			 FIELD_GET(GENMASK_ULL(63, 12), dw1),
-			 dw1 & BIT_ULL(0) ? 'r' : '-',
-			 dw1 & BIT_ULL(1) ? 'w' : '-',
-			 dw0 & BIT_ULL(52) ? 'x' : '-',
-			 dw0 & BIT_ULL(53) ? 'p' : '-',
-			 dw1 & BIT_ULL(2) ? 'l' : '-',
-			 FIELD_GET(GENMASK_ULL(51, 32), dw0),
-			 FIELD_GET(GENMASK_ULL(11, 3), dw1));
-
-	/* Private Data */
-	if (dw0 & BIT_ULL(9)) {
-		size -= bytes;
-		buf += bytes;
-		snprintf(buf, size, " private=0x%llx/0x%llx\n", dw2, dw3);
-	}
-
-	return str;
-}
 
 #endif

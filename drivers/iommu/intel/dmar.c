@@ -65,8 +65,9 @@ static unsigned long dmar_seq_ids[BITS_TO_LONGS(DMAR_UNITS_SUPPORTED)];
 
 static int alloc_iommu(struct dmar_drhd_unit *drhd);
 static void free_iommu(struct intel_iommu *iommu);
-
 extern const struct iommu_ops intel_iommu_ops;
+
+int qi_done_no_cpu_relax __read_mostly;
 
 static void dmar_register_drhd_unit(struct dmar_drhd_unit *drhd)
 {
@@ -149,6 +150,8 @@ dmar_alloc_pci_notify_info(struct pci_dev *dev, unsigned long event)
 	} else {
 		info = kzalloc(size, GFP_KERNEL);
 		if (!info) {
+			pr_warn("Out of memory when allocating notify_info "
+				"for %s.\n", pci_name(dev));
 			if (dmar_dev_scope_status == 0)
 				dmar_dev_scope_status = -ENOMEM;
 			return NULL;
@@ -1139,9 +1142,11 @@ static int alloc_iommu(struct dmar_drhd_unit *drhd)
 		if (err)
 			goto err_unmap;
 
-		err = iommu_device_register(&iommu->iommu, &intel_iommu_ops, NULL);
+		iommu_device_set_ops(&iommu->iommu, &intel_iommu_ops);
+
+		err = iommu_device_register(&iommu->iommu);
 		if (err)
-			goto err_sysfs;
+			goto err_unmap;
 	}
 
 	drhd->iommu = iommu;
@@ -1149,8 +1154,6 @@ static int alloc_iommu(struct dmar_drhd_unit *drhd)
 
 	return 0;
 
-err_sysfs:
-	iommu_device_sysfs_remove(&iommu->iommu);
 err_unmap:
 	unmap_iommu(iommu);
 error_free_seq_id:
@@ -1348,10 +1351,10 @@ int qi_submit_sync(struct intel_iommu *iommu, struct qi_desc *desc,
 		   unsigned int count, unsigned long options)
 {
 	struct q_inval *qi = iommu->qi;
+	struct qi_desc wait_desc;
 	s64 devtlb_start_ktime = 0;
 	s64 iotlb_start_ktime = 0;
 	s64 iec_start_ktime = 0;
-	struct qi_desc wait_desc;
 	int wait_index, index;
 	unsigned long flags;
 	int offset, shift;
@@ -1423,6 +1426,8 @@ restart:
 	 */
 	writel(qi->free_head << shift, iommu->reg + DMAR_IQT_REG);
 
+	log_qi_done_start(iommu);
+
 	while (qi->desc_status[wait_index] != QI_DONE) {
 		/*
 		 * We will leave the interrupts disabled, to prevent interrupt
@@ -1435,10 +1440,14 @@ restart:
 		if (rc)
 			break;
 
-		raw_spin_unlock(&qi->q_lock);
-		cpu_relax();
-		raw_spin_lock(&qi->q_lock);
+		if (!qi_done_no_cpu_relax) {
+			raw_spin_unlock(&qi->q_lock);
+			cpu_relax();
+			raw_spin_lock(&qi->q_lock);
+		}
 	}
+
+	log_qi_done_end(iommu, desc->qw0);
 
 	for (i = 0; i < count; i++)
 		qi->desc_status[(index + i) % QI_LENGTH] = QI_DONE;
@@ -2047,21 +2056,15 @@ static int dmar_fault_do_one(struct intel_iommu *iommu, int type,
 	reason = dmar_get_fault_reason(fault_reason, &fault_type);
 
 	if (fault_type == INTR_REMAP)
-		pr_err("[INTR-REMAP] Request device [%02x:%02x.%d] fault index 0x%llx [fault reason 0x%02x] %s\n",
-		       source_id >> 8, PCI_SLOT(source_id & 0xFF),
-		       PCI_FUNC(source_id & 0xFF), addr >> 48,
-		       fault_reason, reason);
-	else if (pasid == INVALID_IOASID)
-		pr_err("[%s NO_PASID] Request device [%02x:%02x.%d] fault addr 0x%llx [fault reason 0x%02x] %s\n",
+		pr_err("[INTR-REMAP] Request device [%02x:%02x.%d] fault index %llx [fault reason %02d] %s\n",
+			source_id >> 8, PCI_SLOT(source_id & 0xFF),
+			PCI_FUNC(source_id & 0xFF), addr >> 48,
+			fault_reason, reason);
+	else
+		pr_err("[%s] Request device [%02x:%02x.%d] PASID %x fault addr %llx [fault reason %02d] %s\n",
 		       type ? "DMA Read" : "DMA Write",
 		       source_id >> 8, PCI_SLOT(source_id & 0xFF),
-		       PCI_FUNC(source_id & 0xFF), addr,
-		       fault_reason, reason);
-	else
-		pr_err("[%s PASID 0x%x] Request device [%02x:%02x.%d] fault addr 0x%llx [fault reason 0x%02x] %s\n",
-		       type ? "DMA Read" : "DMA Write", pasid,
-		       source_id >> 8, PCI_SLOT(source_id & 0xFF),
-		       PCI_FUNC(source_id & 0xFF), addr,
+		       PCI_FUNC(source_id & 0xFF), pasid, addr,
 		       fault_reason, reason);
 
 	/* check if fault reason is permitted to report outside IOMMU */
@@ -2150,7 +2153,7 @@ irqreturn_t dmar_fault(int irq, void *dev_id)
 		if (!ratelimited)
 			/* Using pasid -1 if pasid is not present */
 			dmar_fault_do_one(iommu, type, fault_reason,
-					  pasid_present ? pasid : INVALID_IOASID,
+					  pasid_present ? pasid : -1,
 					  source_id, guest_addr);
 
 		fault_index++;
