@@ -736,7 +736,7 @@ static int __init intel_prepare_irq_remapping(void)
 		return -ENODEV;
 
 	if (intel_cap_audit(CAP_AUDIT_STATIC_IRQR, NULL))
-		return -ENODEV;
+		goto error;
 
 	if (!dmar_ir_support())
 		return -ENODEV;
@@ -1280,8 +1280,7 @@ static void intel_irq_remapping_prepare_irte(struct intel_ir_data *data,
 		break;
 	case X86_IRQ_ALLOC_TYPE_PCI_MSI:
 	case X86_IRQ_ALLOC_TYPE_PCI_MSIX:
-		set_msi_sid(irte,
-			    pci_real_dma_dev(msi_desc_to_pci_dev(info->desc)));
+		set_msi_sid(irte, msi_desc_to_pci_dev(info->desc));
 		break;
 	case X86_IRQ_ALLOC_TYPE_DEV_MSI:
 		set_msi_sid(irte, to_pci_dev(info->desc->dev->parent));

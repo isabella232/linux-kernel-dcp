@@ -118,6 +118,7 @@ bool intel_cap_smts_sanity(void);
 bool intel_cap_pasid_sanity(void);
 bool intel_cap_nest_sanity(void);
 bool intel_cap_flts_sanity(void);
+bool intel_cap_slad_sanity(void);
 
 static inline bool scalable_mode_support(void)
 {
@@ -132,6 +133,11 @@ static inline bool pasid_mode_support(void)
 static inline bool nested_mode_support(void)
 {
 	return scalable_mode_support() && intel_cap_nest_sanity();
+}
+
+static inline bool slad_support(void)
+{
+	return scalable_mode_support() && intel_cap_slad_sanity();
 }
 
 int intel_cap_audit(enum cap_audit_type type, struct intel_iommu *iommu);

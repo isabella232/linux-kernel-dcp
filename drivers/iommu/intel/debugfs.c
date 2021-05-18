@@ -542,43 +542,123 @@ static int ir_translation_struct_show(struct seq_file *m, void *unused)
 DEFINE_SHOW_ATTRIBUTE(ir_translation_struct);
 #endif
 
-static void latency_show_one(struct seq_file *m, struct intel_iommu *iommu,
+/* Count queued invalidation execution time? */
+static bool qi_done_counting;
+static DEFINE_RWLOCK(qi_done_lock);
+static char *qi_counts_names[] = {"    <0.1us", " 0.1us-1us", "  1us-10us",
+				  "10us-100us", " 100us-1ms", "  1ms-10ms",
+				  "    >=10ms"};
+
+/* Log start time before queued invalidation. */
+void log_qi_done_start(struct intel_iommu *iommu)
+{
+	read_lock(&qi_done_lock);
+
+	if (qi_done_counting)
+		iommu->qi->start_ktime_100ns = ktime_to_ns(ktime_get()) / 100;
+}
+
+static void _log_qi_done_end(u64 time_100ns, u64 *counts)
+{
+	if (time_100ns < 1)
+		counts[QI_COUNTS_1]++;		 /* <0.1us */
+	else if (time_100ns < 10)
+		counts[QI_COUNTS_10]++;		 /* 0.1us-1us */
+	else if (time_100ns < 100)
+		counts[QI_COUNTS_100]++;	 /* 1us-10us */
+	else if (time_100ns < 1000)
+		counts[QI_COUNTS_1000]++;	 /* 10us-100us */
+	else if (time_100ns < 10000)
+		counts[QI_COUNTS_10000]++;	 /* 100us-1ms */
+	else if (time_100ns < 100000)
+		counts[QI_COUNTS_100000]++;	 /* 1ms-10ms */
+	else
+		counts[QI_COUNTS_100000_plus]++; /* >=10ms */
+}
+
+/* Log execution time of queued invalidation in a time range per iommu. */
+void log_qi_done_end(struct intel_iommu *iommu, u64 qw0)
+{
+	u64 time_100ns, type, tmp;
+	struct q_inval *qi;
+
+	if (!qi_done_counting)
+		goto out;
+
+	/* Get type from [11:9] and [3:0] in qw0. */
+	tmp = qw0 & 0xF;
+	type = qw0 & 0xE00;
+	type >>= 5;
+	type = type | tmp;
+
+	qi = iommu->qi;
+	time_100ns = ktime_to_ns(ktime_get()) / 100 - qi->start_ktime_100ns;
+	if (type == QI_IOTLB_TYPE || type == QI_EIOTLB_TYPE ||
+	    type == QI_IEC_TYPE)
+		_log_qi_done_end(time_100ns, qi->iotlb_qi_counts);
+	else if (type == QI_DIOTLB_TYPE || type == QI_DEIOTLB_TYPE)
+		_log_qi_done_end(time_100ns, qi->diotlb_qi_counts);
+
+out:
+	read_unlock(&qi_done_lock);
+}
+
+static void one_qi_done_show(struct seq_file *m, struct intel_iommu *iommu,
 			     struct dmar_drhd_unit *drhd)
 {
-	int ret;
+	struct q_inval *qi = iommu->qi;
+	int i;
 
 	seq_printf(m, "IOMMU: %s Register Base Address: %llx\n",
 		   iommu->name, drhd->reg_base_addr);
+	seq_puts(m, "iotlb counts:\n");
+	for (i = 0; i < QI_COUNTS_NUM; i++) {
+		seq_printf(m, "%s: %lld\n", qi_counts_names[i],
+			   qi->iotlb_qi_counts[i]);
+	}
 
-	ret = dmar_latency_snapshot(iommu, debug_buf, DEBUG_BUFFER_SIZE);
-	if (ret < 0)
-		seq_puts(m, "Failed to get latency snapshot");
-	else
-		seq_puts(m, debug_buf);
+	seq_puts(m, "diotlb counts:\n");
+	for (i = 0; i < QI_COUNTS_NUM; i++) {
+		seq_printf(m, "%s: %lld\n", qi_counts_names[i],
+			   qi->diotlb_qi_counts[i]);
+	}
 	seq_puts(m, "\n");
 }
 
-static int latency_show(struct seq_file *m, void *v)
+static int qi_done_show(struct seq_file *m, void *v)
 {
 	struct dmar_drhd_unit *drhd;
 	struct intel_iommu *iommu;
 
+	read_lock(&qi_done_lock);
+
+	if (!qi_done_counting) {
+		seq_puts(m, "Disabled. Write 1/0 to enable/disable counting.\n");
+		goto out;
+	}
+
 	rcu_read_lock();
 	for_each_active_iommu(iommu, drhd)
-		latency_show_one(m, iommu, drhd);
+		one_qi_done_show(m, iommu, drhd);
 	rcu_read_unlock();
+out:
+	read_unlock(&qi_done_lock);
 
 	return 0;
 }
 
-static int dmar_perf_latency_open(struct inode *inode, struct file *filp)
+static void qi_done_clear(struct q_inval *qi)
 {
-	return single_open(filp, latency_show, NULL);
+	int i;
+
+	for (i = 0; i < QI_COUNTS_NUM; i++) {
+		qi->iotlb_qi_counts[i] = 0;
+		qi->diotlb_qi_counts[i] = 0;
+	}
 }
 
-static ssize_t dmar_perf_latency_write(struct file *filp,
-				       const char __user *ubuf,
-				       size_t cnt, loff_t *ppos)
+static ssize_t qi_done_write(struct file *filp, const char __user *ubuf,
+			     size_t cnt, loff_t *ppos)
 {
 	struct dmar_drhd_unit *drhd;
 	struct intel_iommu *iommu;
@@ -596,52 +676,39 @@ static ssize_t dmar_perf_latency_write(struct file *filp,
 	if (kstrtoint(buf, 0, &counting))
 		return -EINVAL;
 
+	write_lock(&qi_done_lock);
 	switch (counting) {
 	case 0:
-		rcu_read_lock();
-		for_each_active_iommu(iommu, drhd) {
-			dmar_latency_disable(iommu, DMAR_LATENCY_INV_IOTLB);
-			dmar_latency_disable(iommu, DMAR_LATENCY_INV_DEVTLB);
-			dmar_latency_disable(iommu, DMAR_LATENCY_INV_IEC);
-			dmar_latency_disable(iommu, DMAR_LATENCY_PRQ);
-		}
-		rcu_read_unlock();
+		qi_done_counting = false;
 		break;
 	case 1:
+		qi_done_counting = true;
+		/* Clear all counts. */
 		rcu_read_lock();
 		for_each_active_iommu(iommu, drhd)
-			dmar_latency_enable(iommu, DMAR_LATENCY_INV_IOTLB);
-		rcu_read_unlock();
-		break;
-	case 2:
-		rcu_read_lock();
-		for_each_active_iommu(iommu, drhd)
-			dmar_latency_enable(iommu, DMAR_LATENCY_INV_DEVTLB);
-		rcu_read_unlock();
-		break;
-	case 3:
-		rcu_read_lock();
-		for_each_active_iommu(iommu, drhd)
-			dmar_latency_enable(iommu, DMAR_LATENCY_INV_IEC);
-		rcu_read_unlock();
-		break;
-	case 4:
-		rcu_read_lock();
-		for_each_active_iommu(iommu, drhd)
-			dmar_latency_enable(iommu, DMAR_LATENCY_PRQ);
+			qi_done_clear(iommu->qi);
 		rcu_read_unlock();
 		break;
 	default:
+		write_unlock(&qi_done_lock);
+
 		return -EINVAL;
 	}
 
+	write_unlock(&qi_done_lock);
 	*ppos += cnt;
+
 	return cnt;
 }
 
-static const struct file_operations dmar_perf_latency_fops = {
-	.open		= dmar_perf_latency_open,
-	.write		= dmar_perf_latency_write,
+static int qi_done_open(struct inode *inode, struct file *filp)
+{
+	return single_open(filp, qi_done_show, NULL);
+}
+
+static const struct file_operations qi_done_fops = {
+	.open		= qi_done_open,
+	.write		= qi_done_write,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
 	.release	= single_release,

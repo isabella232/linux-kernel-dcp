@@ -2316,13 +2316,13 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 		ret = -EIO;
 		goto out_free;
 	}
-
+#if 0 
 	if (iommu->nesting) {
 		ret = iommu_enable_nesting(domain->domain);
 		if (ret)
 			goto out_domain;
 	}
-
+#endif
 	ret = vfio_iommu_attach_group(domain, group);
 	if (ret)
 		goto out_domain;

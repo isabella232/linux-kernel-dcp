@@ -203,3 +203,9 @@ bool intel_cap_flts_sanity(void)
 {
 	return ecap_flts(intel_iommu_ecap_sanity);
 }
+
+bool intel_cap_slad_sanity(void)
+{
+	return ecap_slts(intel_iommu_ecap_sanity) &&
+	       ecap_slads(intel_iommu_ecap_sanity);
+}

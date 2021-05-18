@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-/*
+/**
  * intel-pasid.c - PASID idr, table and entry manipulation
  *
  * Copyright (C) 2018 Intel Corporation
@@ -20,6 +20,7 @@
 #include <linux/spinlock.h>
 
 #include "pasid.h"
+#include "cap_audit.h"
 
 /*
  * Intel IOMMU system wide PASID name space:
@@ -258,23 +259,16 @@ static struct pasid_entry *intel_pasid_get_entry(struct device *dev, u32 pasid)
 	dir_index = pasid >> PASID_PDE_SHIFT;
 	index = pasid & PASID_PTE_MASK;
 
-retry:
 	entries = get_pasid_table_from_pde(&dir[dir_index]);
 	if (!entries) {
 		entries = alloc_pgtable_page(info->iommu->node);
 		if (!entries)
 			return NULL;
 
-		/*
-		 * The pasid directory table entry won't be freed after
-		 * allocation. No worry about the race with free and
-		 * clear. However, this entry might be populated by others
-		 * while we are preparing it. Use theirs with a retry.
-		 */
 		if (cmpxchg64(&dir[dir_index].val, 0ULL,
 			      (u64)virt_to_phys(entries) | PASID_PTE_PRESENT)) {
 			free_pgtable_page(entries);
-			goto retry;
+			entries = get_pasid_table_from_pde(&dir[dir_index]);
 		}
 	}
 
@@ -310,7 +304,7 @@ static inline void pasid_clear_entry_with_fpd(struct pasid_entry *pe)
 
 static void
 intel_pasid_clear_entry(struct intel_iommu *iommu, struct device *dev,
-			u32 pasid, bool fault_ignore)
+			u32 pasid, bool fault_ignore, bool keep_pte)
 {
 	struct pasid_entry *pe;
 	u64 pe_val;
@@ -327,10 +321,9 @@ intel_pasid_clear_entry(struct intel_iommu *iommu, struct device *dev,
 	 */
 	pe_val = READ_ONCE(pe->val[0]);
 	nested = (((pe_val >> 6) & 0x7) == PASID_ENTRY_PGTT_NESTED) ? true : false;
-	if (nested && (iommu->flags & VTD_FLAG_PGTT_SL_ONLY)) {
+	if (nested && keep_pte) {
 		pe_val &= 0xfffffffffffffebf;
 		WRITE_ONCE(pe->val[0], pe_val);
-		iommu->flags &= ~VTD_FLAG_PGTT_SL_ONLY;
 		return;
 	}
 
@@ -482,6 +475,15 @@ pasid_set_eafe(struct pasid_entry *pe)
 	pasid_set_bits(&pe->val[2], 1 << 7, 1 << 7);
 }
 
+/*
+ * Setup Second Level Access/Dirty bit Enable field (Bit 9) of a
+ * scalable mode PASID entry.
+ */
+static inline void pasid_set_slade(struct pasid_entry *pe, bool value)
+{
+	pasid_set_bits(&pe->val[0], 1 << 9, value << 9);
+}
+
 static void
 pasid_cache_invalidation_with_pasid(struct intel_iommu *iommu,
 				    u16 did, u32 pasid)
@@ -524,8 +526,23 @@ devtlb_invalidation_with_pasid(struct intel_iommu *iommu,
 		qi_flush_dev_iotlb_pasid(iommu, sid, pfsid, pasid, qdep, 0, 64 - VTD_PAGE_SHIFT);
 }
 
+static void
+flush_iotlb_all(struct intel_iommu *iommu, struct device *dev,
+		u16 did, u32 pasid, u64 type)
+{
+	pasid_cache_invalidation_with_pasid(iommu, did, pasid);
+
+	if (type)
+		iommu->flush.flush_iotlb(iommu, did, 0, 0, type);
+	else
+		qi_flush_piotlb(iommu, did, pasid, 0, -1, 0);
+
+	if (!cap_caching_mode(iommu->cap))
+		devtlb_invalidation_with_pasid(iommu, dev, pasid);
+}
+
 void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
-				 u32 pasid, bool fault_ignore)
+				 u32 pasid, bool fault_ignore, bool keep_pte)
 {
 	struct pasid_entry *pte;
 	u16 did;
@@ -536,7 +553,7 @@ void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
 	if (WARN_ON(!pte))
 		return;
 
-	if (!pasid_pte_is_present(pte))
+	if (!(pte->val[0] & PASID_PTE_PRESENT))
 		return;
 
 	did = pasid_get_domain_id(pte);
@@ -556,10 +573,6 @@ void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
 		flush_iotlb_all(iommu, dev, did, pasid, DMA_TLB_DSI_FLUSH);
 }
 
-/*
- * This function flushes cache for a newly setup pasid table entry.
- * Caller of it should not modify the in-use pasid table entries.
- */
 static void pasid_flush_caches(struct intel_iommu *iommu,
 				struct pasid_entry *pte,
 			       u32 pasid, u16 did)
@@ -608,10 +621,6 @@ int intel_pasid_setup_first_level(struct intel_iommu *iommu,
 	pte = intel_pasid_get_entry(dev, pasid);
 	if (WARN_ON(!pte))
 		return -EINVAL;
-
-	/* Caller must ensure PASID entry is not in use. */
-	if (pasid_pte_is_present(pte))
-		return -EBUSY;
 
 	pasid_clear_entry(pte);
 
@@ -712,10 +721,6 @@ int intel_pasid_setup_second_level(struct intel_iommu *iommu,
 		return -ENODEV;
 	}
 
-	/* Caller must ensure PASID entry is not in use. */
-	if (pasid_pte_is_present(pte))
-		return -EBUSY;
-
 	pasid_clear_entry(pte);
 	pasid_set_domain_id(pte, did);
 	pasid_set_slptr(pte, pgd_val);
@@ -733,6 +738,8 @@ int intel_pasid_setup_second_level(struct intel_iommu *iommu,
 	 */
 	if (pasid != PASID_RID2PASID)
 		pasid_set_sre(pte);
+	if (slad_support())
+		pasid_set_slade(pte, true);
 	pasid_set_present(pte);
 	pasid_flush_caches(iommu, pte, pasid, did);
 
@@ -754,10 +761,6 @@ int intel_pasid_setup_pass_through(struct intel_iommu *iommu,
 		dev_err(dev, "Failed to get pasid entry of PASID %d\n", pasid);
 		return -ENODEV;
 	}
-
-	/* Caller must ensure PASID entry is not in use. */
-	if (pasid_pte_is_present(pte))
-		return -EBUSY;
 
 	pasid_clear_entry(pte);
 	pasid_set_domain_id(pte, did);
@@ -942,6 +945,8 @@ int intel_pasid_setup_nested(struct intel_iommu *iommu, struct device *dev,
 	pasid_set_page_snoop(pte, !!ecap_smpwc(iommu->ecap));
 
 	pasid_set_translation_type(pte, PASID_ENTRY_PGTT_NESTED);
+	if (slad_support())
+		pasid_set_slade(pte, true);
 	pasid_set_present(pte);
 	pasid_flush_caches(iommu, pte, pasid, did);
 
