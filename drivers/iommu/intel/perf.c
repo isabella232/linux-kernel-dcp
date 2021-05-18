@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-/*
+/**
  * perf.c - performance monitor
  *
  * Copyright (C) 2021 Intel Corporation
@@ -141,14 +141,14 @@ int dmar_latency_snapshot(struct intel_iommu *iommu, char *str, size_t size)
 				if (val == UINT_MAX)
 					val = 0;
 				else
-					val = div_u64(val, 1000);
+					val /= 1000;
 				break;
 			case COUNTS_MAX:
-				val = div_u64(val, 1000);
+				val /= 1000;
 				break;
 			case COUNTS_SUM:
 				if (lstat[i].samples)
-					val = div_u64(val, (lstat[i].samples * 1000));
+					val /= (lstat[i].samples * 1000);
 				else
 					val = 0;
 				break;
