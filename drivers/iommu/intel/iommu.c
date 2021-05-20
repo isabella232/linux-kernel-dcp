@@ -5529,11 +5529,8 @@ intel_iommu_dev_enable_feat(struct device *dev, enum iommu_dev_features feat)
 	case IOMMU_DEV_FEAT_IOPF:
 		return intel_iommu_dev_has_feat(dev, feat) ? 0 : -ENODEV;
 
-	case IOMMU_DEV_FEAT_SVA:
-		return intel_iommu_enable_sva(dev);
-
-	default:
-		return -ENODEV;
+		if (info->iommu->flags & VTD_FLAG_SVM_CAPABLE)
+			return 0;
 	}
 }
 
