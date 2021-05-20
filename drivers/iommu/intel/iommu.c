@@ -2032,11 +2032,6 @@ static inline void
 context_set_sm_rid2pasid(struct context_entry *context, unsigned long pasid)
 {
 	context->hi |= pasid & ((1 << 20) - 1);
-	/* TODO: rid_priv should be 1. Otherwise the PRQ w/o pasid generated.
-	 * The root cause is that the guest PTE U/S bit is not set to 1. Ideally,
-	 * the guest kernel should set it.
-	 */
-	context->hi |= (1 << 20);
 }
 
 /*
