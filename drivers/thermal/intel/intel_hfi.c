@@ -26,6 +26,9 @@
 
 #include "intel_hfi.h"
 
+#define THERM_STATUS_CLEAR_PKG_MASK (BIT(1) | BIT(3) | BIT(5) | BIT(7) | \
+				     BIT(9) | BIT(11) | BIT(26))
+
 /**
  * struct hfi_cpu_data - HFI capabilities per CPU
  * @perf_cap:		Performance capability
@@ -60,6 +63,9 @@ struct hfi_hdr {
  * @die_id:		Logical die ID this HFI table instance
  * @cpus:		CPUs represented in this HFI table instance
  * @hw_table:		Pointer to the HFI table of this instance
+ * @update_work:	Delayed work to process HFI updates
+ * @event_lock:		Lock to protect HFI updates
+ * @timestamp:		Timestamp of the last HFI update
  * @initialized:	True if this HFI instance has bee initialized
  *
  * A set of parameters to parse and navigate a specific HFI table.
@@ -72,6 +78,9 @@ struct hfi_instance {
 	u16			die_id;
 	struct cpumask		*cpus;
 	void			*hw_table;
+	struct delayed_work	update_work;
+	raw_spinlock_t		event_lock;
+	u64			timestamp;
 	bool			initialized;
 };
 
@@ -113,6 +122,75 @@ static struct hfi_instance *hfi_instances;
 
 static struct hfi_features hfi_features;
 static DEFINE_MUTEX(hfi_lock);
+
+#define HFI_UPDATE_INTERVAL	HZ
+
+static void hfi_update_work_fn(struct work_struct *work)
+{
+	struct hfi_instance *hfi_instance;
+
+	hfi_instance = container_of(to_delayed_work(work), struct hfi_instance,
+				    update_work);
+	if (!hfi_instance)
+		return;
+
+	/* TODO: Consume update here. */
+}
+
+void intel_hfi_process_event(__u64 pkg_therm_status_msr_val)
+{
+	struct hfi_instance *hfi_instance;
+	int cpu = smp_processor_id();
+	struct hfi_cpu_info *info;
+	unsigned long flags;
+	u64 timestamp;
+
+	if (!pkg_therm_status_msr_val)
+		return;
+
+	info = &per_cpu(hfi_cpu_info, cpu);
+	if (!info)
+		return;
+
+	/*
+	 * It is possible that we get an HFI thermal interrupt on this CPU
+	 * before its HFI instance is initialized. This is not a problem. The
+	 * CPU that enabled the interrupt for this package will also get the
+	 * interrupt and is fully initialized.
+	 */
+	hfi_instance = info->hfi_instance;
+	if (!hfi_instance)
+		return;
+
+	raw_spin_lock_irqsave(&hfi_instance->event_lock, flags);
+
+	/*
+	 * On most systems, all CPUs in the package receive a package-level
+	 * thermal interrupt when there is an HFI update. Since they all are
+	 * dealing with the same update (as indicated by the update timestamp),
+	 * it is sufficient to let a single CPU to acknowledge the update and
+	 * schedule work to process it.
+	 */
+	timestamp = *(u64 *)hfi_instance->hw_table;
+	if (hfi_instance->timestamp >= timestamp)
+		goto unlock_spinlock;
+
+	hfi_instance->timestamp = timestamp;
+
+	memcpy(hfi_instance->table_base, hfi_instance->hw_table,
+	       hfi_features.nr_table_pages << PAGE_SHIFT);
+	/*
+	 * Let hardware and other CPUs know that we are done reading the HFI
+	 * table and it is free to update it again.
+	 */
+	pkg_therm_status_msr_val &= THERM_STATUS_CLEAR_PKG_MASK &
+				    ~PACKAGE_THERM_STATUS_HFI_UPDATED;
+	wrmsrl(MSR_IA32_PACKAGE_THERM_STATUS, pkg_therm_status_msr_val);
+	schedule_delayed_work(&hfi_instance->update_work, HFI_UPDATE_INTERVAL);
+
+unlock_spinlock:
+	raw_spin_unlock_irqrestore(&hfi_instance->event_lock, flags);
+}
 
 static void init_hfi_cpu_index(unsigned int cpu)
 {
@@ -232,6 +310,9 @@ void intel_hfi_online(unsigned int cpu)
 
 	init_hfi_instance(hfi_instance);
 
+	INIT_DELAYED_WORK(&hfi_instance->update_work, hfi_update_work_fn);
+	raw_spin_lock_init(&hfi_instance->event_lock);
+
 	hfi_instance->die_id = die_id;
 
 	/*
@@ -241,6 +322,14 @@ void intel_hfi_online(unsigned int cpu)
 	hfi_instance->cpus = topology_core_cpumask(cpu);
 	info->hfi_instance = hfi_instance;
 	hfi_instance->initialized = true;
+
+	/*
+	 * Enable the hardware feedback interface and never disable it. See
+	 * comment on programming the address of the table.
+	 */
+	rdmsrl(MSR_IA32_HW_FEEDBACK_CONFIG, msr_val);
+	msr_val |= HFI_CONFIG_ENABLE_BIT;
+	wrmsrl(MSR_IA32_HW_FEEDBACK_CONFIG, msr_val);
 
 	mutex_unlock(&hfi_lock);
 
