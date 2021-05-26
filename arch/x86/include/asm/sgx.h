@@ -379,6 +379,20 @@ struct sgx_sigstruct {
  * Do not put any hardware-defined SGX structure representations below this
  * comment!
  */
+struct sgx_kvm_notifier;
+
+struct sgx_kvm_notifier_ops {
+	void (*halt)(struct sgx_kvm_notifier *notifier);
+	void (*resume)(struct sgx_kvm_notifier *notifier);
+};
+
+struct sgx_kvm_notifier {
+	struct list_head list;
+	const struct sgx_kvm_notifier_ops *ops;
+};
+
+extern void sgx_kvm_notifier_register(struct sgx_kvm_notifier *notifier);
+extern void sgx_kvm_notifier_unregister(struct sgx_kvm_notifier *notifier);
 
 #ifdef CONFIG_X86_SGX_KVM
 int sgx_virt_ecreate(struct sgx_pageinfo *pageinfo, void __user *secs,
@@ -432,10 +446,14 @@ static inline int sgx_updatesvn(void)
 void sgx_lock_epc(void);
 void sgx_unlock_epc(void);
 int sgx_zap_pages(void);
+void sgx_kvm_notifier_halt(void);
+void sgx_kvm_notifier_resume(void);
 #else
 static inline void sgx_lock_epc(void) { }
 static inline void sgx_unlock_epc(void) { }
 static inline int sgx_zap_pages(void) { return 0; }
+static inline void sgx_kvm_notifier_halt(void) { }
+static inline void sgx_kvm_notifier_resume(void) { }
 #endif
 
 #endif /* _ASM_X86_SGX_H */
