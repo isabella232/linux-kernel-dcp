@@ -16,6 +16,8 @@ void setup_default_sgx_lepubkeyhash(void);
 void vcpu_setup_sgx_lepubkeyhash(struct kvm_vcpu *vcpu);
 
 void vmx_write_encls_bitmap(struct kvm_vcpu *vcpu, struct vmcs12 *vmcs12);
+inline bool sgx_enabled_in_guest_bios(struct kvm_vcpu *vcpu);
+void kvm_init_sgx_notifier(struct kvm_vcpu *vcpu);
 #else
 #define enable_sgx 0
 
@@ -29,6 +31,8 @@ static inline void vmx_write_encls_bitmap(struct kvm_vcpu *vcpu,
 	if (cpu_has_vmx_encls_vmexit())
 		vmcs_write64(ENCLS_EXITING_BITMAP, -1ull);
 }
+static inline bool sgx_enabled_in_guest_bios(struct kvm_vcpu *vcpu) { return false; }
+static inline void kvm_init_sgx_notifier(struct kvm_vcpu *vcpu) { }
 #endif
 
 #endif /* __KVM_X86_SGX_H */

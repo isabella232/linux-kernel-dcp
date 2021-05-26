@@ -46,6 +46,7 @@
 #include <asm/mshyperv.h>
 #include <asm/mwait.h>
 #include <asm/spec-ctrl.h>
+#include <asm/sgx.h>
 #include <asm/virtext.h>
 #include <asm/vmx.h>
 
@@ -2185,6 +2186,12 @@ static int vmx_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 
 		/* SGX may be enabled/disabled by guest's firmware */
 		vmx_write_encls_bitmap(vcpu, NULL);
+
+		/* Register SGX notifier when SGX is enabled, then
+		 * KVM could be notified by host while SGX CPUSVN
+		 * update is running.
+		 */
+		kvm_init_sgx_notifier(vcpu);
 		break;
 	case MSR_IA32_SGXLEPUBKEYHASH0 ... MSR_IA32_SGXLEPUBKEYHASH3:
 		/*
