@@ -35,14 +35,21 @@ struct sgx_epc_page {
 
 /**
  * enum sgx_epc_page_flags - the flag field in &struct sgx_epc_page
- * %SGX_EPC_PAGE_SECS:		a SECS page
- * %SGX_EPC_PAGE_VA:		a VA page
- * %SGX_EPC_PAGE_GUEST:		an EPC page allocated for KVM guest
+ * %SGX_EPC_PAGE_SECS:			a SECS page
+ * %SGX_EPC_PAGE_VA:			a VA page
+ * %SGX_EPC_PAGE_GUEST:			an EPC page allocated for KVM guest
+ * %SGX_EPC_PAGE_ZAP_TRACKED:		an EPC page is failed to be zapped
+ *					(EREMOVEd) by CPUSVN update process,
+ *					it's tracked as a deferred target.
+ * %SGX_EPC_PAGE_IN_RELEASE:		the enclave which the EPC page
+ *					associated with is in releasing.
  */
 enum sgx_epc_page_flags {
 	SGX_EPC_PAGE_SECS			= BIT(1),
 	SGX_EPC_PAGE_VA				= BIT(2),
 	SGX_EPC_PAGE_GUEST			= BIT(3),
+	SGX_EPC_PAGE_ZAP_TRACKED		= BIT(4),
+	SGX_EPC_PAGE_IN_RELEASE			= BIT(5),
 };
 
 /*
@@ -110,5 +117,7 @@ void sgx_update_lepubkeyhash(u64 *lepubkeyhash);
 
 extern struct srcu_struct sgx_lock_epc_srcu;
 bool sgx_epc_is_locked(void);
+void sgx_zap_wakeup(void);
+void sgx_zap_abort(void);
 
 #endif /* _X86_SGX_H */

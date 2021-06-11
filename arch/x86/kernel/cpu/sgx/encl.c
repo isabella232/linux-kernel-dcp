@@ -449,6 +449,12 @@ void sgx_encl_release(struct kref *ref)
 	WARN_ON_ONCE(encl->secs_child_cnt);
 	WARN_ON_ONCE(encl->secs.epc_page);
 
+	/*
+	 * EPC pages were freed and EREMOVE was executed. Wake
+	 * up any zappers which were waiting for this.
+	 */
+	sgx_zap_wakeup();
+
 	kfree(encl);
 }
 
@@ -775,8 +781,14 @@ void sgx_encl_free_epc_page(struct sgx_epc_page *page)
 	WARN_ON_ONCE(page->flags & SGX_EPC_PAGE_RECLAIMER_TRACKED);
 
 	ret = __eremove(sgx_get_epc_virt_addr(page));
-	if (WARN_ONCE(ret, EREMOVE_ERROR_MESSAGE, ret, ret))
+	if (WARN_ONCE(ret, EREMOVE_ERROR_MESSAGE, ret, ret)) {
+		/*
+		 * The EREMOVE failed. If a CPUSVN is in progress,
+		 * it is now expected to fail. Notify it.
+		 */
+		sgx_zap_abort();
 		return;
+	}
 
 	sgx_free_epc_page(page);
 }
