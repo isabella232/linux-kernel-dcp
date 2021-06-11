@@ -30,6 +30,17 @@
 #define SGX_EPC_PAGE_VA			BIT(2)
 /* Pages allocated for KVM guest */
 #define SGX_EPC_PAGE_GUEST		BIT(3)
+/*
+ * Pages, failed to be zapped (EREMOVED)
+ * by SGX CPUSVN update process.
+ */
+#define SGX_EPC_PAGE_ZAP_TRACKED	BIT(4)
+/*
+ * Pages, the associated enclave is being
+ * released while SGX CPUSVN update is
+ * running.
+ */
+#define SGX_EPC_PAGE_IN_RELEASE		BIT(5)
 
 struct sgx_epc_page {
 	unsigned int section;
@@ -106,5 +117,7 @@ void sgx_update_lepubkeyhash(u64 *lepubkeyhash);
 
 extern struct srcu_struct sgx_lock_epc_srcu;
 bool sgx_epc_is_locked(void);
+void sgx_zap_wakeup(void);
+void sgx_zap_abort(void);
 
 #endif /* _X86_SGX_H */
