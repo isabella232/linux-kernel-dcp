@@ -40,6 +40,7 @@
 
 #include <asm/msr.h>
 
+#include "../thermal_core.h"
 #include "intel_hfi.h"
 
 #define THERM_STATUS_CLEAR_PKG_MASK (BIT(1) | BIT(3) | BIT(5) | BIT(7) | \
@@ -162,6 +163,60 @@ static struct hfi_features hfi_features;
 static DEFINE_MUTEX(hfi_instance_lock);
 
 #define HFI_UPDATE_INTERVAL	HZ
+#define HFI_MAX_THERM_NOTIFY_COUNT	16
+
+static void get_one_hfi_cap(struct hfi_instance *hfi_instance, s16 index,
+			    struct hfi_cpu_data *hfi_caps)
+{
+	struct hfi_cpu_data *caps;
+
+	/* Find the capabilities of @cpu */
+	raw_spin_lock_irq(&hfi_instance->table_lock);
+	caps = hfi_instance->data + index * hfi_features.cpu_stride;
+	memcpy(hfi_caps, caps, sizeof(*hfi_caps));
+	raw_spin_unlock_irq(&hfi_instance->table_lock);
+}
+
+/*
+ * Call update_capabilities() when there are changes in the HFI table.
+ */
+static void update_capabilities(struct hfi_instance *hfi_instance)
+{
+	struct cpu_capability cpu_caps[HFI_MAX_THERM_NOTIFY_COUNT];
+	int i = 0, cpu;
+
+	for_each_cpu(cpu, hfi_instance->cpus) {
+		struct hfi_cpu_data caps;
+		s16 index;
+
+		/*
+		 * We know index is valid because this CPU is present
+		 * in this instance.
+		 */
+		index = per_cpu(hfi_cpu_info, cpu).index;
+
+		get_one_hfi_cap(hfi_instance, index, &caps);
+
+		cpu_caps[i].cpu = cpu;
+
+		/*
+		 * Scale performance and energy efficiency to
+		 * the [0, 1023] interval that thermal netlink uses.
+		 */
+		cpu_caps[i].performance = caps.perf_cap << 2;
+		cpu_caps[i].efficiency = caps.ee_cap << 2;
+		++i;
+
+		if (i >= HFI_MAX_THERM_NOTIFY_COUNT) {
+			thermal_genl_cpu_capability_event(HFI_MAX_THERM_NOTIFY_COUNT,
+							  cpu_caps);
+			i = 0;
+		}
+	}
+
+	if (i)
+		thermal_genl_cpu_capability_event(i, cpu_caps);
+}
 
 static void hfi_update_work_fn(struct work_struct *work)
 {
@@ -172,7 +227,7 @@ static void hfi_update_work_fn(struct work_struct *work)
 	if (!hfi_instance)
 		return;
 
-	/* TODO: Consume update here. */
+	update_capabilities(hfi_instance);
 }
 
 void intel_hfi_process_event(__u64 pkg_therm_status_msr_val)
