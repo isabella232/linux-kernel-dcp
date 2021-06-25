@@ -2735,7 +2735,7 @@ static int vfio_dev_bind_gpasid_fn(struct device *dev, void *data)
 	struct device *iommu_device;
 	void *iommu_fault_data = NULL;
 
-	printk("%s, - arg: 0x%lx\n", __func__, arg);
+	pr_debug("%s, - arg: 0x%lx\n", __func__, arg);
 	iommu_device = vfio_get_iommu_device(dc->group, dev);
 	if (!iommu_device)
 		return -EINVAL;
@@ -2743,7 +2743,7 @@ static int vfio_dev_bind_gpasid_fn(struct device *dev, void *data)
 	if (iommu_device != dev)
 		iommu_fault_data = mdev_get_iommu_fault_data(mdev);
 
-	printk("%s: iommu_fault_data: %llx\n", __func__, (unsigned long long) iommu_fault_data);
+	pr_debug("%s: iommu_fault_data: %llx\n", __func__, (unsigned long long) iommu_fault_data);
 
 	return iommu_uapi_sva_bind_gpasid(dc->domain, iommu_device,
 					  (void __user *)arg,
@@ -2770,7 +2770,7 @@ static int vfio_dev_unbind_gpasid_fn(struct device *dev, void *data)
 	if (dc->user) {
 		unsigned long arg = *(unsigned long *)dc->data;
 
-		printk("%s, - arg: 0x%lx\n", __func__, arg);
+		pr_debug("%s, - arg: 0x%lx\n", __func__, arg);
 		iommu_uapi_sva_unbind_gpasid(dc->domain, iommu_device,
 					     (void __user *)arg);
 	} else {
@@ -3443,7 +3443,7 @@ static int vfio_dev_cache_invalidate_fn(struct device *dev, void *data)
 	unsigned long arg = *(unsigned long *)dc->data;
 	struct device *iommu_device;
 
-	printk("%s, - arg: 0x%lx\n", __func__, arg);
+	pr_debug("%s, - arg: 0x%lx\n", __func__, arg);
 	iommu_device = vfio_get_iommu_device(dc->group, dev);
 	if (!iommu_device)
 		return -EINVAL;
@@ -3485,7 +3485,7 @@ static int vfio_dev_page_resp_fn(struct device *dev, void *data)
 	unsigned long arg = *(unsigned long *) dc->data;
 	struct device *iommu_device;
 
-	printk("%s, - arg: 0x%lx\n", __func__, arg);
+	pr_debug("%s, - arg: 0x%lx\n", __func__, arg);
 	iommu_device = vfio_get_iommu_device(dc->group, dev);
 	if (!iommu_device)
 		return -EINVAL;
@@ -3529,29 +3529,29 @@ static long vfio_iommu_type1_nesting_op(struct vfio_iommu *iommu,
 
 	minsz = offsetofend(struct vfio_iommu_type1_nesting_op, flags);
 
-	printk("%s, - 1, arg: 0x%lx, minsz: %u\n", __func__, arg, minsz);
+	pr_debug("%s, - 1, arg: 0x%lx, minsz: %u\n", __func__, arg, minsz);
 	if (copy_from_user(&hdr, (void __user *)arg, minsz))
 		return -EFAULT;
 
 	if (hdr.argsz < minsz || hdr.flags & ~VFIO_NESTING_OP_MASK)
 		return -EINVAL;
 
-	printk("%s, - 2\n", __func__);
+	pr_debug("%s, - 2\n", __func__);
 	switch (hdr.flags & VFIO_NESTING_OP_MASK) {
 	case VFIO_IOMMU_NESTING_OP_BIND_PGTBL:
-	printk("%s, bind - 1\n", __func__);
+	pr_debug("%s, bind - 1\n", __func__);
 		ret = vfio_iommu_handle_pgtbl_op(iommu, true, arg + minsz);
-	printk("%s, bind - 2, ret: %d\n", __func__, ret);
+	pr_debug("%s, bind - 2, ret: %d\n", __func__, ret);
 		break;
 	case VFIO_IOMMU_NESTING_OP_UNBIND_PGTBL:
-	printk("%s, unbind - 1\n", __func__);
+	pr_debug("%s, unbind - 1\n", __func__);
 		ret = vfio_iommu_handle_pgtbl_op(iommu, false, arg + minsz);
-	printk("%s, unbind - 2, ret: %d\n", __func__, ret);
+	pr_debug("%s, unbind - 2, ret: %d\n", __func__, ret);
 		break;
 	case VFIO_IOMMU_NESTING_OP_CACHE_INVLD:
-	printk("%s, cache_inv - 1\n", __func__);
+	pr_debug("%s, cache_inv - 1\n", __func__);
 		ret = vfio_iommu_invalidate_cache(iommu, arg + minsz);
-	printk("%s, cache_inv - 2, ret: %d\n", __func__, ret);
+	pr_debug("%s, cache_inv - 2, ret: %d\n", __func__, ret);
 		break;
 	case VFIO_IOMMU_NESTING_OP_PAGE_RESP:
 		ret = vfio_iommu_page_response(iommu, arg + minsz);
