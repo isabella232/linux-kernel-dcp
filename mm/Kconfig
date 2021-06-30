@@ -825,8 +825,11 @@ config ARCH_HAS_PKEYS
 	bool
 config ARCH_HAS_SUPERVISOR_PKEYS
 	bool
+config GENERAL_PKS_USER
+	def_bool n
 config ARCH_ENABLE_SUPERVISOR_PKEYS
-	bool
+	def_bool y
+	depends on PKS_TEST || GENERAL_PKS_USER
 
 config PERCPU_STATS
 	bool "Collect percpu memory statistics"

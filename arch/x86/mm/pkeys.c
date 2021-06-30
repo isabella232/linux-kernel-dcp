@@ -218,7 +218,7 @@ u32 update_pkey_val(u32 pk_reg, int pkey, unsigned int flags)
 
 #ifdef CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS
 
-static DEFINE_PER_CPU(u32, pkrs_cache);
+__static_or_pks_test DEFINE_PER_CPU(u32, pkrs_cache);
 u32 __read_mostly pkrs_init_value;
 
 /*
@@ -288,6 +288,22 @@ static int __init create_initial_pkrs_value(void)
 
 	pkrs_init_value = 0;
 	pkrs_pkey_allowed_mask = PKRS_ALLOWED_MASK_DEFAULT;
+
+	/*
+	 * PKS_TEST is mutually exclusive to any real users of PKS so define a PKS_TEST
+	 * appropriate value.
+	 *
+	 * NOTE: PKey 0 must still be fully permissive for normal kernel mappings to
+	 * work correctly.
+	 */
+	if (IS_ENABLED(CONFIG_PKS_TEST)) {
+		pkrs_init_value = (PKR_AD_KEY(1) | PKR_AD_KEY(2) | PKR_AD_KEY(3) | \
+				   PKR_AD_KEY(4) | PKR_AD_KEY(5) | PKR_AD_KEY(6) | \
+				   PKR_AD_KEY(7) | PKR_AD_KEY(8) | PKR_AD_KEY(9) | \
+				   PKR_AD_KEY(10) | PKR_AD_KEY(11) | PKR_AD_KEY(12) | \
+				   PKR_AD_KEY(13) | PKR_AD_KEY(14) | PKR_AD_KEY(15));
+		return 0;
+	}
 
 	/* Fill the defaults for the consumers */
 	for (i = 0; i < PKS_NUM_PKEYS; i++)

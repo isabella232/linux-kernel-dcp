@@ -122,8 +122,8 @@ available in future non-server Intel parts.
 Also qemu has some support as well: https://www.qemu.org/2021/04/30/qemu-6-0-0/
 
 Kernel users intending to use PKS support should depend on
-ARCH_HAS_SUPERVISOR_PKEYS, and add their config to ARCH_ENABLE_SUPERVISOR_PKEYS
-to turn on this support within the core.
+ARCH_HAS_SUPERVISOR_PKEYS, and add their config to GENERAL_PKS_USER to turn on
+this support within the core.
 
 Users reserve a key value by adding an entry to the enum pks_pkey_consumers and
 defining the initial protections in the consumer_defaults[] array.
@@ -188,3 +188,5 @@ text:
 	affected by PKRU register will not execute (even transiently)
 	until all prior executions of WRPKRU have completed execution
 	and updated the PKRU register.
+
+Example code can be found in lib/pks/pks_test.c
