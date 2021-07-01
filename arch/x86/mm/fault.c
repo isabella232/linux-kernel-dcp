@@ -1141,6 +1141,55 @@ bool fault_in_kernel_space(unsigned long address)
 	return address >= TASK_SIZE_MAX;
 }
 
+#ifdef CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS
+static bool handle_pks_key_fault(struct pt_regs *regs,
+				 unsigned long hw_error_code,
+				 unsigned long address)
+{
+	bool write = (hw_error_code & X86_PF_WRITE);
+	pgd_t pgd;
+	p4d_t p4d;
+	pud_t pud;
+	pmd_t pmd;
+	pte_t pte;
+
+	pgd = READ_ONCE(*(init_mm.pgd + pgd_index(address)));
+	if (!pgd_present(pgd))
+		return false;
+
+	p4d = READ_ONCE(*p4d_offset(&pgd, address));
+	if (!p4d_present(p4d))
+		return false;
+
+	if (p4d_large(p4d))
+		return handle_pks_key_callback(address, write,
+					       pte_flags_pkey(p4d_val(p4d)));
+
+	pud = READ_ONCE(*pud_offset(&p4d, address));
+	if (!pud_present(pud))
+		return false;
+
+	if (pud_large(pud))
+		return handle_pks_key_callback(address, write,
+					      pte_flags_pkey(pud_val(pud)));
+
+	pmd = READ_ONCE(*pmd_offset(&pud, address));
+	if (!pmd_present(pmd))
+		return false;
+
+	if (pmd_large(pmd))
+		return handle_pks_key_callback(address, write,
+					      pte_flags_pkey(pmd_val(pmd)));
+
+	pte = READ_ONCE(*pte_offset_kernel(&pmd, address));
+	if (!pte_present(pte))
+		return false;
+
+	return handle_pks_key_callback(address, write,
+				      pte_flags_pkey(pte_val(pte)));
+}
+#endif
+
 /*
  * Called for all faults where 'address' is part of the kernel address
  * space.  Might get called for faults that originate from *code* that
@@ -1170,6 +1219,9 @@ do_kern_addr_fault(struct pt_regs *regs, unsigned long hw_error_code,
 			return;
 
 		if (handle_abandoned_pks_value(regs))
+			return;
+
+		if (handle_pks_key_fault(regs, hw_error_code, address))
 			return;
 	}
 

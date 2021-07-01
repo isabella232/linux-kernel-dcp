@@ -23,6 +23,7 @@ static inline struct extended_pt_regs *extended_pt_regs(struct pt_regs *regs)
 
 void show_extended_regs_oops(struct pt_regs *regs, unsigned long error_code);
 int handle_abandoned_pks_value(struct pt_regs *regs);
+bool handle_pks_key_callback(unsigned long address, bool write, u16 key);
 
 #else /* !CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS */
 
@@ -35,6 +36,12 @@ static inline void show_extended_regs_oops(struct pt_regs *regs,
 static inline int handle_abandoned_pks_value(struct pt_regs *regs)
 {
 	return 0;
+}
+static inline bool handle_pks_key_fault(struct pt_regs *regs,
+					unsigned long hw_error_code,
+					unsigned long address)
+{
+	return false;
 }
 
 #endif /* CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS */

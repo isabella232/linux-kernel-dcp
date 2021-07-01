@@ -113,7 +113,8 @@ Kernel API for PKS support
 
 Similar to user space pkeys, supervisor pkeys allow additional protections to
 be defined for a supervisor mappings.  Unlike user space pkeys, violations of
-these protections result in a a kernel oops.
+these protections result in a a kernel oops unless a PKS fault handler is
+provided which handles the fault.
 
 Supervisor Memory Protection Keys (PKS) is a feature which is found on Intel's
 Sapphire Rapids (and later) "Scalable Processor" Server CPUs.  It will also be
@@ -144,6 +145,30 @@ Disabled.
         consumer_defaults[PKS_KEY_DEFAULT]     = 0;
         consumer_defaults[PKS_KEY_MY_FEATURE]  = PKR_DISABLE_WRITE;
         ...
+
+
+Users may also provide a fault handler which can handle a fault differently
+than an oops.  Continuing our example from above if 'MY_FEATURE' wanted to
+define a handler they can do so by adding the coresponding entry to the
+pks_key_callbacks array.
+
+::
+
+        #ifdef CONFIG_MY_FEATURE
+        bool my_feature_pks_fault_callback(unsigned long address, bool write)
+        {
+                if (my_feature_fault_is_ok)
+                        return true;
+                return false;
+        }
+        #endif
+
+        static const pks_key_callback pks_key_callbacks[PKS_KEY_NR_CONSUMERS] = {
+                [PKS_KEY_DEFAULT]            = NULL,
+        #ifdef CONFIG_MY_FEATURE
+                [PKS_KEY_PGMAP_PROTECTION]   = my_feature_pks_fault_callback,
+        #endif
+        };
 
 The following interface is used to manipulate the 'protection domain' defined
 by a pkey within the kernel.  Setting a pkey value in a supervisor PTE adds

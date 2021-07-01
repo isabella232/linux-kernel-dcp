@@ -241,6 +241,19 @@ int handle_abandoned_pks_value(struct pt_regs *regs)
 	return (ept_regs->thread_pkrs != old);
 }
 
+static const pks_key_callback pks_key_callbacks[PKS_KEY_NR_CONSUMERS] = { 0 };
+
+bool handle_pks_key_callback(unsigned long address, bool write, u16 key)
+{
+	if (key >= PKS_KEY_NR_CONSUMERS)
+		return false;
+
+	if (pks_key_callbacks[key])
+		return pks_key_callbacks[key](address, write);
+
+	return false;
+}
+
 /*
  * write_pkrs() optimizes MSR writes by maintaining a per cpu cache which can
  * be checked quickly.

@@ -64,6 +64,8 @@ void pks_mk_readonly(int pkey);
 void pks_mk_readwrite(int pkey);
 void pks_abandon_protections(int pkey);
 
+typedef bool (*pks_key_callback)(unsigned long address, bool write);
+
 #else /* !CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS */
 
 static inline void pkrs_save_irq(struct pt_regs *regs) { }
