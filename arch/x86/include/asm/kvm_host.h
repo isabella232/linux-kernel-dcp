@@ -1379,6 +1379,7 @@ struct kvm_x86_ops {
 	void (*set_gdt)(struct kvm_vcpu *vcpu, struct desc_ptr *dt);
 	void (*sync_dirty_debug_regs)(struct kvm_vcpu *vcpu);
 	void (*set_dr7)(struct kvm_vcpu *vcpu, unsigned long value);
+	void (*load_guest_debug_regs)(struct kvm_vcpu *vcpu);
 	void (*cache_gprs)(struct kvm_vcpu *vcpu);
 	void (*flush_gprs)(struct kvm_vcpu *vcpu);
 	void (*cache_reg)(struct kvm_vcpu *vcpu, enum kvm_reg reg);
@@ -2015,5 +2016,8 @@ int kvm_cpu_dirty_log_size(void);
 extern int kvm_set_guest_paused(struct kvm_vcpu *vcpu);
 
 int alloc_all_memslots_rmaps(struct kvm *kvm);
+
+/* The common function for normal x86 guest */
+void load_guest_debug_regs(struct kvm_vcpu *vcpu);
 
 #endif /* _ASM_X86_KVM_HOST_H */
