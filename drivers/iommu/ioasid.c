@@ -717,6 +717,8 @@ static int ioasid_set_free_locked(struct ioasid_set *set)
 
 	if (atomic_read(&set->nr_ioasids)) {
 		ret = -EBUSY;
+		set->free_pending = true;
+		pr_info("Set marked as free_pending, will be released when the last ioasid reclaimed!\n");
 		goto exit_done;
 	}
 
@@ -856,8 +858,10 @@ static void ioasid_do_free_locked(struct ioasid_data *data)
 	ioasid_cg_uncharge(data->set);
 	xa_erase(&data->set->xa, data->id);
 	/* Destroy the set if empty */
-	if (!atomic_read(&data->set->nr_ioasids))
+	if (data->set->free_pending && !atomic_read(&data->set->nr_ioasids)) {
+		pr_info("%s free set set->id: %u\n", __func__, data->set->id);
 		ioasid_set_free_locked(data->set);
+	}
 }
 
 static void ioasid_free_locked(struct ioasid_set *set, ioasid_t ioasid)
