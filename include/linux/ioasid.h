@@ -41,6 +41,7 @@ struct ioasid_set {
 	int quota;
 	atomic_t nr_ioasids;
 	int id;
+	bool free_pending;
 	struct rcu_head rcu;
 };
 
