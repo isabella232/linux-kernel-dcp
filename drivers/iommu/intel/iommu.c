@@ -4513,7 +4513,8 @@ static void __dmar_remove_one_dev_info(struct device_domain_info *info)
 					PASID_RID2PASID, false);
 
 		iommu_disable_dev_iotlb(info);
-		domain_context_clear(info);
+		if (!dev_is_real_dma_subdevice(info->dev))
+			domain_context_clear(info);
 		intel_pasid_free_table(info->dev);
 	}
 
