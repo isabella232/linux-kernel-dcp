@@ -62,6 +62,7 @@ bool pks_enabled(void);
 void pks_mk_noaccess(int pkey);
 void pks_mk_readonly(int pkey);
 void pks_mk_readwrite(int pkey);
+void pks_abandon_protections(int pkey);
 
 #else /* !CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS */
 
@@ -76,6 +77,7 @@ static inline bool pks_enabled(void)
 static inline void pks_mk_noaccess(int pkey) {}
 static inline void pks_mk_readonly(int pkey) {}
 static inline void pks_mk_readwrite(int pkey) {}
+static inline void pks_abandon_protections(int pkey) {}
 
 #endif /* CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS */
 

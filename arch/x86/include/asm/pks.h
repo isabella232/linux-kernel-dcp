@@ -22,6 +22,7 @@ static inline struct extended_pt_regs *extended_pt_regs(struct pt_regs *regs)
 }
 
 void show_extended_regs_oops(struct pt_regs *regs, unsigned long error_code);
+int handle_abandoned_pks_value(struct pt_regs *regs);
 
 #else /* !CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS */
 
@@ -31,6 +32,10 @@ static inline void pks_init_task(struct task_struct *task) { }
 static inline void write_pkrs(u32 new_pkrs) { }
 static inline void show_extended_regs_oops(struct pt_regs *regs,
 					   unsigned long error_code) { }
+static inline int handle_abandoned_pks_value(struct pt_regs *regs)
+{
+	return 0;
+}
 
 #endif /* CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS */
 

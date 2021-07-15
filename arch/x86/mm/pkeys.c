@@ -222,6 +222,26 @@ static DEFINE_PER_CPU(u32, pkrs_cache);
 u32 __read_mostly pkrs_init_value;
 
 /*
+ * Define a mask of pkeys which are allowed, ie have not been abandoned.
+ * Default is all keys are allowed.
+ */
+#define PKRS_ALLOWED_MASK_DEFAULT 0xffffffff
+u32 __read_mostly pkrs_pkey_allowed_mask;
+
+int handle_abandoned_pks_value(struct pt_regs *regs)
+{
+	struct extended_pt_regs *ept_regs;
+	u32 old;
+
+	ept_regs = extended_pt_regs(regs);
+	old = ept_regs->thread_pkrs;
+	ept_regs->thread_pkrs &= pkrs_pkey_allowed_mask;
+
+	/* If something changed retry the fault */
+	return (ept_regs->thread_pkrs != old);
+}
+
+/*
  * write_pkrs() optimizes MSR writes by maintaining a per cpu cache which can
  * be checked quickly.
  *
@@ -267,6 +287,7 @@ static int __init create_initial_pkrs_value(void)
 	BUILD_BUG_ON(PKS_KEY_NR_CONSUMERS > PKS_NUM_PKEYS);
 
 	pkrs_init_value = 0;
+	pkrs_pkey_allowed_mask = PKRS_ALLOWED_MASK_DEFAULT;
 
 	/* Fill the defaults for the consumers */
 	for (i = 0; i < PKS_NUM_PKEYS; i++)
@@ -297,12 +318,14 @@ void setup_pks(void)
  */
 void pkrs_write_current(void)
 {
+	current->thread.saved_pkrs &= pkrs_pkey_allowed_mask;
 	write_pkrs(current->thread.saved_pkrs);
 }
 
 void pks_init_task(struct task_struct *task)
 {
 	task->thread.saved_pkrs = pkrs_init_value;
+	task->thread.saved_pkrs &= pkrs_pkey_allowed_mask;
 }
 
 bool pks_enabled(void)
@@ -366,5 +389,31 @@ void pks_mk_readwrite(int pkey)
 	pks_update_protection(pkey, 0);
 }
 EXPORT_SYMBOL_GPL(pks_mk_readwrite);
+
+/**
+ * pks_abandon_protections() - Force readwrite (no protections) for the
+ *                             specified pkey
+ * @pkey The pkey to force
+ *
+ * Force the value of the pkey to readwrite (no protections) thus abandoning
+ * protections for this key.  This is a permanent change and has no
+ * coresponding reversal function.
+ *
+ * This also updates the current running thread.
+ */
+void pks_abandon_protections(int pkey)
+{
+	u32 old_mask, new_mask;
+
+	do {
+		old_mask = READ_ONCE(pkrs_pkey_allowed_mask);
+		new_mask = update_pkey_val(old_mask, pkey, 0);
+	} while (unlikely(
+		 cmpxchg(&pkrs_pkey_allowed_mask, old_mask, new_mask) != old_mask));
+
+	/* Update the local thread as well. */
+	pks_update_protection(pkey, 0);
+}
+EXPORT_SYMBOL_GPL(pks_abandon_protections);
 
 #endif /* CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS */

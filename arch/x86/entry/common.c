@@ -37,6 +37,8 @@
 #include <asm/irq_stack.h>
 #include <asm/pks.h>
 
+extern u32 pkrs_pkey_allowed_mask;
+
 #ifdef CONFIG_X86_64
 
 static __always_inline bool do_syscall_x64(struct pt_regs *regs, int nr)
@@ -287,7 +289,7 @@ void pkrs_save_irq(struct pt_regs *regs)
 
 	ept_regs = extended_pt_regs(regs);
 	ept_regs->thread_pkrs = current->thread.saved_pkrs;
-	write_pkrs(pkrs_init_value);
+	write_pkrs(pkrs_init_value & pkrs_pkey_allowed_mask);
 }
 
 void pkrs_restore_irq(struct pt_regs *regs)
@@ -298,8 +300,8 @@ void pkrs_restore_irq(struct pt_regs *regs)
 		return;
 
 	ept_regs = extended_pt_regs(regs);
-	write_pkrs(ept_regs->thread_pkrs);
 	current->thread.saved_pkrs = ept_regs->thread_pkrs;
+	pkrs_write_current();
 }
 
 #endif /* CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS */
