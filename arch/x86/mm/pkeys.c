@@ -9,6 +9,7 @@
 #include <linux/debugfs.h>		/* debugfs_create_u32()		*/
 #include <linux/mm_types.h>             /* mm_struct, vma, etc...       */
 #include <linux/pkeys.h>                /* PKEY_*                       */
+#include <linux/mm.h>                   /* fault callback               */
 #include <uapi/asm-generic/mman-common.h>
 
 #include <asm/cpufeature.h>             /* boot_cpu_has, ...            */
@@ -241,7 +242,12 @@ int handle_abandoned_pks_value(struct pt_regs *regs)
 	return (ept_regs->thread_pkrs != old);
 }
 
-static const pks_key_callback pks_key_callbacks[PKS_KEY_NR_CONSUMERS] = { 0 };
+static const pks_key_callback pks_key_callbacks[PKS_KEY_NR_CONSUMERS] = {
+	[PKS_KEY_DEFAULT]            = NULL,
+#ifdef CONFIG_DEVMAP_ACCESS_PROTECTION
+	[PKS_KEY_PGMAP_PROTECTION]   = pgmap_pks_fault_callback,
+#endif
+};
 
 bool handle_pks_key_callback(unsigned long address, bool write, u16 key)
 {
