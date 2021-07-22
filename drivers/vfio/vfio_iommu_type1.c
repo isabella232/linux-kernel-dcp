@@ -1233,21 +1233,31 @@ static void vfio_update_pgsize_bitmap(struct vfio_iommu *iommu)
 	}
 }
 
+static struct device *vfio_get_iommu_device(struct vfio_iommu_group *group,
+					    struct device *dev);
+
 static int vfio_dev_enable_feature(struct device *dev, void *data)
 {
-	enum iommu_dev_features *feat = data;
+	struct domain_capsule *dc = data;
+	enum iommu_dev_features *feat = dc->data;
+	struct device *iommu_device;
 
-	if (iommu_dev_feature_enabled(dev, *feat))
+	iommu_device = vfio_get_iommu_device(dc->group, dev);
+	if (!iommu_device)
+		return -EINVAL;
+
+	if (iommu_dev_feature_enabled(iommu_device, *feat))
 		return 0;
 
-	return iommu_dev_enable_feature(dev, *feat);
+	return iommu_dev_enable_feature(iommu_device, *feat);
 }
 
 static bool vfio_group_supports_hwdbm(struct vfio_iommu_group *group)
 {
 	enum iommu_dev_features feat = IOMMU_DEV_FEAT_HWDBM;
+	struct domain_capsule dc = { .group = group, .data = &feat, };
 
-	if (iommu_group_for_each_dev(group->iommu_group, &feat,
+	if (iommu_group_for_each_dev(group->iommu_group, &dc,
 				     vfio_dev_enable_feature))
 		return false;
 
