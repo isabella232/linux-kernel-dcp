@@ -206,6 +206,11 @@ static void intel_svm_free_async_fn(struct work_struct *work)
 					svm->pasid, true);
 		intel_svm_drain_prq(sdev->dev, svm->pasid);
 		spin_unlock(&sdev->iommu->lock);
+		/*
+		 * Partial assignment needs to delete fault data
+		 */
+		if (is_aux_domain(sdev->dev, &sdev->domain->domain))
+			iommu_delete_device_fault_data(sdev->dev, svm->pasid);
 		kfree_rcu(sdev, rcu);
 	}
 	/*
@@ -540,6 +545,7 @@ int intel_svm_bind_gpasid(struct iommu_domain *domain,
 	sdev->dev = dev;
 	sdev->sid = PCI_DEVID(info->bus, info->devfn);
 	sdev->iommu = iommu;
+	sdev->domain = dmar_domain;
 
 	/* Only count users if device has aux domains */
 	if (iommu_dev_feature_enabled(dev, IOMMU_DEV_FEAT_AUX))
@@ -740,6 +746,7 @@ static struct iommu_sva *intel_svm_bind_mm(struct intel_iommu *iommu,
 			sdev->qdep = 0;
 	}
 
+	sdev->domain = info->domain;
 	/* Finish the setup now we know we're keeping it */
 	sdev->users = 1;
 	sdev->ops = ops;
