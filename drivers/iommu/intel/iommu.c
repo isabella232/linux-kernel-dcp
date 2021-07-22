@@ -5780,6 +5780,242 @@ static void intel_iommu_iotlb_sync_map(struct iommu_domain *domain,
 	}
 }
 
+static int __setup_slade(struct iommu_domain *domain,
+			 struct device_domain_info *info, bool enable)
+{
+	u32 pasid;
+	int ret = 0;
+
+	pasid = domain_get_pasid(domain, info->dev);
+
+	spin_lock(&info->iommu->lock);
+	ret = intel_pasid_setup_slade(info->dev, to_dmar_domain(domain), pasid, enable);
+	spin_unlock(&info->iommu->lock);
+
+	return ret;
+}
+
+static int
+__domain_clear_dirty_log(struct dmar_domain *domain,
+			 unsigned long iova, size_t size,
+			 unsigned long *bitmap,
+			 unsigned long base_iova,
+			 unsigned long bitmap_pgshift);
+
+static int intel_iommu_set_hwdbm(struct iommu_domain *domain, bool enable,
+				 unsigned long iova, size_t size)
+{
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	struct device_domain_info *info;
+	struct subdev_domain_info *sinfo;
+	unsigned long flags;
+	int ret = 0;
+
+	if (domain_use_first_level(dmar_domain)) {
+		/* FL supports A/D bits by default. */
+		/* TODO: shall we clear FLT existing D bits? */
+		if (enable)
+			__domain_clear_dirty_log(dmar_domain, iova, size, NULL,
+						 iova, VTD_PAGE_SHIFT);
+		return 0;
+	}
+
+	if (!slad_support()) {
+		pr_err("Don't support SLAD\n");
+		return -EINVAL;
+	}
+
+	spin_lock_irqsave(&device_domain_lock, flags);
+	list_for_each_entry(info, &dmar_domain->devices, link) {
+		ret = __setup_slade(domain, info, enable);
+		if (ret)
+			goto out;
+	}
+
+	list_for_each_entry(sinfo, &dmar_domain->subdevices, link_domain) {
+		info = get_domain_info(sinfo->pdev);
+		ret = __setup_slade(domain, info, enable);
+		if (ret)
+			break;
+	}
+
+out:
+	spin_unlock_irqrestore(&device_domain_lock, flags);
+
+	return ret;
+}
+
+static int
+__domain_sync_dirty_log(struct dmar_domain *domain,
+			unsigned long iova, size_t size,
+			unsigned long *bitmap,
+			unsigned long base_iova,
+			unsigned long bitmap_pgshift)
+{
+	struct dma_pte *pte = NULL;
+	unsigned long nr_pages = size >> VTD_PAGE_SHIFT;
+	unsigned long lvl_pages = 0;
+	unsigned long iov_pfn = iova >> VTD_PAGE_SHIFT;
+	unsigned long offset;
+	unsigned int largepage_lvl = 0;
+	unsigned int nbits;
+
+	if (bitmap_pgshift != VTD_PAGE_SHIFT)
+		return -EINVAL;
+
+	while (nr_pages > 0) {
+		largepage_lvl = hardware_largepage_caps(domain, iov_pfn,
+							0, nr_pages);
+
+		pte = pfn_to_dma_pte(domain, iov_pfn, &largepage_lvl);
+		if (!pte || !dma_pte_present(pte))
+			return -EINVAL;
+
+		lvl_pages = lvl_to_nr_pages(largepage_lvl);
+		BUG_ON(nr_pages < lvl_pages);
+
+		if (!(pte->val & DMA_PTE_WRITE)) {
+			pr_warn("The 0x%lx pte is READ ONLY.\n", iova);
+			goto skip;
+		}
+
+		if (!domain_use_first_level(domain)) {
+			if (!(pte->val & BIT(9))) {
+				pr_debug("SL: The 0x%lx pte is not dirty.\n", iova);
+				goto skip;
+			}
+		} else {
+			if (!(pte->val & BIT(6))) {
+				pr_debug("FL: The 0x%lx pte is not dirty.\n", iova);
+				goto skip;
+			}
+		}
+
+		if (bitmap) {
+			nbits = lvl_pages;
+			offset = (iova - base_iova) >> bitmap_pgshift;
+			bitmap_set(bitmap, offset, nbits);
+		}
+
+skip:
+		nr_pages -= lvl_pages;
+		iov_pfn += lvl_pages;
+		iova += lvl_pages * VTD_PAGE_SHIFT;
+	}
+
+	return 0;
+}
+
+/*
+ * Make sure the quering iova has been mapped and is being used. Otherwise,
+ * there may be fatal error if another thread free the visiting pages.
+ */
+static int intel_iommu_sync_dirty_log(struct iommu_domain *domain,
+				      unsigned long iova, size_t size,
+				      unsigned long *bitmap,
+				      unsigned long base_iova,
+				      unsigned long bitmap_pgshift)
+{
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+
+	if (!domain_use_first_level(dmar_domain) && !slad_support()) {
+		pr_err("Don't support SLAD\n");
+		return -EINVAL;
+	}
+
+	__domain_sync_dirty_log(dmar_domain, iova, size, bitmap,
+				base_iova, bitmap_pgshift);
+
+	return 0;
+}
+
+static int
+__domain_clear_dirty_log(struct dmar_domain *domain,
+			 unsigned long iova, size_t size,
+			 unsigned long *bitmap,
+			 unsigned long base_iova,
+			 unsigned long bitmap_pgshift)
+{
+	struct dma_pte *pte = NULL;
+	unsigned long nr_pages = size >> VTD_PAGE_SHIFT;
+	unsigned long lvl_pages = 0;
+	unsigned long iov_pfn = iova >> VTD_PAGE_SHIFT;
+	unsigned long offset;
+	unsigned int largepage_lvl = 0;
+	unsigned int nbits;
+	int iommu_id, i;
+
+	if (bitmap_pgshift != VTD_PAGE_SHIFT)
+		return -EINVAL;
+
+	while (nr_pages > 0) {
+		largepage_lvl = hardware_largepage_caps(domain, iov_pfn,
+							0, nr_pages);
+
+		pte = pfn_to_dma_pte(domain, iov_pfn, &largepage_lvl);
+		if (!pte || !dma_pte_present(pte))
+			return -EINVAL;
+
+		lvl_pages = lvl_to_nr_pages(largepage_lvl);
+		BUG_ON(nr_pages < lvl_pages);
+
+		if (!(pte->val & DMA_PTE_WRITE)) {
+			pr_warn("The 0x%lx pte is READ ONLY.\n", iova);
+			goto skip;
+		}
+
+		/* Ensure all corresponding bits are set */
+		if (bitmap) {
+			nbits = lvl_pages;
+			offset = (iova - base_iova) >> bitmap_pgshift;
+			for (i = offset; i < offset + nbits; i++) {
+				if (!test_bit(i, bitmap))
+					goto skip;
+			}
+		}
+
+		if (!domain_use_first_level(domain))
+			test_and_clear_bit(9, (unsigned long *)&pte->val);
+		else
+			test_and_clear_bit(6, (unsigned long *)&pte->val);
+
+		for_each_domain_iommu(iommu_id, domain)
+			iommu_flush_iotlb_psi(g_iommus[iommu_id], domain,
+					iov_pfn, lvl_pages, 1, 0);
+
+skip:
+		nr_pages -= lvl_pages;
+		iov_pfn += lvl_pages;
+		iova += lvl_pages * VTD_PAGE_SHIFT;
+	}
+
+	return 0;
+}
+
+/*
+ * Make sure the clearing iova has been mapped and is being used. Otherwise,
+ * there may be fatal error if another thread free the visiting pages.
+ */
+static int intel_iommu_clear_dirty_log(struct iommu_domain *domain,
+				       unsigned long iova, size_t size,
+				       unsigned long *bitmap,
+				       unsigned long base_iova,
+				       unsigned long bitmap_pgshift)
+{
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	int ret = 0;
+
+	if (!domain_use_first_level(dmar_domain) && !slad_support()) {
+		pr_err("Don't support SLAD\n");
+		return -EINVAL;
+	}
+
+	ret = __domain_clear_dirty_log(dmar_domain, iova, size, bitmap,
+					base_iova, bitmap_pgshift);
+
+	return ret;
+}
+
 const struct iommu_ops intel_iommu_ops = {
 	.capable		= intel_iommu_capable,
 	.domain_alloc		= intel_iommu_domain_alloc,

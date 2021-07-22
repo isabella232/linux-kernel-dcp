@@ -947,3 +947,40 @@ int intel_pasid_setup_nested(struct intel_iommu *iommu, struct device *dev,
 
 	return ret;
 }
+
+/**
+ * intel_pasid_setup_slade() - Set up Second Level Access/Dirty bit Enable
+ * field in PASID entry for scalable mode pasid table.
+ *
+ * @dev:     Device to be set up for translation
+ * @domain:  Domain info for setting up slad enabling
+ * @pasid:   PASID to be programmed in the device PASID table
+ * @value:   Value set to the entry
+ */
+int intel_pasid_setup_slade(struct device *dev, struct dmar_domain *domain,
+			    u32 pasid, bool value)
+{
+	struct device_domain_info *info = get_domain_info(dev);
+	struct intel_iommu *iommu;
+	struct pasid_entry *pte;
+	u16 did;
+
+	if (!info || !info->iommu)
+		return -ENODEV;
+
+	iommu = info->iommu;
+	did = domain->iommu_did[iommu->seq_id];
+
+	pte = intel_pasid_get_entry(dev, pasid);
+	if (WARN_ON(!pte))
+		return -ENODEV;
+
+	if (!pasid_pte_is_present(pte))
+		return -EINVAL;
+
+	pasid_set_slade(pte, value);
+
+	flush_iotlb_all(iommu, dev, did, pasid, DMA_TLB_DSI_FLUSH);
+
+	return 0;
+}

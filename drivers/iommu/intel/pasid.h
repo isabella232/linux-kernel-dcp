@@ -131,4 +131,6 @@ void intel_pasid_tear_down_entry(struct intel_iommu *iommu,
 				 bool fault_ignore);
 int vcmd_alloc_pasid(struct intel_iommu *iommu, u32 *pasid);
 void vcmd_free_pasid(struct intel_iommu *iommu, u32 pasid);
+int intel_pasid_setup_slade(struct device *dev, struct dmar_domain *domain,
+			    u32 pasid, bool value);
 #endif /* __INTEL_PASID_H */
