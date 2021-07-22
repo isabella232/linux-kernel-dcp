@@ -5864,8 +5864,7 @@ __domain_sync_dirty_log(struct dmar_domain *domain,
 		return -EINVAL;
 
 	while (nr_pages > 0) {
-		largepage_lvl = hardware_largepage_caps(domain, iov_pfn,
-							0, nr_pages);
+		largepage_lvl = 0;
 
 		pte = pfn_to_dma_pte(domain, iov_pfn, &largepage_lvl);
 		if (!pte || !dma_pte_present(pte))
@@ -5875,7 +5874,7 @@ __domain_sync_dirty_log(struct dmar_domain *domain,
 		BUG_ON(nr_pages < lvl_pages);
 
 		if (!(pte->val & DMA_PTE_WRITE)) {
-			pr_warn("The 0x%lx pte is READ ONLY.\n", iova);
+			pr_debug("The 0x%lx pte is READ ONLY.\n", iova);
 			goto skip;
 		}
 
@@ -5900,7 +5899,7 @@ __domain_sync_dirty_log(struct dmar_domain *domain,
 skip:
 		nr_pages -= lvl_pages;
 		iov_pfn += lvl_pages;
-		iova += lvl_pages * VTD_PAGE_SHIFT;
+		iova += lvl_pages * VTD_PAGE_SIZE;
 	}
 
 	return 0;
