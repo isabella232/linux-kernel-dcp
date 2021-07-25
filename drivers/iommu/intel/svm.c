@@ -718,7 +718,7 @@ intel_svm_bind_mm(struct device *dev, unsigned int flags,
 			pasid_max = intel_pasid_max_id;
 
 		/* Do not use PASID 0, reserved for RID to PASID */
-		svm->pasid = ioasid_alloc(host_pasid_set, PASID_MIN,
+		svm->pasid = ioasid_alloc(host_pasid_set, IOASID_ALLOC_BASE,
 					  pasid_max - 1, svm);
 		if (svm->pasid == INVALID_IOASID) {
 			kfree(svm);
