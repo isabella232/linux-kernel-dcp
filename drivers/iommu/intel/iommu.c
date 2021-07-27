@@ -5943,6 +5943,8 @@ __domain_clear_dirty_log(struct dmar_domain *domain,
 	unsigned int largepage_lvl = 0;
 	unsigned int nbits;
 	int iommu_id, i;
+	unsigned long start_pfn = iov_pfn;
+	bool cleared = false;
 
 	if (bitmap_pgshift != VTD_PAGE_SHIFT)
 		return -EINVAL;
@@ -5978,15 +5980,17 @@ __domain_clear_dirty_log(struct dmar_domain *domain,
 		else
 			test_and_clear_bit(6, (unsigned long *)&pte->val);
 
-		for_each_domain_iommu(iommu_id, domain)
-			iommu_flush_iotlb_psi(g_iommus[iommu_id], domain,
-					iov_pfn, lvl_pages, 1, 0);
-
+		cleared = true;
 skip:
 		nr_pages -= lvl_pages;
 		iov_pfn += lvl_pages;
-		iova += lvl_pages * VTD_PAGE_SHIFT;
+		iova += lvl_pages * VTD_PAGE_SIZE;
 	}
+
+	if (cleared)
+		for_each_domain_iommu(iommu_id, domain)
+			iommu_flush_iotlb_psi(g_iommus[iommu_id], domain,
+				start_pfn, size >> VTD_PAGE_SHIFT, 1, 0);
 
 	return 0;
 }
