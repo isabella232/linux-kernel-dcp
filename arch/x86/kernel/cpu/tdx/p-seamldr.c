@@ -33,11 +33,36 @@ static int __init seamldr_param(char *str)
 }
 early_param("np_seamldr", seamldr_param);
 
+#define INVALID_VMCS	0xffffffffffffffffULL
+
+static u64 pseamldr_seamcall(u64 op, u64 rcx, u64 rdx, u64 r8, u64 r9,
+			     struct tdx_ex_ret *ex)
+{
+	u64 vmcs_pa, err;
+	int ret;
+	unsigned long flags;
+
+	local_irq_save(flags);
+	ret = raw_vmcs_store(&vmcs_pa);
+	if (ret) {
+		local_irq_restore(flags);
+		return (u64)-EIO;
+	}
+
+	err = seamcall(op, rcx, rdx, r8, r9, ex);
+	if (vmcs_pa != INVALID_VMCS)
+		raw_vmcs_load(__va(vmcs_pa));
+	local_irq_restore(flags);
+
+	return err;
+}
+
 int seamldr_info(phys_addr_t seamldr_info)
 {
 	u64 ret;
 
-	ret = seamcall(SEAMCALL_SEAMLDR_INFO, seamldr_info, 0, 0, 0, NULL);
+	ret = pseamldr_seamcall(SEAMCALL_SEAMLDR_INFO, seamldr_info, 0,
+				0, 0, NULL);
 	if (ret) {
 		pr_err("SEAMCALL[SEAMLDR_INFO] failed %s (0x%llx)\n",
 		       p_seamldr_error_name(ret), ret);
@@ -50,7 +75,8 @@ int seamldr_install(phys_addr_t seamldr_params)
 {
 	u64 ret;
 
-	ret = seamcall(SEAMCALL_SEAMLDR_INSTALL, seamldr_params, 0, 0, 0, NULL);
+	ret = pseamldr_seamcall(SEAMCALL_SEAMLDR_INSTALL,
+				seamldr_params, 0, 0, 0, NULL);
 	if (ret) {
 		pr_err_ratelimited(
 			"SEAMCALL[SEAMLDR_INSTALL] failed %s (0x%llx)\n",
