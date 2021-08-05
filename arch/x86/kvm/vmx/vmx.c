@@ -4523,6 +4523,8 @@ static void vmx_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
 	if (!init_event) {
 		if (static_cpu_has(X86_FEATURE_ARCH_LBR))
 			vmcs_write64(GUEST_IA32_LBR_CTL, 0);
+	} else {
+		flip_arch_lbr_ctl(vcpu, false);
 	}
 }
 
@@ -7879,6 +7881,7 @@ static int vmx_enter_smm(struct kvm_vcpu *vcpu, char *smstate)
 	vmx->nested.smm.vmxon = vmx->nested.vmxon;
 	vmx->nested.vmxon = false;
 	vmx_clear_hlt(vcpu);
+	flip_arch_lbr_ctl(vcpu, false);
 	return 0;
 }
 
@@ -7899,6 +7902,7 @@ static int vmx_leave_smm(struct kvm_vcpu *vcpu, const char *smstate)
 
 		vmx->nested.smm.guest_mode = false;
 	}
+	flip_arch_lbr_ctl(vcpu, true);
 	return 0;
 }
 
