@@ -452,7 +452,8 @@ static inline void vmx_register_cache_reset(struct kvm_vcpu *vcpu)
 				  | (1 << VCPU_EXREG_CR3)
 				  | (1 << VCPU_EXREG_CR4)
 				  | (1 << VCPU_EXREG_EXIT_INFO_1)
-				  | (1 << VCPU_EXREG_EXIT_INFO_2));
+				  | (1 << VCPU_EXREG_EXIT_INFO_2)
+				  | (1 << VCPU_EXREG_PKRS));
 	vcpu->arch.regs_dirty = 0;
 }
 

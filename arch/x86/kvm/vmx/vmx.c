@@ -2289,6 +2289,10 @@ static void vmx_cache_reg(struct kvm_vcpu *vcpu, enum kvm_reg reg)
 		vcpu->arch.cr4 &= ~guest_owned_bits;
 		vcpu->arch.cr4 |= vmcs_readl(GUEST_CR4) & guest_owned_bits;
 		break;
+	case VCPU_EXREG_PKRS:
+		if (kvm_cpu_cap_has(X86_FEATURE_PKS))
+			vcpu->arch.pkrs = vmcs_read64(GUEST_IA32_PKRS);
+		break;
 	default:
 		KVM_BUG_ON(1, vcpu->kvm);
 		break;
