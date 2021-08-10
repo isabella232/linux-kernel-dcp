@@ -26,6 +26,11 @@
 /* Pages, which are being tracked by the page reclaimer. */
 #define SGX_EPC_PAGE_RECLAIMER_TRACKED	BIT(0)
 
+/* VA page */
+#define SGX_EPC_PAGE_VA			BIT(2)
+/* Pages allocated for KVM guest */
+#define SGX_EPC_PAGE_GUEST		BIT(3)
+
 struct sgx_epc_page {
 	unsigned int section;
 	unsigned int flags;
