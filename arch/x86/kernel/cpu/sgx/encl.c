@@ -132,6 +132,7 @@ static struct sgx_encl_page *sgx_encl_load_page(struct sgx_encl *encl,
 		epc_page = sgx_encl_eldu(&encl->secs, NULL);
 		if (IS_ERR(epc_page))
 			return ERR_CAST(epc_page);
+		epc_page->flags |= SGX_EPC_PAGE_SECS;
 	}
 
 	epc_page = sgx_encl_eldu(entry, encl->secs.epc_page);
@@ -708,6 +709,8 @@ struct sgx_epc_page *sgx_alloc_va_page(struct sgx_va_page *va_page)
 		epc_page = ERR_PTR(-EFAULT);
 		goto out;
 	}
+
+	epc_page->flags |= SGX_EPC_PAGE_VA;
 
 out:
 	srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);

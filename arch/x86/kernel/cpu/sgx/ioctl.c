@@ -117,6 +117,7 @@ static int sgx_encl_create(struct sgx_encl *encl, struct sgx_secs *secs)
 	if (secs->attributes & SGX_ATTR_DEBUG)
 		set_bit(SGX_ENCL_DEBUG, &encl->flags);
 
+	encl->secs.epc_page->flags |= SGX_EPC_PAGE_SECS;
 	encl->secs.encl = encl;
 	encl->base = secs->base;
 	encl->size = secs->size;

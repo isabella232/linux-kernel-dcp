@@ -635,7 +635,9 @@ void sgx_free_epc_page(struct sgx_epc_page *page)
 
 	spin_lock(&node->lock);
 
+	page->flags = 0;
 	page->owner = NULL;
+
 	list_add_tail(&page->list, &node->free_page_list);
 	sgx_nr_free_pages++;
 
