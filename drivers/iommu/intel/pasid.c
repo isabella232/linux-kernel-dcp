@@ -528,7 +528,9 @@ void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
 				 u32 pasid, bool fault_ignore)
 {
 	struct pasid_entry *pte;
-	u16 did, pgtt;
+	u16 did;
+	u64 pe_val;
+	u16 pgtt_type;
 
 	pte = intel_pasid_get_entry(dev, pasid);
 	if (WARN_ON(!pte))
@@ -538,21 +540,20 @@ void intel_pasid_tear_down_entry(struct intel_iommu *iommu, struct device *dev,
 		return;
 
 	did = pasid_get_domain_id(pte);
-	intel_pasid_clear_entry(iommu, dev, pasid, fault_ignore);
+
+	pe_val = READ_ONCE(pte->val[0]);
+	pgtt_type = (pe_val >> 6) & 0x7;
+
+	intel_pasid_clear_entry(iommu, dev, pasid, fault_ignore, keep_pte);
 
 	if (!ecap_coherent(iommu->ecap))
 		clflush_cache_range(pte, sizeof(*pte));
 
-	pasid_cache_invalidation_with_pasid(iommu, did, pasid);
-
-	if (pgtt == PASID_ENTRY_PGTT_PT || pgtt == PASID_ENTRY_PGTT_FL_ONLY)
-		qi_flush_piotlb(iommu, did, pasid, 0, -1, 0);
+	if (pgtt_type == PASID_ENTRY_PGTT_FL_ONLY ||
+			pgtt_type == PASID_ENTRY_PGTT_PT)
+		flush_iotlb_all(iommu, dev, did, pasid, 0);
 	else
-		iommu->flush.flush_iotlb(iommu, did, 0, 0, DMA_TLB_DSI_FLUSH);
-
-	/* Device IOTLB doesn't need to be flushed in caching mode. */
-	if (!cap_caching_mode(iommu->cap))
-		devtlb_invalidation_with_pasid(iommu, dev, pasid);
+		flush_iotlb_all(iommu, dev, did, pasid, DMA_TLB_DSI_FLUSH);
 }
 
 /*
