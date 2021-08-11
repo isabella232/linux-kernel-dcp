@@ -650,6 +650,7 @@ Description:	SPURR ticks for cpuX when it was idle.
 		This sysfs interface exposes the number of SPURR ticks
 		for cpuX when it was idle.
 
+<<<<<<< HEAD
 What: 		/sys/devices/system/cpu/cpuX/mte_tcf_preferred
 Date:		July 2021
 Contact:	Linux ARM Kernel Mailing list <linux-arm-kernel@lists.infradead.org>
@@ -666,3 +667,17 @@ Description:	Preferred MTE tag checking mode
 		================  ==============================================
 
 		See also: Documentation/arm64/memory-tagging-extension.rst
+
+What: 		/sys/devices/system/cpu/microcode/svnupdate
+Date:		Aug 2021
+Contact:	linux-sgx@vger.kernel.org
+Description:	Applying SGX Runtime Microcode Updates to Enclaves
+
+		Whenever a microcode update affects SGX, ENCLS[EUPDATESVN]
+		should be taken to update the attestation metric (called
+		CPUSVN) and generate new cryptographic assets without a
+		reboot. EUPDATESVN success requires that all SGX memory to
+		be marked as "unused" and its contents destroyed.
+
+		This sysfs interface is only exposed to userspace on host,
+		to trigger enclave destruction and the EUPDATESVN operation.
