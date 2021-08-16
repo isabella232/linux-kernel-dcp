@@ -1395,6 +1395,57 @@ int migrate_pages(struct list_head *from, new_page_t get_new_page,
 		thp_retry = 0;
 
 		list_for_each_entry_safe(page, page2, from, lru) {
+			cond_resched();
+
+			if (!PageHuge(page))
+				continue;
+
+			rc = unmap_and_move_huge_page(get_new_page,
+					put_new_page, private, page,
+					pass > 2, mode, reason,
+					&ret_pages);
+			/*
+			 * The rules are:
+			 *	Success: hugetlb page will be put back
+			 *	-EAGAIN: stay on the from list
+			 *	-ENOMEM: stay on the from list
+			 *	Other errno: put on ret_pages list then splice to
+			 *		     from list
+			 */
+			switch(rc) {
+			case -ENOSYS:
+				/* Hugetlb migration is unsupported */
+				nr_failed++;
+				break;
+			case -ENOMEM:
+				nr_failed++;
+				goto out;
+			case -EAGAIN:
+				retry++;
+				break;
+			case MIGRATEPAGE_SUCCESS:
+				nr_succeeded++;
+				break;
+			default:
+				/*
+				 * Permanent failure (-EBUSY, etc.):
+				 * unlike -EAGAIN case, the failed page is
+				 * removed from migration page list and not
+				 * retried in the next outer loop.
+				 */
+				nr_failed++;
+				break;
+			}
+		}
+	}
+	nr_failed += retry;
+	retry = 1;
+	thp_retry = 1;
+	for (pass = 0; pass < 10 && (retry || thp_retry); pass++) {
+		retry = 0;
+		thp_retry = 0;
+
+		list_for_each_entry_safe(page, page2, from, lru) {
 retry:
 			/*
 			 * THP statistics is based on the source huge page.
@@ -1406,18 +1457,14 @@ retry:
 			cond_resched();
 
 			if (PageHuge(page))
-				rc = unmap_and_move_huge_page(get_new_page,
-						put_new_page, private, page,
-						pass > 2, mode, reason,
-						&ret_pages);
-			else
-				rc = unmap_and_move(get_new_page, put_new_page,
-						private, page, pass > 2, mode,
-						reason, &ret_pages);
+				continue;
+
+			rc = unmap_and_move(get_new_page, put_new_page,
+					    private, page, pass > 2, mode,
+					    reason, &ret_pages);
 			/*
 			 * The rules are:
-			 *	Success: non hugetlb page will be freed, hugetlb
-			 *		 page will be put back
+			 *	Success: page will be freed
 			 *	-EAGAIN: stay on the from list
 			 *	-ENOMEM: stay on the from list
 			 *	Other errno: put on ret_pages list then splice to
@@ -1447,8 +1494,6 @@ retry:
 					nr_failed += nr_subpages;
 					break;
 				}
-
-				/* Hugetlb migration is unsupported */
 				nr_failed++;
 				break;
 			case -ENOMEM:
