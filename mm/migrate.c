@@ -1407,6 +1407,21 @@ static inline int try_split_thp(struct page *page, struct page **page2,
 	return rc;
 }
 
+static void migrate_pages_copy(struct list_head *pages,
+			      struct list_head *new_pages)
+{
+	struct page *page, *newpage;
+
+	newpage = list_first_entry(new_pages, struct page, lru);
+	list_for_each_entry(page, pages, lru) {
+		if (PageHuge(page) || PageTransHuge(page))
+			copy_huge_page(newpage, page);
+		else
+			copy_highpage(newpage, page);
+		newpage = list_next_entry(newpage, lru);
+	}
+}
+
 /*
  * migrate_pages - migrate the pages specified in a list, to the free pages
  *		   supplied as the target for the page migration
@@ -1627,6 +1642,11 @@ retry:
 	nr_thp_failed += thp_retry;
 move:
 	try_to_unmap_flush();
+
+	if (mode == MIGRATE_SYNC) {
+		migrate_pages_copy(&unmap_pages, &new_pages);
+		mode = MIGRATE_SYNC_NO_COPY;
+	}
 
 	retry = 1;
 	thp_retry = 1;
