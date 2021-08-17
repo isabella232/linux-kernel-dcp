@@ -979,201 +979,30 @@ static void __migrate_page_extract(struct page *newpage,
 static void migrate_page_undo_page(struct page *page,
 				   int page_was_mapped,
 				   struct anon_vma *anon_vma,
+				   bool locked,
 				   struct list_head *ret)
 {
 	if (page_was_mapped)
 		remove_migration_ptes(page, page, false);
 	if (anon_vma)
 		put_anon_vma(anon_vma);
-	unlock_page(page);
-	list_move_tail(&page->lru, ret);
+	if (locked)
+		unlock_page(page);
+	if (ret)
+		list_move_tail(&page->lru, ret);
 }
 
 static void migrate_page_undo_newpage(struct page *newpage,
+				      bool locked,
 				      free_page_t put_new_page,
 				      unsigned long private)
 {
-	unlock_page(newpage);
+	if (locked)
+		unlock_page(newpage);
 	if (put_new_page)
 		put_new_page(newpage, private);
 	else
 		put_page(newpage);
-}
-
-static int __migrate_page_unmap(struct page *page, struct page *newpage,
-				int force, enum migrate_mode mode)
-{
-	int rc = -EAGAIN;
-	int page_was_mapped = 0;
-	struct anon_vma *anon_vma = NULL;
-	bool is_lru = !__PageMovable(page);
-
-	if (!trylock_page(page)) {
-		if (!force || mode == MIGRATE_ASYNC)
-			goto out;
-
-		/*
-		 * It's not safe for direct compaction to call lock_page.
-		 * For example, during page readahead pages are added locked
-		 * to the LRU. Later, when the IO completes the pages are
-		 * marked uptodate and unlocked. However, the queueing
-		 * could be merging multiple pages for one bio (e.g.
-		 * mpage_readahead). If an allocation happens for the
-		 * second or third page, the process can end up locking
-		 * the same page twice and deadlocking. Rather than
-		 * trying to be clever about what pages can be locked,
-		 * avoid the use of lock_page for direct compaction
-		 * altogether.
-		 */
-		if (current->flags & PF_MEMALLOC)
-			goto out;
-
-		lock_page(page);
-	}
-
-	if (PageWriteback(page)) {
-		/*
-		 * Only in the case of a full synchronous migration is it
-		 * necessary to wait for PageWriteback. In the async case,
-		 * the retry loop is too short and in the sync-light case,
-		 * the overhead of stalling is too much
-		 */
-		switch (mode) {
-		case MIGRATE_SYNC:
-		case MIGRATE_SYNC_NO_COPY:
-			break;
-		default:
-			rc = -EBUSY;
-			goto out_unlock;
-		}
-		if (!force)
-			goto out_unlock;
-		wait_on_page_writeback(page);
-	}
-
-	/*
-	 * By try_to_migrate(), page->mapcount goes down to 0 here. In this case,
-	 * we cannot notice that anon_vma is freed while we migrates a page.
-	 * This get_anon_vma() delays freeing anon_vma pointer until the end
-	 * of migration. File cache pages are no problem because of page_lock()
-	 * File Caches may use write_page() or lock_page() in migration, then,
-	 * just care Anon page here.
-	 *
-	 * Only page_get_anon_vma() understands the subtleties of
-	 * getting a hold on an anon_vma from outside one of its mms.
-	 * But if we cannot get anon_vma, then we won't need it anyway,
-	 * because that implies that the anon page is no longer mapped
-	 * (and cannot be remapped so long as we hold the page lock).
-	 */
-	if (PageAnon(page) && !PageKsm(page))
-		anon_vma = page_get_anon_vma(page);
-
-	/*
-	 * Block others from accessing the new page when we get around to
-	 * establishing additional references. We are usually the only one
-	 * holding a reference to newpage at this point. We used to have a BUG
-	 * here if trylock_page(newpage) fails, but would like to allow for
-	 * cases where there might be a race with the previous use of newpage.
-	 * This is much like races on refcount of oldpage: just don't BUG().
-	 */
-	if (unlikely(!trylock_page(newpage)))
-		goto out_unlock;
-
-	if (unlikely(!is_lru)) {
-		__migrate_page_record(newpage, page_was_mapped, anon_vma);
-		return MIGRATEPAGE_UNMAP;
-	}
-
-	/*
-	 * Corner case handling:
-	 * 1. When a new swap-cache page is read into, it is added to the LRU
-	 * and treated as swapcache but it has no rmap yet.
-	 * Calling try_to_unmap() against a page->mapping==NULL page will
-	 * trigger a BUG.  So handle it here.
-	 * 2. An orphaned page (see truncate_cleanup_page) might have
-	 * fs-private metadata. The page can be picked up due to memory
-	 * offlining.  Everywhere else except page reclaim, the page is
-	 * invisible to the vm, so the page can not be migrated.  So try to
-	 * free the metadata, so the page can be freed.
-	 */
-	if (!page->mapping) {
-		VM_BUG_ON_PAGE(PageAnon(page), page);
-		if (page_has_private(page)) {
-			try_to_free_buffers(page);
-			goto out_unlock_both;
-		}
-	} else if (page_mapped(page)) {
-		/* Establish migration ptes */
-		VM_BUG_ON_PAGE(PageAnon(page) && !PageKsm(page) && !anon_vma,
-				page);
-		try_to_migrate(page, 0);
-		page_was_mapped = 1;
-	}
-
-	if (!page_mapped(page)) {
-		__migrate_page_record(newpage, page_was_mapped, anon_vma);
-		return MIGRATEPAGE_UNMAP;
-	}
-
-	if (page_was_mapped)
-		remove_migration_ptes(page, page, false);
-
-out_unlock_both:
-	unlock_page(newpage);
-out_unlock:
-	/* Drop an anon_vma reference if we took one */
-	if (anon_vma)
-		put_anon_vma(anon_vma);
-	unlock_page(page);
-out:
-
-	return rc;
-}
-
-static int __migrate_page_move(struct page *page, struct page *newpage,
-			       enum migrate_mode mode)
-{
-	int rc;
-	int page_was_mapped = 0;
-	struct anon_vma *anon_vma = NULL;
-	bool is_lru = !__PageMovable(page);
-
-	__migrate_page_extract(newpage, &page_was_mapped, &anon_vma);
-
-	rc = move_to_new_page(newpage, page, mode);
-
-	if (page_was_mapped)
-		remove_migration_ptes(page,
-			rc == MIGRATEPAGE_SUCCESS ? newpage : page, false);
-
-	if (rc == -EAGAIN) {
-		__migrate_page_record(newpage, page_was_mapped, anon_vma);
-		return rc;
-	}
-
-	list_del(&newpage->lru);
-	unlock_page(newpage);
-	/* Drop an anon_vma reference if we took one */
-	if (anon_vma)
-		put_anon_vma(anon_vma);
-	unlock_page(page);
-	/*
-	 * If migration is successful, decrease refcount of the newpage
-	 * which will not free the page because new page owner increased
-	 * refcounter. As well, if it is LRU page, add the page to LRU
-	 * list in here. Use the old state of the isolated source page to
-	 * determine if we migrated a LRU page. newpage was already unlocked
-	 * and possibly modified by its owner - don't rely on the page
-	 * state.
-	 */
-	if (rc == MIGRATEPAGE_SUCCESS) {
-		if (unlikely(!is_lru))
-			put_page(newpage);
-		else
-			putback_lru_page(newpage);
-	}
-
-	return rc;
 }
 
 static void migrate_page_done(struct page *page,
@@ -1204,6 +1033,11 @@ static int migrate_page_unmap(new_page_t get_new_page, free_page_t put_new_page,
 {
 	int rc = MIGRATEPAGE_UNMAP;
 	struct page *newpage = NULL;
+	int page_was_mapped = 0;
+	struct anon_vma *anon_vma = NULL;
+	bool is_lru = !__PageMovable(page);
+	bool locked = false;
+	bool newpage_locked = false;
 
 	if (!thp_migration_supported() && PageTransHuge(page))
 		return -ENOSYS;
@@ -1228,22 +1062,127 @@ static int migrate_page_unmap(new_page_t get_new_page, free_page_t put_new_page,
 		return -ENOMEM;
 	*newpagep = newpage;
 
-	rc = __migrate_page_unmap(page, newpage, force, mode);
-	if (rc == MIGRATEPAGE_UNMAP)
-		return rc;
+	rc = -EAGAIN;
+	if (!trylock_page(page)) {
+		if (!force || mode == MIGRATE_ASYNC)
+			goto out;
 
+		/*
+		 * It's not safe for direct compaction to call lock_page.
+		 * For example, during page readahead pages are added locked
+		 * to the LRU. Later, when the IO completes the pages are
+		 * marked uptodate and unlocked. However, the queueing
+		 * could be merging multiple pages for one bio (e.g.
+		 * mpage_readahead). If an allocation happens for the
+		 * second or third page, the process can end up locking
+		 * the same page twice and deadlocking. Rather than
+		 * trying to be clever about what pages can be locked,
+		 * avoid the use of lock_page for direct compaction
+		 * altogether.
+		 */
+		if (current->flags & PF_MEMALLOC)
+			goto out;
+
+		lock_page(page);
+	}
+	locked = true;
+
+	if (PageWriteback(page)) {
+		/*
+		 * Only in the case of a full synchronous migration is it
+		 * necessary to wait for PageWriteback. In the async case,
+		 * the retry loop is too short and in the sync-light case,
+		 * the overhead of stalling is too much
+		 */
+		switch (mode) {
+		case MIGRATE_SYNC:
+		case MIGRATE_SYNC_NO_COPY:
+			break;
+		default:
+			rc = -EBUSY;
+			goto out;
+		}
+		if (!force)
+			goto out;
+		wait_on_page_writeback(page);
+	}
+
+	/*
+	 * By try_to_migrate(), page->mapcount goes down to 0 here. In this case,
+	 * we cannot notice that anon_vma is freed while we migrates a page.
+	 * This get_anon_vma() delays freeing anon_vma pointer until the end
+	 * of migration. File cache pages are no problem because of page_lock()
+	 * File Caches may use write_page() or lock_page() in migration, then,
+	 * just care Anon page here.
+	 *
+	 * Only page_get_anon_vma() understands the subtleties of
+	 * getting a hold on an anon_vma from outside one of its mms.
+	 * But if we cannot get anon_vma, then we won't need it anyway,
+	 * because that implies that the anon page is no longer mapped
+	 * (and cannot be remapped so long as we hold the page lock).
+	 */
+	if (PageAnon(page) && !PageKsm(page))
+		anon_vma = page_get_anon_vma(page);
+
+	/*
+	 * Block others from accessing the new page when we get around to
+	 * establishing additional references. We are usually the only one
+	 * holding a reference to newpage at this point. We used to have a BUG
+	 * here if trylock_page(newpage) fails, but would like to allow for
+	 * cases where there might be a race with the previous use of newpage.
+	 * This is much like races on refcount of oldpage: just don't BUG().
+	 */
+	if (unlikely(!trylock_page(newpage)))
+		goto out;
+	newpage_locked = true;
+
+	if (unlikely(!is_lru)) {
+		__migrate_page_record(newpage, page_was_mapped, anon_vma);
+		return MIGRATEPAGE_UNMAP;
+	}
+
+	/*
+	 * Corner case handling:
+	 * 1. When a new swap-cache page is read into, it is added to the LRU
+	 * and treated as swapcache but it has no rmap yet.
+	 * Calling try_to_unmap() against a page->mapping==NULL page will
+	 * trigger a BUG.  So handle it here.
+	 * 2. An orphaned page (see truncate_cleanup_page) might have
+	 * fs-private metadata. The page can be picked up due to memory
+	 * offlining.  Everywhere else except page reclaim, the page is
+	 * invisible to the vm, so the page can not be migrated.  So try to
+	 * free the metadata, so the page can be freed.
+	 */
+	if (!page->mapping) {
+		VM_BUG_ON_PAGE(PageAnon(page), page);
+		if (page_has_private(page)) {
+			try_to_free_buffers(page);
+			goto out;
+		}
+	} else if (page_mapped(page)) {
+		/* Establish migration ptes */
+		VM_BUG_ON_PAGE(PageAnon(page) && !PageKsm(page) && !anon_vma,
+				page);
+		try_to_migrate(page, 0);
+		page_was_mapped = 1;
+	}
+
+	if (!page_mapped(page)) {
+		__migrate_page_record(newpage, page_was_mapped, anon_vma);
+		return MIGRATEPAGE_UNMAP;
+	}
+
+out:
 	/*
 	 * A page that has not been migrated will have kept its
 	 * references and be restored.
 	 */
-	/* restore the page to right list. */
-	if (rc != -EAGAIN)
-		list_move_tail(&page->lru, ret);
-
-	if (put_new_page)
-		put_new_page(newpage, private);
-	else
-		put_page(newpage);
+	if (rc == -EAGAIN)
+		ret = NULL;
+	migrate_page_undo_page(page, page_was_mapped, anon_vma, locked, ret);
+	if (newpage)
+		migrate_page_undo_newpage(newpage, newpage_locked,
+					  put_new_page, private);
 
 	return rc;
 }
@@ -1255,35 +1194,54 @@ static int migrate_page_move(free_page_t put_new_page, unsigned long private,
 			     struct list_head *ret)
 {
 	int rc;
+	int page_was_mapped = 0;
+	struct anon_vma *anon_vma = NULL;
+	bool is_lru = !__PageMovable(page);
 
-	rc = __migrate_page_move(page, newpage, mode);
-	if (rc == MIGRATEPAGE_SUCCESS)
-		set_page_owner_migrate_reason(newpage, reason);
+	__migrate_page_extract(newpage, &page_was_mapped, &anon_vma);
 
-	if (rc != -EAGAIN) {
-		/*
-		 * A page that has been migrated has all references
-		 * removed and will be freed. A page that has not been
-		 * migrated will have kept its references and be restored.
-		 */
-		list_del(&page->lru);
-	}
+	rc = move_to_new_page(newpage, page, mode);
+	if (rc)
+		goto out;
 
 	/*
-	 * If migration is successful, releases reference grabbed during
-	 * isolation. Otherwise, restore the page to right list unless
-	 * we want to retry.
+	 * Decrease refcount of the newpage which will not free the
+	 * page because new page owner increased refcounter. As well,
+	 * if it is LRU page, add the page to LRU list in here. Use
+	 * the old state of the isolated source page to determine if
+	 * we migrated a LRU page. newpage already unlocked and
+	 * possibly modified by its owner - don't rely on the page
+	 * state.
 	 */
-	if (rc == MIGRATEPAGE_SUCCESS) {
-		migrate_page_done(page, reason);
-	} else if (rc != -EAGAIN) {
-		list_add_tail(&page->lru, ret);
+	if (page_was_mapped)
+		remove_migration_ptes(page, newpage, false);
+	list_del(&newpage->lru);
+	unlock_page(newpage);
+	if (unlikely(!is_lru))
+		put_page(newpage);
+	else
+		putback_lru_page(newpage);
+	set_page_owner_migrate_reason(newpage, reason);
 
-		if (put_new_page)
-			put_new_page(newpage, private);
-		else
-			put_page(newpage);
+	/*
+	 * A page that has been migrated has all references removed
+	 * and will be freed.
+	*/
+	list_del(&page->lru);
+	migrate_page_undo_page(page, 0, anon_vma, true, NULL);
+	migrate_page_done(page, reason);
+
+	return rc;
+
+out:
+	if (rc == -EAGAIN) {
+		__migrate_page_record(newpage, page_was_mapped, anon_vma);
+		return rc;
 	}
+
+	migrate_page_undo_page(page, page_was_mapped, anon_vma, true, ret);
+	list_del(&newpage->lru);
+	migrate_page_undo_newpage(newpage, true, put_new_page, private);
 
 	return rc;
 }
@@ -1744,9 +1702,9 @@ out:
 
 		__migrate_page_extract(newpage, &page_was_mapped, &anon_vma);
 		migrate_page_undo_page(page, page_was_mapped, anon_vma,
-				       &ret_pages);
+				       true, &ret_pages);
 		list_del(&newpage->lru);
-		migrate_page_undo_newpage(newpage, put_new_page, private);
+		migrate_page_undo_newpage(newpage, true, put_new_page, private);
 		newpage = newpage2;
 		newpage2 = list_next_entry(newpage, lru);
 	}
