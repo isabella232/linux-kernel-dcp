@@ -158,6 +158,9 @@ static void idxd_int_handle_revoke(struct work_struct *work)
 		struct idxd_irq_entry *ie = &idxd->irq_entries[i];
 		struct idxd_wq *wq = ie->wq;
 
+		if (ie->int_handle == INVALID_INT_HANDLE)
+			continue;
+
 		rc = idxd_device_request_int_handle(idxd, i, &new_handle, IDXD_IRQ_MSIX);
 		if (rc < 0) {
 			dev_warn(dev, "get int handle %d failed: %d\n", i, rc);

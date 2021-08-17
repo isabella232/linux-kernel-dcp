@@ -19,30 +19,6 @@ static void idxd_device_wqs_clear_state(struct idxd_device *idxd);
 static void idxd_wq_disable_cleanup(struct idxd_wq *wq);
 
 /* Interrupt control bits */
-void idxd_mask_msix_vector(struct idxd_device *idxd, int vec_id)
-{
-	struct irq_data *data = irq_get_irq_data(idxd->irq_entries[vec_id].vector);
-
-	pci_msi_mask_irq(data);
-}
-
-void idxd_mask_msix_vectors(struct idxd_device *idxd)
-{
-	struct pci_dev *pdev = idxd->pdev;
-	int msixcnt = pci_msix_vec_count(pdev);
-	int i;
-
-	for (i = 0; i < msixcnt; i++)
-		idxd_mask_msix_vector(idxd, i);
-}
-
-void idxd_unmask_msix_vector(struct idxd_device *idxd, int vec_id)
-{
-	struct irq_data *data = irq_get_irq_data(idxd->irq_entries[vec_id].vector);
-
-	pci_msi_unmask_irq(data);
-}
-
 void idxd_unmask_error_interrupts(struct idxd_device *idxd)
 {
 	union genctrl_reg genctrl;
@@ -587,7 +563,6 @@ void idxd_device_reset(struct idxd_device *idxd)
 	idxd_device_clear_state(idxd);
 	idxd->state = IDXD_DEV_DISABLED;
 	idxd_unmask_error_interrupts(idxd);
-	idxd_msix_perm_setup(idxd);
 	spin_unlock(&idxd->dev_lock);
 }
 
@@ -724,36 +699,6 @@ void idxd_device_clear_state(struct idxd_device *idxd)
 	idxd_groups_clear_state(idxd);
 	idxd_engines_clear_state(idxd);
 	idxd_device_wqs_clear_state(idxd);
-}
-
-void idxd_msix_perm_setup(struct idxd_device *idxd)
-{
-	union msix_perm mperm;
-	int i, msixcnt;
-
-	msixcnt = pci_msix_vec_count(idxd->pdev);
-	if (msixcnt < 0)
-		return;
-
-	mperm.bits = 0;
-	mperm.pasid = idxd->pasid;
-	mperm.pasid_en = device_pasid_enabled(idxd);
-	for (i = 1; i < msixcnt; i++)
-		iowrite32(mperm.bits, idxd->reg_base + idxd->msix_perm_offset + i * 8);
-}
-
-void idxd_msix_perm_clear(struct idxd_device *idxd)
-{
-	union msix_perm mperm;
-	int i, msixcnt;
-
-	msixcnt = pci_msix_vec_count(idxd->pdev);
-	if (msixcnt < 0)
-		return;
-
-	mperm.bits = 0;
-	for (i = 1; i < msixcnt; i++)
-		iowrite32(mperm.bits, idxd->reg_base + idxd->msix_perm_offset + i * 8);
 }
 
 static void idxd_group_config_write(struct idxd_group *group)
@@ -1152,6 +1097,90 @@ int idxd_device_load_config(struct idxd_device *idxd)
 	return 0;
 }
 
+static void idxd_device_set_perm_entry(struct idxd_device *idxd, int idx)
+{
+	union msix_perm mperm;
+
+	if (!device_pasid_enabled(idxd))
+		return;
+
+	mperm.bits = 0;
+	mperm.pasid = idxd->pasid;
+	mperm.pasid_en = 1;
+	iowrite32(mperm.bits, idxd->reg_base + idxd->msix_perm_offset + idx * 8);
+}
+
+static void idxd_device_clear_perm_entry(struct idxd_device *idxd, int idx)
+{
+	iowrite32(0, idxd->reg_base + idxd->msix_perm_offset + idx * 8);
+}
+
+void idxd_wq_free_irq(struct idxd_wq *wq)
+{
+	struct idxd_device *idxd = wq->idxd;
+	struct idxd_irq_entry *ie = wq->ie;
+	int msix_idx = ie->id;
+
+	/* drain irq */
+	synchronize_irq(ie->vector);
+	free_irq(ie->vector, ie);
+	if (idxd->request_int_handles)
+		idxd_device_release_int_handle(idxd, ie->int_handle, IDXD_IRQ_MSIX);
+	idxd_device_clear_perm_entry(idxd, msix_idx);
+	pci_free_msix_irq_vector(idxd->pdev, ie->vector);
+	ie->int_handle = INVALID_INT_HANDLE;
+	ie->pasid = INVALID_IOASID;
+	ie->wq = NULL;
+	wq->ie = NULL;
+}
+
+int idxd_wq_enable_irq(struct idxd_wq *wq)
+{
+	struct idxd_device *idxd = wq->idxd;
+	struct pci_dev *pdev = idxd->pdev;
+	struct device *dev = &pdev->dev;
+	struct idxd_irq_entry *ie;
+	int msix_idx;
+	int rc;
+
+	msix_idx = pci_add_msix_irq_vector(pdev);
+	if (msix_idx < 0)
+		return msix_idx;
+
+	ie = &idxd->irq_entries[msix_idx];
+	ie->vector = pci_irq_vector(pdev, msix_idx);
+
+	idxd_device_set_perm_entry(idxd, msix_idx);
+	rc = request_threaded_irq(ie->vector, NULL, idxd_wq_thread, 0, "idxd-portal", ie);
+	if (rc < 0) {
+		dev_err(dev, "Failed to request irq %d.\n", ie->vector);
+		goto err_irq;
+	}
+
+	if (idxd->request_int_handles) {
+		rc = idxd_device_request_int_handle(idxd, msix_idx, &ie->int_handle,
+						    IDXD_IRQ_MSIX);
+		if (rc < 0)
+			goto err_int_handle;
+	} else {
+		ie->int_handle = INVALID_INT_HANDLE;
+	}
+
+	ie->wq = wq;
+	ie->pasid = device_pasid_enabled(idxd) ? idxd->pasid : INVALID_IOASID;
+
+	wq->ie = ie;
+	return 0;
+
+err_int_handle:
+	ie->int_handle = INVALID_INT_HANDLE;
+	free_irq(ie->vector, ie);
+err_irq:
+	idxd_device_clear_perm_entry(idxd, msix_idx);
+	pci_free_msix_irq_vector(pdev, ie->vector);
+	return rc;
+}
+
 int __drv_enable_wq(struct idxd_wq *wq)
 {
 	struct idxd_device *idxd = wq->idxd;
@@ -1273,7 +1302,6 @@ void __drv_disable_wq(struct idxd_wq *wq)
 	idxd_wq_drain(wq);
 	idxd_wq_reset(wq);
 
-	wq->ie = NULL;
 	wq->client_count = 0;
 }
 
