@@ -1797,7 +1797,21 @@ static bool try_to_migrate_one(struct page *page, struct vm_area_struct *vma,
 
 		/* Nuke the page table entry. */
 		flush_cache_page(vma, address, pte_pfn(*pvmw.pte));
-		pteval = ptep_clear_flush(vma, address, pvmw.pte);
+		if (should_defer_flush(mm, flags)) {
+			/*
+			 * We clear the PTE but do not flush so potentially
+			 * a remote CPU could still be writing to the page.
+			 * If the entry was previously clean then the
+			 * architecture must guarantee that a clear->dirty
+			 * transition on a cached TLB entry is written through
+			 * and traps if the PTE is unmapped.
+			 */
+			pteval = ptep_get_and_clear(mm, address, pvmw.pte);
+
+			set_tlb_ubc_flush_pending(mm, pte_dirty(pteval));
+		} else {
+			pteval = ptep_clear_flush(vma, address, pvmw.pte);
+		}
 
 		/* Move the dirty bit to the page. Now the pte is gone. */
 		if (pte_dirty(pteval))
@@ -1937,10 +1951,10 @@ void try_to_migrate(struct page *page, enum ttu_flags flags)
 
 	/*
 	 * Migration always ignores mlock and only supports TTU_RMAP_LOCKED and
-	 * TTU_SPLIT_HUGE_PMD and TTU_SYNC flags.
+	 * TTU_SPLIT_HUGE_PMD, TTU_SYNC and TTU_BATCH_FLUSH flags.
 	 */
 	if (WARN_ON_ONCE(flags & ~(TTU_RMAP_LOCKED | TTU_SPLIT_HUGE_PMD |
-					TTU_SYNC)))
+					TTU_SYNC | TTU_BATCH_FLUSH)))
 		return;
 
 	if (is_zone_device_page(page) && !is_device_private_page(page))
