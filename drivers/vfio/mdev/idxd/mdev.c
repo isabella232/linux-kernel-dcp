@@ -1198,7 +1198,19 @@ static ssize_t idxd_vdcm_read(struct vfio_device *vdev, char __user *buf, size_t
 	while (count) {
 		size_t filled;
 
-		if (count >= 4 && !(*ppos % 4)) {
+		if (count >= 8 && !(*ppos % 8)) {
+			u64 val;
+
+			rc = idxd_vdcm_rw(vdev, (char *)&val, sizeof(val),
+					  ppos, IDXD_VDCM_READ);
+			if (rc <= 0)
+				goto read_err;
+
+			if (copy_to_user(buf, &val, sizeof(val)))
+				goto read_err;
+
+			filled = 8;
+		} else if (count >= 4 && !(*ppos % 4)) {
 			u32 val;
 
 			rc = idxd_vdcm_rw(vdev, (char *)&val, sizeof(val),
@@ -1283,7 +1295,19 @@ static ssize_t idxd_vdcm_write(struct vfio_device *vdev, const char __user *buf,
 	while (count) {
 		size_t filled;
 
-		if (count >= 4 && !(*ppos % 4)) {
+		if (count >= 8 && !(*ppos % 8)) {
+			u64 val;
+
+			if (copy_from_user(&val, buf, sizeof(val)))
+				goto write_err;
+
+			rc = idxd_vdcm_rw(vdev, (char *)&val, sizeof(val),
+					  ppos, IDXD_VDCM_WRITE);
+			if (rc <= 0)
+				goto write_err;
+
+			filled = 8;
+		} else if (count >= 4 && !(*ppos % 4)) {
 			u32 val;
 
 			if (copy_from_user(&val, buf, sizeof(val)))
