@@ -46,6 +46,7 @@ static struct microcode_intel *intel_ucode_patch;
 
 /* last level cache size per core */
 static int llc_size_per_core;
+extern bool ucode_rollback;
 
 bool cpu_signatures_match(unsigned int s1, unsigned int p1,
 			  unsigned int s2, unsigned int p2)
@@ -97,7 +98,7 @@ static int has_newer_microcode(void *mc, unsigned int csig, int cpf, int new_rev
 {
 	struct microcode_header_intel *mc_hdr = mc;
 
-	if (mc_hdr->rev <= new_rev)
+	if (!ucode_rollback && mc_hdr->rev <= new_rev)
 		return 0;
 
 	return find_matching_signature(mc, csig, cpf);
@@ -137,7 +138,7 @@ static void save_microcode_patch(struct ucode_cpu_info *uci, void *data, unsigne
 		if (find_matching_signature(data, sig, pf)) {
 			prev_found = true;
 
-			if (mc_hdr->rev <= mc_saved_hdr->rev)
+			if (!ucode_rollback && mc_hdr->rev <= mc_saved_hdr->rev)
 				continue;
 
 			p = memdup_patch(data, size);
@@ -691,7 +692,7 @@ static struct microcode_intel *find_patch(struct ucode_cpu_info *uci)
 
 		phdr = (struct microcode_header_intel *)iter->data;
 
-		if (phdr->rev <= uci->cpu_sig.rev)
+		if (!ucode_rollback && phdr->rev <= uci->cpu_sig.rev)
 			continue;
 
 		if (!find_matching_signature(phdr,
@@ -776,10 +777,11 @@ static enum ucode_state apply_microcode_intel(int cpu)
 	 * already.
 	 */
 	rev = intel_get_microcode_revision();
-	if (rev >= mc->hdr.rev) {
+	if (!ucode_rollback && rev >= mc->hdr.rev) {
 		ret = UCODE_OK;
 		goto out;
-	}
+	} else if (ucode_rollback)
+		ret = UCODE_OK;
 
 	/*
 	 * Writeback and invalidate caches before updating microcode to avoid
@@ -798,7 +800,7 @@ static enum ucode_state apply_microcode_intel(int cpu)
 		return UCODE_ERROR;
 	}
 
-	if (bsp && rev != prev_rev) {
+	if (bsp && ((rev != prev_rev) || ucode_rollback)) {
 		pr_info("updated to revision 0x%x, date = %04x-%02x-%02x\n",
 			rev,
 			mc->hdr.date & 0xffff,
