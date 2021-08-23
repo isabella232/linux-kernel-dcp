@@ -48,8 +48,8 @@ static struct microcode_intel *intel_ucode_patch;
 /* last level cache size per core */
 static int llc_size_per_core;
 
-static inline bool cpu_signatures_match(unsigned int s1, unsigned int p1,
-					unsigned int s2, unsigned int p2)
+bool cpu_signatures_match(unsigned int s1, unsigned int p1,
+			  unsigned int s2, unsigned int p2)
 {
 	if (s1 != s2)
 		return false;
@@ -61,6 +61,7 @@ static inline bool cpu_signatures_match(unsigned int s1, unsigned int p1,
 	/* ... or they intersect. */
 	return p1 & p2;
 }
+EXPORT_SYMBOL_GPL(cpu_signatures_match);
 
 /*
  * Returns 1 if update has been found, 0 otherwise.
@@ -345,7 +346,7 @@ next:
 	return patch;
 }
 
-static int collect_cpu_info_early(struct ucode_cpu_info *uci)
+int collect_cpu_info_early(struct ucode_cpu_info *uci)
 {
 	unsigned int val[2];
 	unsigned int family, model;
@@ -375,6 +376,7 @@ static int collect_cpu_info_early(struct ucode_cpu_info *uci)
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(collect_cpu_info_early);
 
 static void show_saved_mc(void)
 {
