@@ -14,10 +14,15 @@ struct thread_shstk {
 
 #ifdef CONFIG_X86_SHADOW_STACK
 int shstk_setup(void);
+int shstk_alloc_thread_stack(struct task_struct *p, unsigned long clone_flags,
+			     unsigned long stack_size);
 void shstk_free(struct task_struct *p);
 int shstk_disable(void);
 #else
 static inline void shstk_setup(void) {}
+static inline int shstk_alloc_thread_stack(struct task_struct *p,
+					   unsigned long clone_flags,
+					   unsigned long stack_size) { return 0; }
 static inline void shstk_free(struct task_struct *p) {}
 static inline void shstk_disable(void) {}
 #endif /* CONFIG_X86_SHADOW_STACK */

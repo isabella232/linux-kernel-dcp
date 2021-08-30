@@ -101,6 +101,66 @@ int shstk_setup(void)
 	return 0;
 }
 
+int shstk_alloc_thread_stack(struct task_struct *tsk, unsigned long clone_flags,
+			     unsigned long stack_size)
+{
+	struct thread_shstk *shstk = &tsk->thread.shstk;
+	unsigned long addr;
+	void *xstate;
+
+	/*
+	 * If shadow stack is not enabled on the new thread, skip any
+	 * switch to a new shadow stack.
+	 */
+	if (!shstk->size)
+		return 0;
+
+	/*
+	 * clone() does not pass stack_size, which was added to clone3().
+	 * Use RLIMIT_STACK and cap to 4 GB.
+	 */
+	if (!stack_size)
+		stack_size = min_t(unsigned long long, rlimit(RLIMIT_STACK), SZ_4G);
+
+	/*
+	 * For CLONE_VM, except vfork, the child needs a separate shadow
+	 * stack.
+	 */
+	if ((clone_flags & (CLONE_VFORK | CLONE_VM)) != CLONE_VM)
+		return 0;
+
+
+	/*
+	 * Compat-mode pthreads share a limited address space.
+	 * If each function call takes an average of four slots
+	 * stack space, allocate 1/4 of stack size for shadow stack.
+	 */
+	if (in_compat_syscall())
+		stack_size /= 4;
+
+	/*
+	 * 'tsk' is configured with a shadow stack and the fpu.state is
+	 * up to date since it was just copied from the parent.  There
+	 * must be a valid non-init CET state location in the buffer.
+	 */
+	xstate = get_xsave_buffer_unsafe(&tsk->thread.fpu, XFEATURE_CET_USER);
+	if (WARN_ON_ONCE(!xstate))
+		return -EINVAL;
+
+	stack_size = PAGE_ALIGN(stack_size);
+	addr = alloc_shstk(stack_size);
+	if (IS_ERR_VALUE(addr)) {
+		shstk->base = 0;
+		shstk->size = 0;
+		return PTR_ERR((void *)addr);
+	}
+
+	xsave_wrmsrl_unsafe(xstate, MSR_IA32_PL3_SSP, (u64)(addr + stack_size));
+	shstk->base = addr;
+	shstk->size = stack_size;
+	return 0;
+}
+
 void shstk_free(struct task_struct *tsk)
 {
 	struct thread_shstk *shstk = &tsk->thread.shstk;
@@ -110,7 +170,13 @@ void shstk_free(struct task_struct *tsk)
 	    !shstk->base)
 		return;
 
-	if (!tsk->mm)
+	/*
+	 * When fork() with CLONE_VM fails, the child (tsk) already has a
+	 * shadow stack allocated, and exit_thread() calls this function to
+	 * free it.  In this case the parent (current) and the child share
+	 * the same mm struct.
+	 */
+	if (!tsk->mm || tsk->mm != current->mm)
 		return;
 
 	unmap_shadow_stack(shstk->base, shstk->size);
