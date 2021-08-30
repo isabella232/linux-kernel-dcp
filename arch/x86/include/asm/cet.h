@@ -39,6 +39,12 @@ static inline int setup_signal_shadow_stack(int proc32, void __user *restorer) {
 static inline int restore_signal_shadow_stack(void) { return 0; }
 #endif /* CONFIG_X86_SHADOW_STACK */
 
+#ifdef CONFIG_X86_SHADOW_STACK
+int prctl_elf_feature(int option, u64 arg2);
+#else
+static inline int prctl_elf_feature(int option, u64 arg2) { return -EINVAL; }
+#endif
+
 #endif /* __ASSEMBLY__ */
 
 #endif /* _ASM_X86_CET_H */

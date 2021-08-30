@@ -535,6 +535,7 @@ struct thread_struct {
 
 #ifdef CONFIG_X86_SHADOW_STACK
 	struct thread_shstk	shstk;
+	u64			feat_prctl_locked;
 #endif
 
 	/* Floating point and extended processor state */
