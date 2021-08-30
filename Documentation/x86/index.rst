@@ -22,6 +22,7 @@ x86-specific Documentation
    mtrr
    pat
    intel-hfi
+   cet
    intel-iommu
    intel_txt
    amd-memory-encryption
