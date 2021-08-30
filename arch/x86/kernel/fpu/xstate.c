@@ -1857,7 +1857,10 @@ int proc_pid_arch_status(struct seq_file *m, struct pid_namespace *ns,
 static u64 *__get_xsave_member(void *xstate, u32 msr)
 {
 	switch (msr) {
-	/* Currently there are no MSR's supported */
+	case MSR_IA32_PL3_SSP:
+		return &((struct cet_user_state *)xstate)->user_ssp;
+	case MSR_IA32_U_CET:
+		return &((struct cet_user_state *)xstate)->user_cet;
 	default:
 		WARN_ONCE(1, "x86/fpu: unsupported xstate msr (%u)\n", msr);
 		return NULL;
