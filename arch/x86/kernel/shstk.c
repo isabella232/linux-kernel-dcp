@@ -23,6 +23,33 @@
 #include <asm/special_insns.h>
 #include <asm/fpu/api.h>
 
+/*
+ * Create a restore token on the shadow stack.  A token is always 8-byte
+ * and aligned to 8.
+ */
+static int create_rstor_token(bool proc32, unsigned long ssp,
+			      unsigned long *token_addr)
+{
+	unsigned long addr;
+
+	/* Aligned to 8 is aligned to 4, so test 8 first */
+	if ((!proc32 && !IS_ALIGNED(ssp, 8)) || !IS_ALIGNED(ssp, 4))
+		return -EINVAL;
+
+	addr = ALIGN_DOWN(ssp, 8) - 8;
+
+	/* Is the token for 64-bit? */
+	if (!proc32)
+		ssp |= BIT(0);
+
+	if (write_user_shstk_64((u64 __user *)addr, (u64)ssp))
+		return -EFAULT;
+
+	*token_addr = addr;
+
+	return 0;
+}
+
 static unsigned long alloc_shstk(unsigned long size)
 {
 	int flags = MAP_ANONYMOUS | MAP_PRIVATE;
@@ -206,5 +233,100 @@ int shstk_disable(void)
 		return 1;
 
 	shstk_free(current);
+	return 0;
+}
+
+static unsigned long get_user_shstk_addr(void)
+{
+	void *xstate;
+	unsigned long long ssp;
+
+	xstate = start_update_xsave_msrs(XFEATURE_CET_USER);
+
+	xsave_rdmsrl(xstate, MSR_IA32_PL3_SSP, &ssp);
+
+	end_update_xsave_msrs();
+
+	return ssp;
+}
+
+/*
+ * Create a restore token on shadow stack, and then push the user-mode
+ * function return address.
+ */
+int shstk_setup_rstor_token(bool proc32, unsigned long ret_addr,
+			    unsigned long *new_ssp)
+{
+	struct thread_shstk *shstk = &current->thread.shstk;
+	unsigned long ssp, token_addr;
+	int err;
+
+	if (!shstk->size)
+		return 0;
+
+	if (!ret_addr)
+		return -EINVAL;
+
+	ssp = get_user_shstk_addr();
+	if (!ssp)
+		return -EINVAL;
+
+	err = create_rstor_token(proc32, ssp, &token_addr);
+	if (err)
+		return err;
+
+	if (proc32) {
+		ssp = token_addr - sizeof(u32);
+		err = write_user_shstk_32((u32 __user *)ssp, (u32)ret_addr);
+	} else {
+		ssp = token_addr - sizeof(u64);
+		err = write_user_shstk_64((u64 __user *)ssp, (u64)ret_addr);
+	}
+
+	if (!err)
+		*new_ssp = ssp;
+
+	return err;
+}
+
+/*
+ * Verify the user shadow stack has a valid token on it, and then set
+ * *new_ssp according to the token.
+ */
+int shstk_check_rstor_token(bool proc32, unsigned long *new_ssp)
+{
+	unsigned long token_addr;
+	unsigned long token;
+	bool shstk32;
+
+	token_addr = get_user_shstk_addr();
+	if (!token_addr)
+		return -EINVAL;
+
+	if (get_user(token, (unsigned long __user *)token_addr))
+		return -EFAULT;
+
+	/* Is mode flag correct? */
+	shstk32 = !(token & BIT(0));
+	if (proc32 ^ shstk32)
+		return -EINVAL;
+
+	/* Is busy flag set? */
+	if (token & BIT(1))
+		return -EINVAL;
+
+	/* Mask out flags */
+	token &= ~3UL;
+
+	/* Restore address aligned? */
+	if ((!proc32 && !IS_ALIGNED(token, 8)) || !IS_ALIGNED(token, 4))
+		return -EINVAL;
+
+	/* Token placed properly? */
+	if (((ALIGN_DOWN(token, 8) - 8) != token_addr) || token >= TASK_SIZE_MAX)
+		return -EINVAL;
+
+	*new_ssp = token;
+
 	return 0;
 }
