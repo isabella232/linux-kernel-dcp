@@ -1161,7 +1161,7 @@ static void rmap_remove(struct kvm *kvm, u64 *spte, u64 old_spte)
 
 	if (__is_private_gfn(kvm, sp->gfn_stolen_bits))
 		static_call(kvm_x86_drop_private_spte)(
-			kvm, gfn, sp->role.level - 1, spte_to_pfn(old_spte));
+			kvm, gfn, sp->role.level, spte_to_pfn(old_spte));
 }
 
 /*
@@ -1519,7 +1519,7 @@ static bool kvm_mmu_zap_private_spte(struct kvm *kvm, u64 *sptep)
 	gfn = kvm_mmu_page_get_gfn(sp, sptep - sp->spt);
 	pfn = spte_to_pfn(*sptep);
 
-	static_call(kvm_x86_zap_private_spte)(kvm, gfn, sp->role.level - 1);
+	static_call(kvm_x86_zap_private_spte)(kvm, gfn, sp->role.level);
 
 	__mmu_spte_clear_track_bits(kvm, sptep,
 				    SPTE_PRIVATE_ZAPPED | pfn << PAGE_SHIFT);
@@ -3238,7 +3238,7 @@ static void kvm_mmu_link_private_sp(struct kvm_vcpu *vcpu,
 	void *p = kvm_mmu_memory_cache_alloc(&vcpu->arch.mmu_private_sp_cache);
 
 	if (!static_call(kvm_x86_link_private_sp)(vcpu, sp->gfn,
-						  sp->role.level, p))
+						  sp->role.level + 1, p))
 		sp->private_sp = p;
 	else
 		free_page((unsigned long)p);
@@ -3378,7 +3378,7 @@ static int __direct_map(struct kvm_vcpu *vcpu, gpa_t gpa, u32 error_code,
 	} else if (!WARN_ON_ONCE(ret != RET_PF_FIXED)) {
 		if (is_zapped_pte)
 			static_call(kvm_x86_unzap_private_spte)(vcpu->kvm, gfn,
-								level - 1);
+								level);
 		else
 			static_call(kvm_x86_set_private_spte)(vcpu, gfn, level,
 							      pfn);
