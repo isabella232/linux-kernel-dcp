@@ -650,7 +650,7 @@ static int msix_setup_entries(struct pci_dev *dev,
 			      struct irq_affinity *affd)
 {
 	struct irq_affinity_desc *curmsk, *masks = NULL;
-	struct msi_desc *entry;
+	struct msi_desc *entry, *tmp;
 	void __iomem *addr;
 	int ret, i, idx;
 	int vec_count = pci_msix_vec_count(dev);
@@ -711,10 +711,21 @@ static int msix_setup_entries(struct pci_dev *dev,
 	}
 	return 0;
 out:
-	if (!i && !dev->msix_enabled)
-		iounmap(dev->msix_table_base);
-	else
-		free_msi_irqs(dev);
+	if (!dev->msix_enabled) {
+		if (!i)
+			iounmap(dev->msix_table_base);
+		else
+			free_msi_irqs(dev);
+	} else {
+		while (i-- > 0) {
+			list_for_each_entry_safe_reverse(entry, tmp, dev_to_msi_list(&dev->dev),
+							 list) {
+				__clear_bit(entry->msi_attrib.entry_nr, dev->msix_map);
+				list_del(&entry->list);
+				free_msi_entry(entry);
+			}
+		}
+	}
 
 	kfree(masks);
 	return ret;
@@ -889,12 +900,26 @@ out_avail:
 	}
 
 out_free:
-	free_msi_irqs(dev);
+	if (ret) {
+		struct msi_desc *desc, *tmp;
+
+		for_each_new_pci_msi_entry_safe(desc, tmp, dev) {
+			if (desc->irq) {
+				BUG_ON(irq_has_action(desc->irq));
+				pci_msix_teardown_irq(dev, desc->irq);
+			}
+
+			__clear_bit(desc->msi_attrib.entry_nr, dev->msix_map);
+			list_del(&desc->list);
+			free_msi_entry(desc);
+		}
+	}
 
 out_disable:
 	if (!dev->msix_enabled) {
 		pci_msix_clear_and_set_ctrl(dev, PCI_MSIX_FLAGS_ENABLE, 0);
 		kfree(dev->msix_map);
+		iounmap(dev->msix_table_base);
 	}
 
 	return ret;

@@ -211,6 +211,9 @@ struct msi_desc {
 			for ((__irq) = (desc)->irq;                     \
 			     (__irq) < ((desc)->irq + (desc)->nvec_used);       \
 			     (__irq)++)
+#define for_each_new_msi_entry_safe(desc, tmp, dev)				\
+        (desc) = list_entry((dev)->msi_last_list->next, struct msi_desc, list);	\
+        list_for_each_entry_safe_from((desc), (tmp), dev_to_msi_list((dev)), list)
 
 #ifdef CONFIG_IRQ_MSI_IOMMU
 static inline const void *msi_desc_get_iommu_cookie(struct msi_desc *desc)
@@ -241,6 +244,8 @@ static inline void msi_desc_set_iommu_cookie(struct msi_desc *desc,
 	for_each_msi_entry((desc), &(pdev)->dev)
 #define for_each_new_pci_msi_entry(desc, pdev)        \
 	for_each_new_msi_entry((desc), &(pdev)->dev)
+#define for_each_new_pci_msi_entry_safe(desc, tmp, pdev)	\
+	for_each_new_msi_entry_safe((desc), (tmp), &(pdev)->dev)
 
 struct pci_dev *msi_desc_to_pci_dev(struct msi_desc *desc);
 void *msi_desc_to_pci_sysdata(struct msi_desc *desc);
