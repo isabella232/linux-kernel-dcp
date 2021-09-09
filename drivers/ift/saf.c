@@ -10,6 +10,7 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <asm/cpu_device_id.h>
+#include <asm/microcode_intel.h>
 
 #include "saf.h"
 
@@ -21,6 +22,68 @@ static const struct x86_cpu_id saf_cpu_ids[] __initconst = {
 	X86_MATCH_INTEL_FAM6_MODEL(SAPPHIRERAPIDS_X,	1),
 	{}
 };
+
+static int scan_sanity_check(void *mc)
+{
+	struct microcode_header_intel *mc_header = mc;
+	unsigned long total_size, data_size;
+	u32 sum, i;
+
+	total_size = get_totalsize(mc_header);
+	data_size = get_datasize(mc_header);
+
+	if (data_size + MC_HEADER_SIZE > total_size) {
+		pr_err("saf: bad scan data file size.\n");
+		return -EINVAL;
+	}
+
+	if (mc_header->ldrver != 1 || mc_header->hdrver != 1) {
+		pr_err("saf: invalid/unknown scan update format.\n");
+		return -EINVAL;
+	}
+
+	sum = 0;
+	i = total_size / sizeof(u32);
+	while (i--)
+		sum += ((u32 *)mc)[i];
+
+	if (sum) {
+		pr_err("saf: bad scan data checksum, aborting.\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static bool find_scan_matching_signature(struct ucode_cpu_info *uci, void *mc)
+{
+	struct microcode_header_intel *shdr;
+	unsigned int mc_size;
+
+	shdr = (struct microcode_header_intel *)mc;
+	mc_size = get_totalsize(shdr);
+
+	if (!mc_size || scan_sanity_check(shdr) < 0) {
+		pr_err("saf: scan sanity check failure");
+		return false;
+	}
+
+	if (!cpu_signatures_match(uci->cpu_sig.sig, uci->cpu_sig.pf, shdr->sig, shdr->pf)) {
+		pr_err("saf: scan signature, pf not matching");
+		return false;
+	}
+
+	return true;
+}
+
+static bool scan_image_sanity_check(void *data)
+{
+	struct ucode_cpu_info uci;
+
+	collect_cpu_info_early(&uci);
+
+	return find_scan_matching_signature(&uci, data);
+}
 
 static const struct firmware *load_binary(const char *path)
 {
@@ -36,6 +99,12 @@ static const struct firmware *load_binary(const char *path)
 	if (err) {
 		pr_err("saf: scan file %s load failed", path);
 		goto out;
+	}
+
+	if (!scan_image_sanity_check((void *)fw->data)) {
+		pr_err("saf: scan header sanity check failed");
+		release_firmware(fw);
+		fw = NULL;
 	}
 out:
 	platform_device_unregister(saf_pdev);
