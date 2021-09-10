@@ -12,6 +12,7 @@
 #include <linux/module.h>
 #include <linux/nmi.h>
 #include <linux/platform_device.h>
+#include <linux/semaphore.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <linux/topology.h>
@@ -19,19 +20,17 @@
 #include <asm/microcode_intel.h>
 
 #include "saf.h"
+#include "saf_sysfs.h"
 
 static const char *saf_path = "intel/ift/saf/";
 static enum cpuhp_state cpuhp_scan_state;
 static struct platform_device *saf_pdev;
+static struct device *cpu_scan_device;
 struct saf_params saf_params;
 int saf_threads_per_core;
+struct semaphore *sems;
 
 DEFINE_PER_CPU(struct saf_state, saf_state);
-
-int thread_wait = 0xFFFFFFF;
-int trigger_mce;
-bool quiet;
-bool noint;
 
 static const struct x86_cpu_id saf_cpu_ids[] __initconst = {
 	X86_MATCH_INTEL_FAM6_MODEL(SAPPHIRERAPIDS_X,	1),
@@ -219,7 +218,7 @@ static int copy_hashes_authenticate_chunks(void *arg)
 	rdmsr(MSR_SCAN_HASHES_STATUS, eax, edx);
 
 	/* enumerate the scan image information */
-	saf_params.max_cores = GET_BITFIELD(edx, 19, 30) + 1;
+	saf_params.max_parallel_tests = GET_BITFIELD(edx, 19, 30) + 1;
 	saf_params.num_chunks = GET_BITFIELD(eax, 16, 23);
 	saf_params.chunk_size = GET_BITFIELD(eax, 0, 15) * 1024;
 	saf_params.hash_valid = GET_BITFIELD(edx, 31, 31);
@@ -300,6 +299,10 @@ static int scan_chunks_sanity_check(void)
 	saf_params.loaded_version = *((unsigned int *)(saf_params.header_ptr
 						       + HEADER_OFFSET_IMAGE_REVISION));
 
+	sems = vmalloc(sizeof(*sems) * topology_max_packages());
+	if (!sems)
+		goto out;
+
 	/* copy the scan hash and authenticate per package */
 	cpus_read_lock();
 	for_each_online_cpu(cpu) {
@@ -314,6 +317,7 @@ static int scan_chunks_sanity_check(void)
 			vfree(aligned_buf);
 			goto out;
 		}
+		sema_init(&sems[curr_pkg], saf_params.max_parallel_tests);
 	}
 	cpus_read_unlock();
 	vfree(aligned_buf);
@@ -491,6 +495,7 @@ static int saf_offline_cpu(unsigned int cpu)
 static int __init saf_init(void)
 {
 	const struct x86_cpu_id *m;
+	struct device *root, *dev;
 	u64 ia32_core_caps;
 	int cpu, ret = -ENODEV;
 
@@ -512,8 +517,18 @@ static int __init saf_init(void)
 
 	saf_threads_per_core = cpumask_weight(topology_sibling_cpumask(0));
 
+	root = cpu_subsys.dev_root;
+	cpu_scan_device = cpu_device_create(root, NULL, cpu_scan_attr_groups, "scan");
+
 	cpus_read_lock();
 	for_each_online_cpu(cpu) {
+		/* create per-cpu sysfs */
+		dev = get_cpu_device(cpu);
+		ret = sysfs_create_group(&dev->kobj, &scan_attr_group);
+		if (ret) {
+			pr_err("saf: failed to create sysfs group");
+			return ret;
+		}
 		/* initialize per-cpu variables */
 		init_waitqueue_head(&(per_cpu(saf_state, cpu).scan_wq));
 		cpumask_clear_cpu(cpu, &(per_cpu(saf_state, cpu).mask));
@@ -540,15 +555,21 @@ static int __init saf_init(void)
 static void __exit saf_exit(void)
 {
 	struct task_struct *thread;
+	struct device *dev;
 	int cpu;
+
+	vfree(sems);
 
 	cpus_read_lock();
 	for_each_online_cpu(cpu) {
+		dev = get_cpu_device(cpu);
+		sysfs_remove_group(&dev->kobj, &scan_attr_group);
 		thread = per_cpu(saf_state, cpu).scan_task;
 		per_cpu(saf_state, cpu).scan_task = NULL;
 		if (thread)
 			kthread_stop(thread);
 	}
+	device_unregister(cpu_scan_device);
 	cpus_read_unlock();
 	cpuhp_remove_state(cpuhp_scan_state);
 
