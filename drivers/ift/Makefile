@@ -4,4 +4,4 @@
 
 obj-$(CONFIG_IFT)			+= ift.o
 
-ift-objs				:= saf.o
+ift-objs				:= saf.o saf_sysfs.o
