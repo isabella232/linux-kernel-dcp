@@ -343,6 +343,9 @@ struct kvm_vmx {
 	unsigned int tss_addr;
 	bool ept_identity_pagetable_done;
 	gpa_t ept_identity_map_addr;
+	/* PID table for IPI virtualization */
+	u64 *pid_table;
+	u16 pid_last_index;
 };
 
 bool nested_vmx_allowed(struct kvm_vcpu *vcpu);

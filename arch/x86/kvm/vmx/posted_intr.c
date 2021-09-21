@@ -81,9 +81,12 @@ void vmx_vcpu_pi_put(struct kvm_vcpu *vcpu)
 {
 	struct pi_desc *pi_desc = vcpu_to_pi_desc(vcpu);
 
-	if (!kvm_arch_has_assigned_device(vcpu->kvm) ||
-		!irq_remapping_cap(IRQ_POSTING_CAP)  ||
-		!kvm_vcpu_apicv_active(vcpu))
+	if (!kvm_vcpu_apicv_active(vcpu))
+		return;
+
+	if (!enable_ipiv &&
+		(!kvm_arch_has_assigned_device(vcpu->kvm) ||
+		!irq_remapping_cap(IRQ_POSTING_CAP)))
 		return;
 
 	/* Set SN when the vCPU is preempted */
@@ -141,9 +144,18 @@ int pi_pre_block(struct kvm_vcpu *vcpu)
 	struct pi_desc old, new;
 	struct pi_desc *pi_desc = vcpu_to_pi_desc(vcpu);
 
-	if (!kvm_arch_has_assigned_device(vcpu->kvm) ||
-		!irq_remapping_cap(IRQ_POSTING_CAP)  ||
-		!kvm_vcpu_apicv_active(vcpu))
+	if (!kvm_vcpu_apicv_active(vcpu))
+		return 0;
+
+	/*
+	 * Put vCPU into a list and set NV to wakeup vector
+	 * if it is one of the following cases:
+	 * 1. any assigned device is in use.
+	 * 2. IPI virtualization is enabled.
+	 */
+	if (!enable_ipiv &&
+		(!kvm_arch_has_assigned_device(vcpu->kvm) ||
+		!irq_remapping_cap(IRQ_POSTING_CAP)))
 		return 0;
 
 	WARN_ON(irqs_disabled());

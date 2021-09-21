@@ -104,6 +104,9 @@ module_param(fasteoi, bool, S_IRUGO);
 
 module_param(enable_apicv, bool, S_IRUGO);
 
+bool __read_mostly enable_ipiv = 1;
+module_param(enable_ipiv, bool, 0444);
+
 /*
  * If nested=1, nested virtualization is supported, i.e., guests may use
  * VMX and be a hypervisor for its own guests. If nested=0, guests may not
@@ -224,6 +227,11 @@ static const struct {
 };
 
 #define L1D_CACHE_ORDER 4
+
+/* Each entry in PID(Posted-Interrupt Descriptor)-pointer table contains 64-bit physcial address */
+#define PID_TABLE_ORDER get_order(KVM_MAX_VCPU_ID << 3)
+#define PID_TABLE_ENTRY_VALID 1
+
 static void *vmx_l1d_flush_pages;
 
 static int vmx_setup_l1d_flush(enum vmx_l1d_flush_state l1tf)
@@ -2513,7 +2521,7 @@ static __init int setup_vmcs_config(struct vmcs_config *vmcs_conf,
 	}
 
 	if (_cpu_based_exec_control & CPU_BASED_ACTIVATE_TERTIARY_CONTROLS) {
-		u64 opt3 = 0;
+		u64 opt3 = TERTIARY_EXEC_IPI_VIRT;
 		u64 min3 = 0;
 
 		if (adjust_vmx_controls_64(min3, opt3,
@@ -3894,6 +3902,8 @@ static void vmx_update_msr_bitmap_x2apic(struct kvm_vcpu *vcpu)
 		vmx_enable_intercept_for_msr(vcpu, X2APIC_MSR(APIC_TMCCT), MSR_TYPE_RW);
 		vmx_disable_intercept_for_msr(vcpu, X2APIC_MSR(APIC_EOI), MSR_TYPE_W);
 		vmx_disable_intercept_for_msr(vcpu, X2APIC_MSR(APIC_SELF_IPI), MSR_TYPE_W);
+		vmx_set_intercept_for_msr(vcpu, X2APIC_MSR(APIC_ICR),
+				MSR_TYPE_RW, !enable_ipiv);
 	}
 }
 
@@ -4170,14 +4180,21 @@ static void vmx_refresh_apicv_exec_ctrl(struct kvm_vcpu *vcpu)
 
 	pin_controls_set(vmx, vmx_pin_based_exec_ctrl(vmx));
 	if (cpu_has_secondary_exec_ctrls()) {
-		if (kvm_vcpu_apicv_active(vcpu))
+		if (kvm_vcpu_apicv_active(vcpu)) {
 			secondary_exec_controls_setbit(vmx,
 				      SECONDARY_EXEC_APIC_REGISTER_VIRT |
 				      SECONDARY_EXEC_VIRTUAL_INTR_DELIVERY);
-		else
+			if (cpu_has_tertiary_exec_ctrls() && enable_ipiv)
+				tertiary_exec_controls_setbit(vmx,
+						TERTIARY_EXEC_IPI_VIRT);
+		} else {
 			secondary_exec_controls_clearbit(vmx,
 					SECONDARY_EXEC_APIC_REGISTER_VIRT |
 					SECONDARY_EXEC_VIRTUAL_INTR_DELIVERY);
+			if (cpu_has_tertiary_exec_ctrls())
+				tertiary_exec_controls_clearbit(vmx,
+						TERTIARY_EXEC_IPI_VIRT);
+		}
 	}
 
 	vmx_update_msr_bitmap_x2apic(vcpu);
@@ -4211,7 +4228,13 @@ static u32 vmx_exec_control(struct vcpu_vmx *vmx)
 
 static u64 vmx_tertiary_exec_control(struct vcpu_vmx *vmx)
 {
-	return vmcs_config.cpu_based_3rd_exec_ctrl;
+	struct kvm_vcpu *vcpu = &vmx->vcpu;
+	u64 exec_control = vmcs_config.cpu_based_3rd_exec_ctrl;
+
+	if (!enable_ipiv || !kvm_vcpu_apicv_active(vcpu))
+		exec_control &= ~TERTIARY_EXEC_IPI_VIRT;
+
+	return exec_control;
 }
 
 /*
@@ -4367,6 +4390,9 @@ static u32 vmx_secondary_exec_control(struct vcpu_vmx *vmx)
  */
 static void init_vmcs(struct vcpu_vmx *vmx)
 {
+	struct kvm_vcpu *vcpu = &vmx->vcpu;
+	u64 *pid_table = to_kvm_vmx(vcpu->kvm)->pid_table;
+
 	if (nested)
 		nested_vmx_set_vmcs_shadowing_bitmap();
 
@@ -4396,6 +4422,13 @@ static void init_vmcs(struct vcpu_vmx *vmx)
 
 		vmcs_write16(POSTED_INTR_NV, POSTED_INTR_VECTOR);
 		vmcs_write64(POSTED_INTR_DESC_ADDR, __pa((&vmx->pi_desc)));
+
+		if (enable_ipiv) {
+			pid_table[vcpu->vcpu_id] = __pa(&vmx->pi_desc) |
+						PID_TABLE_ENTRY_VALID;
+			vmcs_write64(PID_POINTER_TABLE, __pa(pid_table));
+			vmcs_write16(LAST_PID_POINTER_INDEX, KVM_MAX_VCPU_ID);
+		}
 	}
 
 	if (!kvm_pause_in_guest(vmx->vcpu.kvm)) {
@@ -6996,6 +7029,18 @@ static int vmx_vm_init(struct kvm *kvm)
 			break;
 		}
 	}
+
+	if (enable_ipiv) {
+		struct page *pages;
+
+		pages = alloc_pages(GFP_KERNEL | __GFP_ZERO, PID_TABLE_ORDER);
+		if (!pages)
+			return -ENOMEM;
+
+		to_kvm_vmx(kvm)->pid_table = (void *)page_address(pages);
+		to_kvm_vmx(kvm)->pid_last_index = KVM_MAX_VCPU_ID;
+	}
+
 	return 0;
 }
 
@@ -7606,6 +7651,14 @@ static bool vmx_check_apicv_inhibit_reasons(ulong bit)
 	return supported & BIT(bit);
 }
 
+static void vmx_vm_destroy(struct kvm *kvm)
+{
+	struct kvm_vmx *kvm_vmx = to_kvm_vmx(kvm);
+
+	if (kvm_vmx->pid_table)
+		free_pages((unsigned long)kvm_vmx->pid_table, PID_TABLE_ORDER);
+}
+
 static struct kvm_x86_ops vmx_x86_ops __initdata = {
 	.hardware_unsetup = hardware_unsetup,
 
@@ -7616,6 +7669,7 @@ static struct kvm_x86_ops vmx_x86_ops __initdata = {
 
 	.vm_size = sizeof(struct kvm_vmx),
 	.vm_init = vmx_vm_init,
+	.vm_destroy = vmx_vm_destroy,
 
 	.vcpu_create = vmx_create_vcpu,
 	.vcpu_free = vmx_free_vcpu,
@@ -7854,6 +7908,9 @@ static __init int hardware_setup(void)
 		enable_apicv = 0;
 		vmx_x86_ops.sync_pir_to_irr = NULL;
 	}
+
+	if (!enable_apicv || !cpu_has_vmx_ipiv())
+		enable_ipiv = 0;
 
 	if (cpu_has_vmx_tsc_scaling()) {
 		kvm_has_tsc_control = true;
