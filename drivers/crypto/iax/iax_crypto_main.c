@@ -36,24 +36,40 @@ module_param_named(iax_verify_compress, iax_verify_compress, bool, 0644);
 MODULE_PARM_DESC(iax_verify_compress,
 		 "Verify IAX compression (value = 1) or not (value = 0)");
 
-struct iax_wq {
-	struct list_head	list;
-	struct idxd_wq		*wq;
-
-	struct iax_device	*iax_device;
-};
-
-/* Representation of IAX device with wqs, populated by probe */
-struct iax_device {
-	struct list_head		list;
-	struct idxd_device		*idxd;
-
-	int				n_wq;
-	struct list_head		wqs;
-};
-
 static LIST_HEAD(iax_devices);
 static DEFINE_SPINLOCK(iax_devices_lock);
+
+int wq_stats_show(struct seq_file *m, void *v)
+{
+	struct iax_device *iax_device;
+
+	spin_lock(&iax_devices_lock);
+
+	global_stats_show(m);
+
+	list_for_each_entry(iax_device, &iax_devices, list)
+		device_stats_show(m, iax_device);
+
+	spin_unlock(&iax_devices_lock);
+
+	return 0;
+}
+
+int iax_crypto_stats_reset(void *data, u64 value)
+{
+	struct iax_device *iax_device;
+
+	reset_iax_crypto_stats();
+
+	spin_lock(&iax_devices_lock);
+
+	list_for_each_entry(iax_device, &iax_devices, list)
+		reset_device_stats(iax_device);
+
+	spin_unlock(&iax_devices_lock);
+
+	return 0;
+}
 
 static struct iax_device *iax_device_alloc(void)
 {
@@ -72,8 +88,10 @@ static void iax_device_free(struct iax_device *iax_device)
 {
 	struct iax_wq *iax_wq, *next;
 
-	list_for_each_entry_safe(iax_wq, next, &iax_device->wqs, list)
+	list_for_each_entry_safe(iax_wq, next, &iax_device->wqs, list) {
 		list_del(&iax_wq->list);
+		kfree(iax_wq); // zzzz do this in original code too
+	}
 
 	kfree(iax_device);
 }
@@ -416,6 +434,7 @@ static inline int check_completion(struct iax_completion_record *comp,
 			ret = -ETIMEDOUT;
 			pr_warn("%s: %s timed out, size=0x%x\n",
 				__func__, op_str, comp->output_size);
+			update_completion_timeout_errs();
 			goto out;
 		}
 
@@ -424,6 +443,7 @@ static inline int check_completion(struct iax_completion_record *comp,
 		    compress == true) {
 			ret = -E2BIG;
 			pr_debug("%s: compressed size > uncompressed size, not compressing, size=0x%x\n", __func__, comp->output_size);
+			update_completion_comp_buf_overflow_errs();
 			goto out;
 		}
 
@@ -431,6 +451,8 @@ static inline int check_completion(struct iax_completion_record *comp,
 		pr_err("%s: iax %s status=0x%x, error=0x%x, size=0x%x\n",
 		       __func__, op_str, ret, comp->error_code, comp->output_size);
 		print_hex_dump(KERN_INFO, "cmp-rec: ", DUMP_PREFIX_OFFSET, 8, 1, comp, 64, 0);
+		update_completion_einval_errs();
+
 		goto out;
 	}
 out:
@@ -499,6 +521,12 @@ static int iax_compress(struct crypto_tfm *tfm,
 		goto out;
 
 	compression_crc = idxd_desc->iax_completion->crc;
+
+	/* Update stats */
+	update_total_comp_calls();
+	update_total_comp_bytes_out(*dlen);
+	update_wq_comp_calls(wq);
+	update_wq_comp_bytes(wq, *dlen);
 
 	idxd_desc = idxd_alloc_desc(wq, IDXD_OP_BLOCK);
 	if (IS_ERR(idxd_desc)) {
@@ -606,6 +634,12 @@ static int iax_decompress(struct crypto_tfm *tfm,
 	*dlen = idxd_desc->iax_completion->output_size;
 
 	idxd_free_desc(wq, idxd_desc);
+
+	/* Update stats */
+	update_total_decomp_calls();
+	update_total_decomp_bytes_in(slen);
+	update_wq_decomp_calls(wq);
+	update_wq_decomp_bytes(wq, slen);
 out:
 	return ret;
 err:
@@ -619,12 +653,15 @@ static int iax_comp_compress(struct crypto_tfm *tfm,
 			     const u8 *src, unsigned int slen,
 			     u8 *dst, unsigned int *dlen)
 {
+	u64 start_time_ns;
 	int ret;
 
 	pr_debug("%s: src %p, slen %d, dst %p, dlen %u\n",
 		 __func__, src, slen, dst, *dlen);
 
+	start_time_ns = ktime_get_ns();
 	ret = iax_compress(tfm, src, slen, dst, dlen);
+	update_max_comp_delay_ns(start_time_ns);
 	if (ret != 0)
 		pr_warn("synchronous compress failed ret=%d\n", ret);
 
@@ -635,12 +672,15 @@ static int iax_comp_decompress(struct crypto_tfm *tfm,
 			       const u8 *src, unsigned int slen,
 			       u8 *dst, unsigned int *dlen)
 {
+	u64 start_time_ns;
 	int ret;
 
 	pr_debug("%s: src %p, slen %d, dst %p, dlen %u\n",
 		 __func__, src, slen, dst, *dlen);
 
+	start_time_ns = ktime_get_ns();
 	ret = iax_decompress(tfm, src, slen, dst, dlen);
+	update_max_decomp_delay_ns(start_time_ns);
 	if (ret != 0)
 		pr_warn("synchronous decompress failed ret=%d\n", ret);
 
@@ -664,6 +704,7 @@ static struct crypto_alg iax_comp_deflate = {
 static int iax_comp_acompress(struct acomp_req *req)
 {
 	struct crypto_tfm *tfm = req->base.tfm;
+	u64 start_time_ns;
 	void *src, *dst;
 	int ret;
 
@@ -674,7 +715,9 @@ static int iax_comp_acompress(struct acomp_req *req)
 		 __func__, src, req->src->offset, req->slen,
 		 dst, req->dst->offset, req->dlen);
 
+	start_time_ns = ktime_get_ns();
 	ret = iax_compress(tfm, (const u8 *)src, req->slen, (u8 *)dst, &req->dlen);
+	update_max_acomp_delay_ns(start_time_ns);
 
 	kunmap_atomic(src);
 	kunmap_atomic(dst);
@@ -688,6 +731,7 @@ static int iax_comp_acompress(struct acomp_req *req)
 static int iax_comp_adecompress(struct acomp_req *req)
 {
 	struct crypto_tfm *tfm = req->base.tfm;
+	u64 start_time_ns;
 	void *src, *dst;
 	int ret;
 
@@ -698,7 +742,9 @@ static int iax_comp_adecompress(struct acomp_req *req)
 		 __func__, src, req->src->offset, req->slen,
 		 dst, req->dst->offset, req->dlen);
 
+	start_time_ns = ktime_get_ns();
 	ret = iax_decompress(tfm, (const u8 *)src, req->slen, (u8 *)dst, &req->dlen);
+	update_max_decomp_delay_ns(start_time_ns);
 
 	kunmap_atomic(src);
 	kunmap_atomic(dst);
@@ -909,6 +955,9 @@ static int __init iax_crypto_init_module(void)
 		goto err_crypto_register;
 	}
 
+	if (iax_crypto_debugfs_init())
+		pr_warn("debugfs init failed, stats not available\n");
+
 	pr_info("%s: initialized\n", __func__);
 out:
 	return ret;
@@ -923,6 +972,7 @@ err_driver_register:
 
 static void __exit iax_crypto_cleanup_module(void)
 {
+	iax_crypto_debugfs_cleanup();
 	idxd_driver_unregister(&iax_crypto_driver);
 	iax_unregister_compression_device();
 	free_percpu(wq_table);
