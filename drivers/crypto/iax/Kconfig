@@ -6,3 +6,10 @@ config CRYPTO_DEV_IAX_CRYPTO
 	help
 	  This driver supports Intel analytics accelerator hardware.
 	  The module will be called iax_crypto.
+
+config CRYPTO_DEV_IAX_CRYPTO_STATS
+	bool "IAX Crypto Stats"
+	depends on CRYPTO_DEV_IAX_CRYPTO
+	default n
+	help
+	  Enable IAX crypto stats
