@@ -1,0 +1,8 @@
+config CRYPTO_DEV_IAX_CRYPTO
+	tristate "IAX Crypto Driver"
+	depends on CRYPTO_DEFLATE
+	depends on INTEL_IDXD
+	default n
+	help
+	  This driver supports Intel analytics accelerator hardware.
+	  The module will be called iax_crypto.
