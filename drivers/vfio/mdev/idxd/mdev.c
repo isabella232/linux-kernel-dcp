@@ -579,6 +579,8 @@ static int vidxd_resubmit_pending_descs (struct vdcm_idxd *vidxd,
 			*offset += sizeof(el);
 
 			portal = wq->portal;
+			portal += (el.portal_id << 6);
+
 			pr_info("submitting a desc to WQ %d:%d ded %d\n",
 					i, wq->id, wq_dedicated(wq));
 			if (wq_dedicated(wq)) {
@@ -597,6 +599,8 @@ static int vidxd_resubmit_pending_descs (struct vdcm_idxd *vidxd,
 					continue;
 				}
 				hw->pasid = hpasid;
+				/* FIXME: Allow enqcmds to retry a few times
+				 * before failing */
 				rc = enqcmds(portal, el.work_desc);
 				if (rc < 0) {
 					pr_info("%s: enqcmds failed\n", __func__);

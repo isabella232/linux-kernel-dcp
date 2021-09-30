@@ -50,6 +50,7 @@ struct ioasid_mm_entry {
 
 struct idxd_wq_desc_elem {
 	enum idxd_portal_prot portal_prot;
+	u8   portal_id;
 	u8  work_desc[IDXD_DESC_SIZE];
 	struct list_head link;
 };
