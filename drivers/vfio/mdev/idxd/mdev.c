@@ -219,11 +219,18 @@ static inline void reset_vmmio(struct vdcm_idxd *vidxd)
 	memset(&vidxd->bar0, 0, VIDXD_MAX_MMIO_SPACE_SZ);
 }
 
+static inline void vidxd_vwq_init(struct vdcm_idxd *vidxd)
+{
+	INIT_LIST_HEAD(&vidxd->vwq.head);
+	vidxd->vwq.ndescs = 0;
+
+	memset(vidxd->vwq.portals, 0,
+		VIDXD_MAX_PORTALS * sizeof(struct idxd_wq_portal));
+}
+
 static void idxd_vdcm_init(struct vdcm_idxd *vidxd)
 {
 	struct idxd_wq *wq = vidxd->wq;
-
-	INIT_LIST_HEAD(&vidxd->vwq.head);
 
 	reset_vconfig(vidxd);
 	reset_vmmio(vidxd);
@@ -233,6 +240,7 @@ static void idxd_vdcm_init(struct vdcm_idxd *vidxd)
 
 	vidxd_mmio_init(vidxd);
 
+	vidxd_vwq_init(vidxd);
 	if (wq_dedicated(wq) && wq->state == IDXD_WQ_ENABLED) {
 		idxd_wq_disable(wq, false, NULL);
 		wq->state = IDXD_WQ_LOCKED;
@@ -886,6 +894,7 @@ static struct vdcm_idxd *vdcm_vidxd_create(struct idxd_device *idxd, struct mdev
 
 	mdev_set_iommu_fault_data(mdev, &vidxd->vfio_pdev);
 
+	mutex_init(&vidxd->mig_submit_lock);
 	vidxd->vfio_pdev.migops = &vidxd_migops;
 	rc = vfio_pci_migration_init(&vidxd->vfio_pdev, VIDXD_STATE_BUFFER_SIZE);
 	if (rc)
