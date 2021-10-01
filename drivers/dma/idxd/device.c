@@ -1275,6 +1275,7 @@ err_map_portal:
 err:
 	return rc;
 }
+EXPORT_SYMBOL_GPL(__drv_enable_wq);
 
 int drv_enable_wq(struct idxd_wq *wq)
 {
@@ -1304,6 +1305,7 @@ void __drv_disable_wq(struct idxd_wq *wq)
 
 	wq->client_count = 0;
 }
+EXPORT_SYMBOL_GPL(__drv_disable_wq);
 
 void drv_disable_wq(struct idxd_wq *wq)
 {
