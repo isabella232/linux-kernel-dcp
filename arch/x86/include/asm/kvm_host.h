@@ -1932,6 +1932,7 @@ static inline int kvm_cpu_get_apicid(int mps_cpu)
 	(*(type *)((buf) + (offset) - 0x7e00))
 
 int kvm_cpu_dirty_log_size(void);
+extern int kvm_set_guest_paused(struct kvm_vcpu *vcpu);
 
 int alloc_all_memslots_rmaps(struct kvm *kvm);
 
