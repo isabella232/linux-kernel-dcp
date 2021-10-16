@@ -259,11 +259,31 @@ void fpu_free_guest_fpstate(struct fpu_guest *gfpu)
 }
 EXPORT_SYMBOL_GPL(fpu_free_guest_fpstate);
 
+static int fpu_guest_realloc_fpstate(struct fpu_guest *guest_fpu,
+				     bool enter_guest)
+{
+	/*
+	 * Reallocation requests can only be handled when
+	 * switching from guest to host mode.
+	 */
+	if (WARN_ON_ONCE(enter_guest || !IS_ENABLED(CONFIG_X86_64))) {
+		guest_fpu->realloc_request = 0;
+		return -EUNATCH;
+	}
+	return xfd_enable_guest_features(guest_fpu);
+}
+
 int fpu_swap_kvm_fpstate(struct fpu_guest *guest_fpu, bool enter_guest)
 {
-	struct fpstate *guest_fps = guest_fpu->fpstate;
+	struct fpstate *guest_fps, *cur_fps;
 	struct fpu *fpu = &current->thread.fpu;
-	struct fpstate *cur_fps = fpu->fpstate;
+	int ret;
+
+	if (unlikely(guest_fpu->realloc_request))
+		ret = fpu_guest_realloc_fpstate(guest_fpu, enter_guest);
+
+	guest_fps = guest_fpu->fpstate;
+	cur_fps = fpu->fpstate;
 
 	fpregs_lock();
 	if (!cur_fps->is_confidential && !test_thread_flag(TIF_NEED_FPU_LOAD))
