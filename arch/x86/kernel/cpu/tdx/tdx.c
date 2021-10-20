@@ -9,6 +9,8 @@
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/cpu.h>
+#include <linux/platform_device.h>
+#include <linux/firmware.h>
 
 #include <asm/irq_vectors.h>
 #include <asm/trace/seam.h>
@@ -32,6 +34,9 @@ enum TDX_HOST_OPTION {
 	TDX_HOST_OFF,
 	TDX_HOST_ON,
 };
+
+/* Fake device for request_firmware_direct */
+static struct platform_device *tdx_module_dev;
 
 static enum TDX_HOST_OPTION tdx_host __initdata;
 
@@ -1437,6 +1442,10 @@ static int __init tdx_module_sysfs_init(void)
 	ret = tdx_sysfs_init();
 	if (ret)
 		return ret;
+
+	tdx_module_dev = platform_device_register_simple("tdx_module", -1, NULL, 0);
+	if (IS_ERR(tdx_module_dev))
+		return PTR_ERR(tdx_module_dev);
 
 	tdx_module_kobj = kobject_create_and_add("tdx_module", tdx_kobj);
 	if (!tdx_module_kobj) {
