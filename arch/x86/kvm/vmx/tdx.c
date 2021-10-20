@@ -52,6 +52,40 @@ static void tdx_keyid_free(int keyid)
 /* Capabilities of KVM + TDX-SEAM. */
 struct tdx_capabilities tdx_caps;
 
+/* Retrieve TDX module capabilities */
+static int tdx_get_caps(void)
+{
+	const struct tdsysinfo_struct *tdsysinfo = tdx_get_sysinfo();
+
+	if (tdsysinfo == NULL) {
+		WARN_ON_ONCE(boot_cpu_has(X86_FEATURE_TDX));
+		return -ENODEV;
+	}
+
+	tdx_caps.tdcs_nr_pages = tdsysinfo->tdcs_base_size / PAGE_SIZE;
+	if (tdx_caps.tdcs_nr_pages != TDX_NR_TDCX_PAGES)
+		return -EIO;
+
+	tdx_caps.tdvpx_nr_pages = tdsysinfo->tdvps_base_size / PAGE_SIZE - 1;
+	if (tdx_caps.tdvpx_nr_pages != TDX_NR_TDVPX_PAGES)
+		return -EIO;
+
+	tdx_caps.attrs_fixed0 = tdsysinfo->attributes_fixed0;
+	tdx_caps.attrs_fixed1 = tdsysinfo->attributes_fixed1;
+	tdx_caps.xfam_fixed0 =	tdsysinfo->xfam_fixed0;
+	tdx_caps.xfam_fixed1 = tdsysinfo->xfam_fixed1;
+
+	tdx_caps.nr_cpuid_configs = tdsysinfo->num_cpuid_config;
+	if (tdx_caps.nr_cpuid_configs > TDX_MAX_NR_CPUID_CONFIGS)
+		return -EIO;
+
+	if (!memcpy(tdx_caps.cpuid_configs, tdsysinfo->cpuid_configs,
+		    tdsysinfo->num_cpuid_config * sizeof(struct tdx_cpuid_config)))
+		return -EIO;
+
+	return 0;
+}
+
 static DEFINE_MUTEX(tdx_lock);
 static struct mutex *tdx_mng_key_config_lock;
 
@@ -3117,40 +3151,16 @@ static int __init tdx_hardware_setup(struct kvm_x86_ops *x86_ops)
 {
 	int i, max_pkgs;
 	u32 max_pa;
-	const struct tdsysinfo_struct *tdsysinfo = tdx_get_sysinfo();
 
 	if (!enable_ept) {
 		pr_warn("Cannot enable TDX with EPT disabled\n");
 		return -EINVAL;
 	}
 
-	if (tdsysinfo == NULL) {
-		WARN_ON_ONCE(boot_cpu_has(X86_FEATURE_TDX));
-		return -ENODEV;
-	}
+	if (tdx_get_caps())
+		return -EIO;
 
 	if (WARN_ON_ONCE(x86_ops->tlb_remote_flush))
-		return -EIO;
-
-	tdx_caps.tdcs_nr_pages = tdsysinfo->tdcs_base_size / PAGE_SIZE;
-	if (tdx_caps.tdcs_nr_pages != TDX_NR_TDCX_PAGES)
-		return -EIO;
-
-	tdx_caps.tdvpx_nr_pages = tdsysinfo->tdvps_base_size / PAGE_SIZE - 1;
-	if (tdx_caps.tdvpx_nr_pages != TDX_NR_TDVPX_PAGES)
-		return -EIO;
-
-	tdx_caps.attrs_fixed0 = tdsysinfo->attributes_fixed0;
-	tdx_caps.attrs_fixed1 = tdsysinfo->attributes_fixed1;
-	tdx_caps.xfam_fixed0 =	tdsysinfo->xfam_fixed0;
-	tdx_caps.xfam_fixed1 = tdsysinfo->xfam_fixed1;
-
-	tdx_caps.nr_cpuid_configs = tdsysinfo->num_cpuid_config;
-	if (tdx_caps.nr_cpuid_configs > TDX_MAX_NR_CPUID_CONFIGS)
-		return -EIO;
-
-	if (!memcpy(tdx_caps.cpuid_configs, tdsysinfo->cpuid_configs,
-		    tdsysinfo->num_cpuid_config * sizeof(struct tdx_cpuid_config)))
 		return -EIO;
 
 	x86_ops->cache_gprs = tdx_cache_gprs;
