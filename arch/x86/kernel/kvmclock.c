@@ -196,6 +196,9 @@ static void kvm_setup_secondary_clock(void)
 
 void kvmclock_disable(void)
 {
+	if (cc_platform_has(CC_ATTR_GUEST_SECURE_TIME))
+		return;
+
 	native_write_msr(msr_kvm_system_time, 0, 0);
 }
 
