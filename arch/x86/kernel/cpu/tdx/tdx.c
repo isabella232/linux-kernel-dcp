@@ -1510,6 +1510,53 @@ unlock:
 	return ret;
 }
 
+#define TDX_MODULE_RELOAD	1
+
+static ssize_t tdx_module_reload_store(struct kobject *kobj,
+				       struct kobj_attribute *attr,
+				       const char *buf, size_t size)
+{
+	unsigned long val;
+	ssize_t ret;
+
+	ret = kstrtoul(buf, 0, &val);
+	if (ret)
+		return ret;
+
+	mutex_lock(&tdx_mutex);
+	ret = seam_vmxon_on_each_cpu();
+	if (ret)
+		goto unlock;
+
+	switch (val) {
+	case TDX_MODULE_RELOAD:
+		ret = tdx_module_reload();
+		break;
+
+	default:
+		ret = -EINVAL;
+	}
+	seam_vmxoff_on_each_cpu();
+unlock:
+	mutex_unlock(&tdx_mutex);
+
+	if (!ret)
+		ret = size;
+
+	return ret;
+}
+
+static struct kobj_attribute tdx_attr_module_reload = __ATTR_WO(tdx_module_reload);
+
+static struct attribute *tdx_module_ops[] = {
+	&tdx_attr_module_reload.attr,
+	NULL,
+};
+
+static const struct attribute_group tdx_module_op_group = {
+	.attrs = tdx_module_ops,
+};
+
 static int __init tdx_module_sysfs_init(void)
 {
 	int ret = 0;
@@ -1545,10 +1592,19 @@ static int __init tdx_module_sysfs_init(void)
 			       ret);
 			goto err;
 		}
+
+		ret = sysfs_create_group(tdx_module_kobj, &tdx_module_op_group);
+		if (ret) {
+			pr_err("Sysfs exporting tdx module operations failed %d\n",
+			       ret);
+			goto err_op;
+		}
 	}
 
 	return 0;
 
+err_op:
+	sysfs_remove_group(tdx_module_kobj, &tdx_module_attr_group);
 err:
 	sysfs_remove_group(tdx_module_kobj, &tdx_module_state_group);
 err_kobj:
