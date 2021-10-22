@@ -464,8 +464,9 @@ int intel_svm_bind_gpasid(struct iommu_domain *domain,
 	if (!dev_is_pci(dev))
 		return -ENOTSUPP;
 
-	/* VT-d supports devices with full 20 bit PASIDs only */
-	if (pci_max_pasids(to_pci_dev(dev)) != PASID_MAX)
+	/* Except gIOVA binding, VT-d supports devices with full 20 bit PASIDs only */
+	if ((data->flags & IOMMU_SVA_HPASID_DEF) == 0 &&
+	    pci_max_pasids(to_pci_dev(dev)) != PASID_MAX)
 		return -EINVAL;
 
 	dmar_domain = to_dmar_domain(domain);
@@ -551,12 +552,16 @@ int intel_svm_bind_gpasid(struct iommu_domain *domain,
 	if (iommu_dev_feature_enabled(dev, IOMMU_DEV_FEAT_AUX))
 		sdev->users = 1;
 
-	/* Set up device context entry for PASID if not enabled already */
-	ret = intel_iommu_enable_pasid(iommu, sdev->dev);
-	if (ret) {
-		dev_err_ratelimited(dev, "Failed to enable PASID capability\n");
-		kfree(sdev);
-		goto out;
+	/* For legacy device passthr giova usage, do not enable pasid */
+	if ((data->flags & IOMMU_SVA_HPASID_DEF) == 0 &&
+	    pci_max_pasids(to_pci_dev(dev)) == PASID_MAX) {
+		/* Set up device context entry for PASID if not enabled already */
+		ret = intel_iommu_enable_pasid(iommu, sdev->dev);
+		if (ret) {
+			dev_err_ratelimited(dev, "Failed to enable PASID capability\n");
+			kfree(sdev);
+			goto out;
+		}
 	}
 
 	/*
