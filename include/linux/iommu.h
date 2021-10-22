@@ -234,6 +234,8 @@ struct iommu_iotlb_gather {
  *		- IOMMU_DOMAIN_IDENTITY: must use an identity domain
  *		- IOMMU_DOMAIN_DMA: must use a dma domain
  *		- 0: use the default setting
+ * @enable_pasid_dma: Set up PASID for in-kernel DMA
+ * @disable_pasid_dma: Disable in-kernel DMA with PASID on the device
  * @pgsize_bitmap: bitmap of all possible supported page sizes
  * @owner: Driver module providing these ops
  * @sva_suspend_pasid: stop activities related to a pasid but maintain the bond
@@ -333,6 +335,8 @@ struct iommu_ops {
 			unsigned long *bitmap, unsigned long base_iova,
 			unsigned long bitmap_pgshift);
 
+	int (*enable_pasid_dma)(struct device *dev, u32 pasid);
+	int (*disable_pasid_dma)(struct device *dev);
 	unsigned long pgsize_bitmap;
 	struct module *owner;
 };
