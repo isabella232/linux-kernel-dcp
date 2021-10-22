@@ -171,6 +171,8 @@ static inline unsigned long virt_to_dma_pfn(void *p)
 	return page_to_dma_pfn(virt_to_page(p));
 }
 
+static int dev_satc_state(struct pci_dev *dev);
+
 /* global iommu list, set NULL for ignored DMAR units */
 static struct intel_iommu **g_iommus;
 
@@ -2878,6 +2880,13 @@ static bool device_is_rmrr_locked(struct device *dev)
 	return true;
 }
 
+static bool device_has_satc(struct device *dev)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+
+	return dev_satc_state(pdev) >= 0;
+}
+
 /*
  * Return the required default domain type for a specific device.
  *
@@ -2899,6 +2908,11 @@ static int device_def_domain_type(struct device *dev)
 
 		if ((iommu_identity_mapping & IDENTMAP_GFX) && IS_GFX_DEVICE(pdev))
 			return IOMMU_DOMAIN_IDENTITY;
+
+		if (device_has_satc(dev)) {
+			dev_info(dev, "Use identity domain for SATC devices");
+			return IOMMU_DOMAIN_IDENTITY;
+		}
 	}
 
 	return 0;
