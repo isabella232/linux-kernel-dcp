@@ -442,7 +442,7 @@ int platform_msi_domain_alloc(struct irq_domain *domain, unsigned int virq,
 
 static void device_msi_free_msi_entries(struct device *dev)
 {
-	struct list_head *msi_list = dev_to_msi_list(dev);
+	struct list_head *msi_list = dev_to_dev_msi_list(dev);
 	struct msi_desc *entry, *tmp;
 
 	list_for_each_entry_safe(entry, tmp, msi_list, list) {
@@ -463,6 +463,25 @@ static void device_msi_free_irqs(struct irq_domain *domain, struct device *dev)
 	device_msi_free_msi_entries(dev);
 }
 
+static void device_msi_free_irq(struct irq_domain *domain, struct device *dev, unsigned int irq)
+{
+	struct msi_desc *entry, *tmp;
+	struct msi_domain_info *info = domain->host_data;
+	struct msi_domain_ops *ops = info->ops;
+
+	if (ops->msi_free_irq)
+		ops->msi_free_irq(domain, dev, irq);
+
+	list_for_each_entry_safe(entry, tmp, dev_to_dev_msi_list(dev), list) {
+		if (entry->irq == irq) {
+			list_del(&entry->list);
+			free_msi_entry(entry);
+		}
+	}
+
+	__msi_domain_free_irq(domain, dev, irq);
+}
+
 /**
  * device_msi_alloc_irqs - Allocate MSI interrupts for a device
  * @dev:	Pointer to the device
@@ -475,12 +494,14 @@ static int device_msi_alloc_irqs(struct irq_domain *domain, struct device *dev, 
 {
 	int i, ret = -ENOMEM;
 
+	dev->dev_msi_last_list = dev->dev_msi_list.prev;
+
 	for (i = 0; i < nvec; i++) {
 		struct msi_desc *entry = alloc_msi_entry(dev, 1, NULL);
 
 		if (!entry)
 			goto fail;
-		list_add_tail(&entry->list, dev_to_msi_list(dev));
+		list_add_tail(&entry->list, dev_to_dev_msi_list(dev));
 	}
 
 	ret = __msi_domain_alloc_irqs(domain, dev, nvec);
@@ -491,12 +512,36 @@ fail:
 	return ret;
 }
 
+int device_msi_add_irq(struct irq_domain *domain, struct device *dev)
+{
+	struct msi_desc *entry;
+
+	dev->dev_msi_last_list = dev->dev_msi_list.prev;
+
+	entry = alloc_msi_entry(dev, 1, NULL);
+	if (!entry)
+		goto fail;
+	list_add_tail(&entry->list, dev_to_dev_msi_list(dev));
+
+	entry = list_last_entry(dev_to_dev_msi_list(dev), struct msi_desc, list);
+	if (!__msi_domain_alloc_irqs(domain, dev, 1))
+		return entry->device_msi.hwirq;
+
+	list_del(&entry->list);
+fail:
+	free_msi_entry(entry);
+	return -ENOMEM;
+}
+EXPORT_SYMBOL_GPL(device_msi_add_irq);
+
 static void device_msi_update_dom_ops(struct msi_domain_info *info)
 {
 	if (!info->ops->domain_alloc_irqs)
 		info->ops->domain_alloc_irqs = device_msi_alloc_irqs;
 	if (!info->ops->domain_free_irqs)
 		info->ops->domain_free_irqs = device_msi_free_irqs;
+	if (!info->ops->domain_free_irq)
+		info->ops->domain_free_irq = device_msi_free_irq;
 	if (!info->ops->msi_prepare)
 		info->ops->msi_prepare = arch_msi_prepare;
 }

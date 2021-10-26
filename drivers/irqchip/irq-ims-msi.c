@@ -76,8 +76,25 @@ static void ims_array_free_msi_store(struct irq_domain *domain,
 	struct ims_array_data *ims = info->data;
 	struct msi_desc *entry;
 
-	for_each_msi_entry(entry, dev) {
+	for_each_dev_msi_entry(entry, dev) {
 		if (entry->device_msi.priv_iomem) {
+			clear_bit(entry->device_msi.hwirq, ims->map);
+			ims_array_reset_slot(entry->device_msi.priv_iomem);
+			entry->device_msi.priv_iomem = NULL;
+			entry->device_msi.hwirq = 0;
+		}
+	}
+}
+
+static void ims_array_free_msi_irq(struct irq_domain *domain,
+				   struct device *dev, unsigned int irq)
+{
+	struct msi_domain_info *info = domain->host_data;
+	struct ims_array_data *ims = info->data;
+	struct msi_desc *entry;
+
+	for_each_dev_msi_entry(entry, dev) {
+		if (entry->irq == irq && entry->device_msi.priv_iomem) {
 			clear_bit(entry->device_msi.hwirq, ims->map);
 			ims_array_reset_slot(entry->device_msi.priv_iomem);
 			entry->device_msi.priv_iomem = NULL;
@@ -93,7 +110,7 @@ static int ims_array_alloc_msi_store(struct irq_domain *domain,
 	struct ims_array_data *ims = info->data;
 	struct msi_desc *entry;
 
-	for_each_msi_entry(entry, dev) {
+	for_each_new_dev_msi_entry(entry, dev) {
 		unsigned int idx;
 
 		idx = find_first_zero_bit(ims->map, ims->info.max_slots);
@@ -126,6 +143,7 @@ static const struct ims_array_domain_template ims_array_domain_template = {
 	.ops = {
 		.msi_alloc_store	= ims_array_alloc_msi_store,
 		.msi_free_store		= ims_array_free_msi_store,
+		.msi_free_irq		= ims_array_free_msi_irq,
 		.set_desc               = ims_set_desc,
 	},
 	.info = {

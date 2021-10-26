@@ -512,6 +512,8 @@ struct device {
 	struct list_head        *msi_last_list;
 	raw_spinlock_t		msi_lock;
 	struct list_head	msi_list;
+	struct list_head	dev_msi_list;
+	struct list_head	*dev_msi_last_list;
 #endif
 #ifdef CONFIG_DMA_OPS
 	const struct dma_map_ops *dma_ops;
