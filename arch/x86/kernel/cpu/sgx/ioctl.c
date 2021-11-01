@@ -149,6 +149,7 @@ static long sgx_ioc_enclave_create(struct sgx_encl *encl, void __user *arg)
 	struct sgx_enclave_create create_arg;
 	void *secs;
 	int ret;
+	int srcu_idx;
 
 	if (test_bit(SGX_ENCL_CREATED, &encl->flags))
 		return -EINVAL;
@@ -162,8 +163,17 @@ static long sgx_ioc_enclave_create(struct sgx_encl *encl, void __user *arg)
 
 	if (copy_from_user(secs, (void __user *)create_arg.src, PAGE_SIZE))
 		ret = -EFAULT;
-	else
+	else {
+		srcu_idx = srcu_read_lock(&sgx_lock_epc_srcu);
+		if (sgx_epc_is_locked()) {
+			srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
+			return -EBUSY;
+		}
+
 		ret = sgx_encl_create(encl, secs);
+
+		srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
+	}
 
 	kfree(secs);
 	return ret;
@@ -425,6 +435,7 @@ static long sgx_ioc_enclave_add_pages(struct sgx_encl *encl, void __user *arg)
 	struct sgx_secinfo secinfo;
 	unsigned long c;
 	int ret;
+	int srcu_idx;
 
 	if (!test_bit(SGX_ENCL_CREATED, &encl->flags) ||
 	    test_bit(SGX_ENCL_INITIALIZED, &encl->flags))
@@ -461,8 +472,18 @@ static long sgx_ioc_enclave_add_pages(struct sgx_encl *encl, void __user *arg)
 		if (need_resched())
 			cond_resched();
 
+		srcu_idx = srcu_read_lock(&sgx_lock_epc_srcu);
+		if (sgx_epc_is_locked()) {
+			ret = -EBUSY;
+			srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
+			break;
+		}
+
 		ret = sgx_encl_add_page(encl, add_arg.src + c, add_arg.offset + c,
 					&secinfo, add_arg.flags);
+
+		srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
+
 		if (ret)
 			break;
 	}
@@ -721,6 +742,7 @@ static long sgx_page_modp(struct sgx_encl *encl, struct sgx_page_modp *modp)
 	unsigned long c;
 	void *epc_virt;
 	int ret;
+	int srcu_idx;
 
 	secinfo_perm = modp->prot & SGX_SECINFO_PERMISSION_MASK;
 
@@ -737,6 +759,12 @@ static long sgx_page_modp(struct sgx_encl *encl, struct sgx_page_modp *modp)
 	vm_prot = calc_vm_prot_bits(vm_prot, 0);
 
 	for (c = 0 ; c < modp->length; c += PAGE_SIZE) {
+		srcu_idx = srcu_read_lock(&sgx_lock_epc_srcu);
+		if (sgx_epc_is_locked()) {
+			srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
+			return -EBUSY;
+		}
+
 		addr = encl->base + modp->offset + c;
 
 		sgx_direct_reclaim();
@@ -845,6 +873,7 @@ static long sgx_page_modp(struct sgx_encl *encl, struct sgx_page_modp *modp)
 
 		sgx_mark_page_reclaimable(entry->epc_page);
 		mutex_unlock(&encl->lock);
+		srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
 	}
 
 	ret = 0;
@@ -856,6 +885,7 @@ out_reclaim:
 	sgx_mark_page_reclaimable(entry->epc_page);
 out_unlock:
 	mutex_unlock(&encl->lock);
+	srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
 out:
 	modp->count = c;
 
@@ -948,6 +978,7 @@ static long sgx_page_modt(struct sgx_encl *encl, struct sgx_page_modt *modt)
 	unsigned long c;
 	void *epc_virt;
 	int ret;
+	int srcu_idx;
 
 	page_type = modt->type & SGX_PAGE_TYPE_MASK;
 
@@ -962,6 +993,12 @@ static long sgx_page_modt(struct sgx_encl *encl, struct sgx_page_modt *modt)
 	secinfo.flags = page_type << 8;
 
 	for (c = 0 ; c < modt->length; c += PAGE_SIZE) {
+		srcu_idx = srcu_read_lock(&sgx_lock_epc_srcu);
+		if (sgx_epc_is_locked()) {
+			srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
+			return -EBUSY;
+		}
+
 		addr = encl->base + modt->offset + c;
 
 		sgx_direct_reclaim();
@@ -1080,6 +1117,7 @@ static long sgx_page_modt(struct sgx_encl *encl, struct sgx_page_modt *modt)
 		entry->type = page_type;
 
 		mutex_unlock(&encl->lock);
+		srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
 	}
 
 	ret = 0;
@@ -1090,6 +1128,7 @@ out_entry_changed:
 	entry->vm_run_prot_bits = run_prot_restore;
 out_unlock:
 	mutex_unlock(&encl->lock);
+	srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
 out:
 	modt->count = c;
 
@@ -1184,11 +1223,18 @@ static long sgx_page_remove(struct sgx_encl *encl,
 	unsigned long c;
 	void *epc_virt;
 	int ret;
+	int srcu_idx;
 
 	memset(&secinfo, 0, sizeof(secinfo));
 	secinfo.flags = SGX_SECINFO_R | SGX_SECINFO_W | SGX_SECINFO_X;
 
 	for (c = 0 ; c < params->length; c += PAGE_SIZE) {
+		srcu_idx = srcu_read_lock(&sgx_lock_epc_srcu);
+		if (sgx_epc_is_locked()) {
+			srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
+			return -EBUSY;
+		}
+
 		addr = encl->base + params->offset + c;
 
 		sgx_direct_reclaim();
@@ -1244,6 +1290,7 @@ static long sgx_page_remove(struct sgx_encl *encl,
 		kfree(entry);
 
 		mutex_unlock(&encl->lock);
+		srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
 	}
 
 	ret = 0;
@@ -1251,6 +1298,7 @@ static long sgx_page_remove(struct sgx_encl *encl,
 
 out_unlock:
 	mutex_unlock(&encl->lock);
+	srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
 out:
 	params->count = c;
 
