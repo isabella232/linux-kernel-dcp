@@ -383,4 +383,12 @@ int sgx_virt_einit(void __user *sigstruct, void __user *token,
 int sgx_set_attribute(unsigned long *allowed_attributes,
 		      unsigned int attribute_fd);
 
+#ifdef CONFIG_X86_SGX
+void sgx_lock_epc(void);
+void sgx_unlock_epc(void);
+#else
+static inline void sgx_lock_epc(void) { }
+static inline void sgx_unlock_epc(void) { }
+#endif
+
 #endif /* _ASM_X86_SGX_H */
