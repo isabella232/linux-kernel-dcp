@@ -1736,6 +1736,18 @@ int xfd_enable_guest_features(struct fpu_guest *guest_fpu)
 	return __xfd_enable_feature(xfd_err, guest_fpu);
 }
 
+inline void xfd_update_state(struct fpstate *fpstate)
+{
+	if (fpu_state_size_dynamic()) {
+		u64 xfd = fpstate->xfd;
+
+		if (__this_cpu_read(xfd_state) != xfd) {
+			wrmsrl(MSR_IA32_XFD, xfd);
+			__this_cpu_write(xfd_state, xfd);
+		}
+	}
+}
+EXPORT_SYMBOL_GPL(xfd_update_state);
 #else /* CONFIG_X86_64 */
 static inline int xstate_request_perm(unsigned long idx, bool guest)
 {
