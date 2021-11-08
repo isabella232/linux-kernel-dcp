@@ -2038,18 +2038,28 @@ static bool vfio_iommu_has_sw_msi(struct list_head *group_resv_regions,
 static int vfio_mdev_attach_domain(struct device *dev, void *data)
 {
 	struct mdev_device *mdev = to_mdev_device(dev);
-	struct iommu_domain *domain = data;
+	struct iommu_domain *domain;
 	struct device *iommu_device;
+	int ret = -ENODEV;
+
+	/* Only single domain is allowed to attach to an mdev. */
+	domain = mdev_get_iommu_domain(mdev);
+	if (domain)
+		return -EINVAL;
+	domain = data;
 
 	iommu_device = mdev_get_iommu_device(mdev);
 	if (iommu_device) {
 		if (iommu_dev_feature_enabled(iommu_device, IOMMU_DEV_FEAT_AUX))
-			return iommu_aux_attach_device(domain, iommu_device);
+			ret = iommu_aux_attach_device(domain, iommu_device);
 		else
-			return iommu_attach_device(domain, iommu_device);
+			ret = iommu_attach_device(domain, iommu_device);
 	}
 
-	return -EINVAL;
+	if (!ret)
+		mdev_set_iommu_domain(mdev, domain);
+
+	return ret;
 }
 
 static int vfio_mdev_detach_domain(struct device *dev, void *data)
@@ -2065,6 +2075,8 @@ static int vfio_mdev_detach_domain(struct device *dev, void *data)
 		else
 			iommu_detach_device(domain, iommu_device);
 	}
+
+	mdev_set_iommu_domain(mdev, NULL);
 
 	return 0;
 }
