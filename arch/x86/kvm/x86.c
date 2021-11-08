@@ -10936,6 +10936,7 @@ void kvm_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
 	unsigned long old_cr0 = kvm_read_cr0(vcpu);
 	unsigned long new_cr0;
 	u32 eax, dummy;
+	struct kvm *kvm = vcpu->kvm;
 
 	kvm_lapic_reset(vcpu, init_event);
 
@@ -11031,9 +11032,11 @@ void kvm_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
 	else
 		new_cr0 |= X86_CR0_NW | X86_CR0_CD;
 
-	static_call(kvm_x86_set_cr0)(vcpu, new_cr0);
-	static_call(kvm_x86_set_cr4)(vcpu, 0);
-	static_call(kvm_x86_set_efer)(vcpu, 0);
+	if (kvm->arch.vm_type != KVM_X86_TDX_VM) {
+		static_call(kvm_x86_set_cr0)(vcpu, new_cr0);
+		static_call(kvm_x86_set_cr4)(vcpu, 0);
+		static_call(kvm_x86_set_efer)(vcpu, 0);
+	}
 	static_call(kvm_x86_update_exception_bitmap)(vcpu);
 
 	/*

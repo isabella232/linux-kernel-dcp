@@ -480,10 +480,6 @@ static void vt_get_cs_db_l_bits(struct kvm_vcpu *vcpu, int *db, int *l)
 
 static void vt_set_cr0(struct kvm_vcpu *vcpu, unsigned long cr0)
 {
-	if (is_td_vcpu(vcpu) && !to_tdx(vcpu)->initialized)
-		/* ignore reset on vcpu creation. */
-		return;
-
 	if (KVM_BUG_ON(is_td_vcpu(vcpu), vcpu->kvm))
 		return;
 
@@ -501,10 +497,6 @@ static void vt_load_mmu_pgd(struct kvm_vcpu *vcpu, hpa_t root_hpa,
 
 static void vt_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
 {
-	if (is_td_vcpu(vcpu) && !to_tdx(vcpu)->initialized)
-		/* ignore reset on vcpu creation. */
-		return;
-
 	if (KVM_BUG_ON(is_td_vcpu(vcpu), vcpu->kvm))
 		return;
 
@@ -518,10 +510,6 @@ static bool vt_is_valid_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
 
 static int vt_set_efer(struct kvm_vcpu *vcpu, u64 efer)
 {
-	if (is_td_vcpu(vcpu) && !to_tdx(vcpu)->initialized)
-		/* ignore reset on vcpu creation. */
-		return 0;
-
 	if (KVM_BUG_ON(is_td_vcpu(vcpu), vcpu->kvm))
 		return -EIO;
 
