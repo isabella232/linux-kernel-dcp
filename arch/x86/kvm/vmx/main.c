@@ -631,6 +631,9 @@ static void vt_cache_reg(struct kvm_vcpu *vcpu, enum kvm_reg reg)
 #endif
 		vcpu->arch.regs[reg] = vmread_gprs(vcpu, reg);
 		break;
+	case VCPU_EXREG_PKRS:
+		vcpu->arch.pkrs = vmcs_read64(GUEST_IA32_PKRS);
+		break;
 	default:
 		KVM_BUG_ON(1, vcpu->kvm);
 		break;
