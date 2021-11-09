@@ -505,18 +505,24 @@ void vfio_pci_core_disable(struct vfio_pci_core_device *vdev)
 	/* Stop the device from further DMA */
 	pci_clear_master(pdev);
 
-	vfio_pci_set_irqs_ioctl(vdev, VFIO_IRQ_SET_DATA_NONE |
-				VFIO_IRQ_SET_ACTION_TRIGGER,
-				vdev->irq_type, 0, 0, NULL);
-	WARN_ON(iommu_unregister_device_fault_handler(&vdev->pdev->dev));
-
-	for (i = 0; i < vdev->num_ext_irqs; i++)
+	if (vdev->irq_type < VFIO_PCI_NUM_IRQS)
 		vfio_pci_set_irqs_ioctl(vdev, VFIO_IRQ_SET_DATA_NONE |
 					VFIO_IRQ_SET_ACTION_TRIGGER,
+					vdev->irq_type, 0, 0, NULL);
+
+	WARN_ON(iommu_unregister_device_fault_handler(&vdev->pdev->dev));
+
+	if (vdev->ext_irqs) {
+		for (i = 0; i < vdev->num_ext_irqs; i++)
+			if (vdev->ext_irqs[i].trigger)
+				vfio_pci_set_irqs_ioctl(
+					vdev, VFIO_IRQ_SET_DATA_NONE |
+					VFIO_IRQ_SET_ACTION_TRIGGER,
 					VFIO_PCI_NUM_IRQS + i, 0, 0, NULL);
-	vdev->num_ext_irqs = 0;
-	kfree(vdev->ext_irqs);
-	vdev->ext_irqs = NULL;
+		vdev->num_ext_irqs = 0;
+		kfree(vdev->ext_irqs);
+		vdev->ext_irqs = NULL;
+	}
 
 	/* Device closed, don't need mutex here */
 	list_for_each_entry_safe(ioeventfd, ioeventfd_tmp,
