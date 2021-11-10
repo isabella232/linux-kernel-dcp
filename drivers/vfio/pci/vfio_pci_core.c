@@ -375,19 +375,8 @@ unlock:
 static int vfio_pci_dma_fault_init(struct vfio_pci_core_device *vdev)
 {
 	struct vfio_region_dma_fault *header;
-	struct iommu_domain *domain;
-	struct iommu_nesting_info info;
 	size_t size;
 	int ret;
-
-	domain = iommu_get_domain_for_dev(&vdev->pdev->dev);
-	ret = iommu_domain_get_attr(domain, DOMAIN_ATTR_NESTING, &info);
-	if (ret || !(info.features & IOMMU_NESTING_FEAT_PAGE_RESP)) {
-		/*
-		 * No need go futher as no page request service support.
-		 */
-		return 0;
-	}
 
 	mutex_init(&vdev->fault_queue_lock);
 
