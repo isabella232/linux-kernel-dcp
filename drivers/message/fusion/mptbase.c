@@ -4446,7 +4446,7 @@ PrimeIocFifos(MPT_ADAPTER *ioc)
 		 */
 		if (ioc->pcidev->device == MPI_MANUFACTPAGE_DEVID_SAS1078 &&
 		    ioc->dma_mask > DMA_BIT_MASK(35)) {
-			if (!dma_set_mask_and_coherent(&ioc->pcidev, DMA_BIT_MASK(32))) {
+			if (!dma_set_mask_and_coherent(&ioc->pcidev->dev, DMA_BIT_MASK(32))) {
 				dma_mask = DMA_BIT_MASK(35);
 				d36memprintk(ioc, printk(MYIOC_s_DEBUG_FMT
 				    "setting 35 bit addressing for "
@@ -4454,7 +4454,7 @@ PrimeIocFifos(MPT_ADAPTER *ioc)
 				    ioc->name));
 			} else {
 				/*Reseting DMA mask to 64 bit*/
-				dma_set_mask_and_coherent(&ioc->pcidev, DMA_BIT_MASK(64));
+				dma_set_mask_and_coherent(&ioc->pcidev->dev, DMA_BIT_MASK(64));
 
 				printk(MYIOC_s_ERR_FMT
 				    "failed setting 35 bit addressing for "
@@ -4590,7 +4590,7 @@ PrimeIocFifos(MPT_ADAPTER *ioc)
 	}
 
 	if (dma_mask == DMA_BIT_MASK(35) &&
-	    !dma_set_mask_and_coherent(&ioc->pcidev, ioc->dma_mask))
+	    !dma_set_mask_and_coherent(&ioc->pcidev->dev, ioc->dma_mask))
 		d36memprintk(ioc, printk(MYIOC_s_DEBUG_FMT
 		    "restoring 64 bit addressing\n", ioc->name));
 
@@ -4614,7 +4614,7 @@ out_fail:
 	}
 
 	if (dma_mask == DMA_BIT_MASK(35) &&
-	    !dma_set_mask_and_coherent(&ioc->pcidev, DMA_BIT_MASK(64)))
+	    !dma_set_mask_and_coherent(&ioc->pcidev->dev, DMA_BIT_MASK(64)))
 		d36memprintk(ioc, printk(MYIOC_s_DEBUG_FMT
 		    "restoring 64 bit addressing\n", ioc->name));
 
