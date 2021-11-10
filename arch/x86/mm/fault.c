@@ -32,6 +32,7 @@
 #include <asm/pgtable_areas.h>		/* VMALLOC_START, ...		*/
 #include <asm/kvm_para.h>		/* kvm_handle_async_pf		*/
 #include <asm/vdso.h>			/* fixup_vdso_exception()	*/
+#include <asm/pks.h>
 
 #define CREATE_TRACE_POINTS
 #include <asm/trace/exceptions.h>
@@ -546,6 +547,8 @@ show_fault_oops(struct pt_regs *regs, unsigned long error_code, unsigned long ad
 		 (error_code & X86_PF_RSVD)  ? "reserved bit violation" :
 		 (error_code & X86_PF_PK)    ? "protection keys violation" :
 					       "permissions violation");
+
+	show_extended_regs_oops(regs, error_code);
 
 	if (!(error_code & X86_PF_USER) && user_mode(regs)) {
 		struct desc_ptr idt, gdt;
@@ -1138,6 +1141,55 @@ bool fault_in_kernel_space(unsigned long address)
 	return address >= TASK_SIZE_MAX;
 }
 
+#ifdef CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS
+static bool handle_pks_key_fault(struct pt_regs *regs,
+				 unsigned long hw_error_code,
+				 unsigned long address)
+{
+	bool write = (hw_error_code & X86_PF_WRITE);
+	pgd_t pgd;
+	p4d_t p4d;
+	pud_t pud;
+	pmd_t pmd;
+	pte_t pte;
+
+	pgd = READ_ONCE(*(init_mm.pgd + pgd_index(address)));
+	if (!pgd_present(pgd))
+		return false;
+
+	p4d = READ_ONCE(*p4d_offset(&pgd, address));
+	if (!p4d_present(p4d))
+		return false;
+
+	if (p4d_large(p4d))
+		return handle_pks_key_callback(address, write,
+					       pte_flags_pkey(p4d_val(p4d)));
+
+	pud = READ_ONCE(*pud_offset(&p4d, address));
+	if (!pud_present(pud))
+		return false;
+
+	if (pud_large(pud))
+		return handle_pks_key_callback(address, write,
+					      pte_flags_pkey(pud_val(pud)));
+
+	pmd = READ_ONCE(*pmd_offset(&pud, address));
+	if (!pmd_present(pmd))
+		return false;
+
+	if (pmd_large(pmd))
+		return handle_pks_key_callback(address, write,
+					      pte_flags_pkey(pmd_val(pmd)));
+
+	pte = READ_ONCE(*pte_offset_kernel(&pmd, address));
+	if (!pte_present(pte))
+		return false;
+
+	return handle_pks_key_callback(address, write,
+				      pte_flags_pkey(pte_val(pte)));
+}
+#endif
+
 /*
  * Called for all faults where 'address' is part of the kernel address
  * space.  Might get called for faults that originate from *code* that
@@ -1147,12 +1199,31 @@ static void
 do_kern_addr_fault(struct pt_regs *regs, unsigned long hw_error_code,
 		   unsigned long address)
 {
-	/*
-	 * Protection keys exceptions only happen on user pages.  We
-	 * have no user pages in the kernel portion of the address
-	 * space, so do not expect them here.
-	 */
-	WARN_ON_ONCE(hw_error_code & X86_PF_PK);
+	if (hw_error_code & X86_PF_PK) {
+		/*
+		 * X86_PF_PK (Protection key exceptions) may occur on kernel
+		 * addresses when PKS (PKeys Supervisor) is enabled.
+		 *
+		 * However, if PKS is not enabled WARN if this exception is
+		 * seen because there are no user pages in the kernel portion
+		 * of the address space.
+		 */
+		WARN_ON_ONCE(!cpu_feature_enabled(X86_FEATURE_PKS));
+
+		/*
+		 * If a protection key exception occurs it could be because a PKS test
+		 * is running.  If so, pks_test_callback() will clear the protection
+		 * mechanism and return true to indicate the fault was handled.
+		 */
+		if (pks_test_callback(regs))
+			return;
+
+		if (handle_abandoned_pks_value(regs))
+			return;
+
+		if (handle_pks_key_fault(regs, hw_error_code, address))
+			return;
+	}
 
 #ifdef CONFIG_X86_32
 	/*

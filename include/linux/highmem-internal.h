@@ -153,6 +153,7 @@ static inline struct page *kmap_to_page(void *addr)
 static inline void *kmap(struct page *page)
 {
 	might_sleep();
+	pgmap_protection_flag_invalid(page);
 	return page_address(page);
 }
 
@@ -168,6 +169,7 @@ static inline void kunmap(struct page *page)
 
 static inline void *kmap_local_page(struct page *page)
 {
+	pgmap_mk_readwrite(page);
 	return page_address(page);
 }
 
@@ -186,6 +188,7 @@ static inline void __kunmap_local(void *addr)
 #ifdef ARCH_HAS_FLUSH_ON_KUNMAP
 	kunmap_flush_on_unmap(addr);
 #endif
+	pgmap_mk_noaccess(kmap_to_page(addr));
 }
 
 static inline void *kmap_atomic(struct page *page)
@@ -195,6 +198,7 @@ static inline void *kmap_atomic(struct page *page)
 	else
 		preempt_disable();
 	pagefault_disable();
+	pgmap_mk_readwrite(page);
 	return page_address(page);
 }
 
@@ -213,6 +217,7 @@ static inline void __kunmap_atomic(void *addr)
 #ifdef ARCH_HAS_FLUSH_ON_KUNMAP
 	kunmap_flush_on_unmap(addr);
 #endif
+	pgmap_mk_noaccess(kmap_to_page(addr));
 	pagefault_enable();
 	if (IS_ENABLED(CONFIG_PREEMPT_RT))
 		migrate_enable();

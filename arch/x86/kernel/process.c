@@ -45,6 +45,7 @@
 #include <asm/io_bitmap.h>
 #include <asm/proto.h>
 #include <asm/frame.h>
+#include <asm/pks.h>
 
 #include "process.h"
 
@@ -246,6 +247,8 @@ void flush_thread(void)
 
 	fpu_flush_thread();
 	pkru_flush_thread();
+
+	pks_init_task(tsk);
 }
 
 void disable_TSC(void)

@@ -48,4 +48,40 @@ static inline bool arch_pkeys_enabled(void)
 
 #endif /* ! CONFIG_ARCH_HAS_PKEYS */
 
+#ifdef CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS
+enum pks_pkey_consumers {
+	PKS_KEY_DEFAULT = 0, /* Must be 0 for default PTE values */
+	PKS_KEY_PGMAP_PROTECTION,
+	PKS_KEY_NR_CONSUMERS
+};
+extern u32 pkrs_init_value;
+
+void pkrs_save_irq(struct pt_regs *regs);
+void pkrs_restore_irq(struct pt_regs *regs);
+
+bool pks_enabled(void);
+void pks_mk_noaccess(int pkey);
+void pks_mk_readonly(int pkey);
+void pks_mk_readwrite(int pkey);
+void pks_abandon_protections(int pkey);
+
+typedef bool (*pks_key_callback)(unsigned long address, bool write);
+
+#else /* !CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS */
+
+static inline void pkrs_save_irq(struct pt_regs *regs) { }
+static inline void pkrs_restore_irq(struct pt_regs *regs) { }
+
+static inline bool pks_enabled(void)
+{
+	return false;
+}
+
+static inline void pks_mk_noaccess(int pkey) {}
+static inline void pks_mk_readonly(int pkey) {}
+static inline void pks_mk_readwrite(int pkey) {}
+static inline void pks_abandon_protections(int pkey) {}
+
+#endif /* CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS */
+
 #endif /* _LINUX_PKEYS_H */

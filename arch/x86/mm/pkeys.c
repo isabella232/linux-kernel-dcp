@@ -3,13 +3,18 @@
  * Intel Memory Protection Keys management
  * Copyright (c) 2015, Intel Corporation.
  */
+#undef pr_fmt
+#define pr_fmt(fmt) "x86/pkeys: " fmt
+
 #include <linux/debugfs.h>		/* debugfs_create_u32()		*/
 #include <linux/mm_types.h>             /* mm_struct, vma, etc...       */
 #include <linux/pkeys.h>                /* PKEY_*                       */
+#include <linux/mm.h>                   /* fault callback               */
 #include <uapi/asm-generic/mman-common.h>
 
 #include <asm/cpufeature.h>             /* boot_cpu_has, ...            */
 #include <asm/mmu_context.h>            /* vma_pkey()                   */
+#include <asm/pks.h>
 
 int __execute_only_pkey(struct mm_struct *mm)
 {
@@ -110,19 +115,17 @@ int __arch_override_mprotect_pkey(struct vm_area_struct *vma, int prot, int pkey
 	return vma_pkey(vma);
 }
 
-#define PKRU_AD_KEY(pkey)	(PKRU_AD_BIT << ((pkey) * PKRU_BITS_PER_PKEY))
-
 /*
  * Make the default PKRU value (at execve() time) as restrictive
  * as possible.  This ensures that any threads clone()'d early
  * in the process's lifetime will not accidentally get access
  * to data which is pkey-protected later on.
  */
-u32 init_pkru_value = PKRU_AD_KEY( 1) | PKRU_AD_KEY( 2) | PKRU_AD_KEY( 3) |
-		      PKRU_AD_KEY( 4) | PKRU_AD_KEY( 5) | PKRU_AD_KEY( 6) |
-		      PKRU_AD_KEY( 7) | PKRU_AD_KEY( 8) | PKRU_AD_KEY( 9) |
-		      PKRU_AD_KEY(10) | PKRU_AD_KEY(11) | PKRU_AD_KEY(12) |
-		      PKRU_AD_KEY(13) | PKRU_AD_KEY(14) | PKRU_AD_KEY(15);
+u32 init_pkru_value = PKR_AD_KEY( 1) | PKR_AD_KEY( 2) | PKR_AD_KEY( 3) |
+		      PKR_AD_KEY( 4) | PKR_AD_KEY( 5) | PKR_AD_KEY( 6) |
+		      PKR_AD_KEY( 7) | PKR_AD_KEY( 8) | PKR_AD_KEY( 9) |
+		      PKR_AD_KEY(10) | PKR_AD_KEY(11) | PKR_AD_KEY(12) |
+		      PKR_AD_KEY(13) | PKR_AD_KEY(14) | PKR_AD_KEY(15);
 
 static ssize_t init_pkru_read_file(struct file *file, char __user *user_buf,
 			     size_t count, loff_t *ppos)
@@ -155,7 +158,7 @@ static ssize_t init_pkru_write_file(struct file *file,
 	 * up immediately if someone attempts to disable access
 	 * or writes to pkey 0.
 	 */
-	if (new_init_pkru & (PKRU_AD_BIT|PKRU_WD_BIT))
+	if (new_init_pkru & (PKR_AD_BIT|PKR_WD_BIT))
 		return -EINVAL;
 
 	WRITE_ONCE(init_pkru_value, new_init_pkru);
@@ -192,3 +195,261 @@ static __init int setup_init_pkru(char *opt)
 	return 1;
 }
 __setup("init_pkru=", setup_init_pkru);
+
+/*
+ * Replace disable bits for @pkey with values from @flags
+ *
+ * Kernel users use the same flags as user space:
+ *     PKEY_DISABLE_ACCESS
+ *     PKEY_DISABLE_WRITE
+ */
+u32 update_pkey_val(u32 pk_reg, int pkey, unsigned int flags)
+{
+	/*  Mask out old bit values */
+	pk_reg &= ~PKR_PKEY_MASK(pkey);
+
+	/*  Or in new values */
+	if (flags & PKEY_DISABLE_ACCESS)
+		pk_reg |= PKR_AD_KEY(pkey);
+	if (flags & PKEY_DISABLE_WRITE)
+		pk_reg |= PKR_WD_KEY(pkey);
+
+	return pk_reg;
+}
+
+#ifdef CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS
+
+__static_or_pks_test DEFINE_PER_CPU(u32, pkrs_cache);
+u32 __read_mostly pkrs_init_value;
+
+/*
+ * Define a mask of pkeys which are allowed, ie have not been abandoned.
+ * Default is all keys are allowed.
+ */
+#define PKRS_ALLOWED_MASK_DEFAULT 0xffffffff
+u32 __read_mostly pkrs_pkey_allowed_mask;
+
+int handle_abandoned_pks_value(struct pt_regs *regs)
+{
+	struct extended_pt_regs *ept_regs;
+	u32 old;
+
+	ept_regs = extended_pt_regs(regs);
+	old = ept_regs->thread_pkrs;
+	ept_regs->thread_pkrs &= pkrs_pkey_allowed_mask;
+
+	/* If something changed retry the fault */
+	return (ept_regs->thread_pkrs != old);
+}
+
+static const pks_key_callback pks_key_callbacks[PKS_KEY_NR_CONSUMERS] = {
+	[PKS_KEY_DEFAULT]            = NULL,
+#ifdef CONFIG_DEVMAP_ACCESS_PROTECTION
+	[PKS_KEY_PGMAP_PROTECTION]   = pgmap_pks_fault_callback,
+#endif
+};
+
+bool handle_pks_key_callback(unsigned long address, bool write, u16 key)
+{
+	if (key >= PKS_KEY_NR_CONSUMERS)
+		return false;
+
+	if (pks_key_callbacks[key])
+		return pks_key_callbacks[key](address, write);
+
+	return false;
+}
+
+/*
+ * write_pkrs() optimizes MSR writes by maintaining a per cpu cache which can
+ * be checked quickly.
+ *
+ * It should also be noted that the underlying WRMSR(MSR_IA32_PKRS) is not
+ * serializing but still maintains ordering properties similar to WRPKRU.
+ * The current SDM section on PKRS needs updating but should be the same as
+ * that of WRPKRU.  So to quote from the WRPKRU text:
+ *
+ *     WRPKRU will never execute transiently. Memory accesses
+ *     affected by PKRU register will not execute (even transiently)
+ *     until all prior executions of WRPKRU have completed execution
+ *     and updated the PKRU register.
+ */
+void write_pkrs(u32 new_pkrs)
+{
+	u32 *pkrs;
+
+	if (!static_cpu_has(X86_FEATURE_PKS))
+		return;
+
+	pkrs = get_cpu_ptr(&pkrs_cache);
+	if (*pkrs != new_pkrs) {
+		*pkrs = new_pkrs;
+		wrmsrl(MSR_IA32_PKRS, new_pkrs);
+	}
+	put_cpu_ptr(pkrs);
+}
+
+/*
+ * Build a default PKRS value from the array specified by consumers
+ */
+static int __init create_initial_pkrs_value(void)
+{
+	/* All users get Access Disabled unless changed below */
+	u8 consumer_defaults[PKS_NUM_PKEYS] = {
+		[0 ... PKS_NUM_PKEYS-1] = PKR_AD_BIT
+	};
+	int i;
+
+	consumer_defaults[PKS_KEY_DEFAULT]          = PKR_RW_BIT;
+	consumer_defaults[PKS_KEY_PGMAP_PROTECTION] = PKR_AD_BIT;
+
+	/* Ensure the number of consumers is less than the number of keys */
+	BUILD_BUG_ON(PKS_KEY_NR_CONSUMERS > PKS_NUM_PKEYS);
+
+	pkrs_init_value = 0;
+	pkrs_pkey_allowed_mask = PKRS_ALLOWED_MASK_DEFAULT;
+
+	/*
+	 * PKS_TEST is mutually exclusive to any real users of PKS so define a PKS_TEST
+	 * appropriate value.
+	 *
+	 * NOTE: PKey 0 must still be fully permissive for normal kernel mappings to
+	 * work correctly.
+	 */
+	if (IS_ENABLED(CONFIG_PKS_TEST)) {
+		pkrs_init_value = (PKR_AD_KEY(1) | PKR_AD_KEY(2) | PKR_AD_KEY(3) | \
+				   PKR_AD_KEY(4) | PKR_AD_KEY(5) | PKR_AD_KEY(6) | \
+				   PKR_AD_KEY(7) | PKR_AD_KEY(8) | PKR_AD_KEY(9) | \
+				   PKR_AD_KEY(10) | PKR_AD_KEY(11) | PKR_AD_KEY(12) | \
+				   PKR_AD_KEY(13) | PKR_AD_KEY(14) | PKR_AD_KEY(15));
+		return 0;
+	}
+
+	/* Fill the defaults for the consumers */
+	for (i = 0; i < PKS_NUM_PKEYS; i++)
+		pkrs_init_value |= PKR_VALUE(i, consumer_defaults[i]);
+
+	return 0;
+}
+early_initcall(create_initial_pkrs_value);
+
+/*
+ * PKS is independent of PKU and either or both may be supported on a CPU.
+ * Configure PKS if the CPU supports the feature.
+ */
+void setup_pks(void)
+{
+	if (!cpu_feature_enabled(X86_FEATURE_PKS))
+		return;
+
+	write_pkrs(pkrs_init_value);
+	cr4_set_bits(X86_CR4_PKS);
+}
+;
+
+/*
+ * PKRS is only temporarily changed during specific code paths.  Only a
+ * preemption during these windows away from the default value would
+ * require updating the MSR.  write_pkrs() handles this optimization.
+ */
+void pkrs_write_current(void)
+{
+	current->thread.saved_pkrs &= pkrs_pkey_allowed_mask;
+	write_pkrs(current->thread.saved_pkrs);
+}
+
+void pks_init_task(struct task_struct *task)
+{
+	task->thread.saved_pkrs = pkrs_init_value;
+	task->thread.saved_pkrs &= pkrs_pkey_allowed_mask;
+}
+
+bool pks_enabled(void)
+{
+	return cpu_feature_enabled(X86_FEATURE_PKS);
+}
+
+/*
+ * Do not call this directly, see pks_mk*() below.
+ *
+ * @pkey: Key for the domain to change
+ * @protection: protection bits to be used
+ *
+ * Protection utilizes the same protection bits specified for User pkeys
+ *     PKEY_DISABLE_ACCESS
+ *     PKEY_DISABLE_WRITE
+ *
+ */
+static inline void pks_update_protection(int pkey, unsigned long protection)
+{
+	current->thread.saved_pkrs = update_pkey_val(current->thread.saved_pkrs,
+						     pkey, protection);
+	pkrs_write_current();
+}
+
+/**
+ * pks_mk_noaccess() - Disable all access to the domain
+ * @pkey the pkey for which the access should change.
+ *
+ * Disable all access to the domain specified by pkey.  This is not a global
+ * update and only affects the current running thread.
+ */
+void pks_mk_noaccess(int pkey)
+{
+	pks_update_protection(pkey, PKEY_DISABLE_ACCESS);
+}
+EXPORT_SYMBOL_GPL(pks_mk_noaccess);
+
+/**
+ * pks_mk_readonly() - Make the domain Read only
+ * @pkey the pkey for which the access should change.
+ *
+ * Allow read access to the domain specified by pkey.  This is not a global
+ * update and only affects the current running thread.
+ */
+void pks_mk_readonly(int pkey)
+{
+	pks_update_protection(pkey, PKEY_DISABLE_WRITE);
+}
+EXPORT_SYMBOL_GPL(pks_mk_readonly);
+
+/**
+ * pks_mk_readwrite() - Make the domain Read/Write
+ * @pkey the pkey for which the access should change.
+ *
+ * Allow all access, read and write, to the domain specified by pkey.  This is
+ * not a global update and only affects the current running thread.
+ */
+void pks_mk_readwrite(int pkey)
+{
+	pks_update_protection(pkey, 0);
+}
+EXPORT_SYMBOL_GPL(pks_mk_readwrite);
+
+/**
+ * pks_abandon_protections() - Force readwrite (no protections) for the
+ *                             specified pkey
+ * @pkey The pkey to force
+ *
+ * Force the value of the pkey to readwrite (no protections) thus abandoning
+ * protections for this key.  This is a permanent change and has no
+ * coresponding reversal function.
+ *
+ * This also updates the current running thread.
+ */
+void pks_abandon_protections(int pkey)
+{
+	u32 old_mask, new_mask;
+
+	do {
+		old_mask = READ_ONCE(pkrs_pkey_allowed_mask);
+		new_mask = update_pkey_val(old_mask, pkey, 0);
+	} while (unlikely(
+		 cmpxchg(&pkrs_pkey_allowed_mask, old_mask, new_mask) != old_mask));
+
+	/* Update the local thread as well. */
+	pks_update_protection(pkey, 0);
+}
+EXPORT_SYMBOL_GPL(pks_abandon_protections);
+
+#endif /* CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS */

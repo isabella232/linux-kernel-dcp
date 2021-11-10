@@ -6,6 +6,7 @@
 #include <linux/memory_hotplug.h>
 #include <linux/mm.h>
 #include <linux/pfn_t.h>
+#include <linux/pkeys.h>
 #include <linux/swap.h>
 #include <linux/mmzone.h>
 #include <linux/swapops.h>
@@ -62,6 +63,153 @@ static void devmap_managed_enable_put(struct dev_pagemap *pgmap)
 {
 }
 #endif /* CONFIG_DEV_PAGEMAP_OPS */
+
+#ifdef CONFIG_DEVMAP_ACCESS_PROTECTION
+/*
+ * Note; all devices which have asked for protections share the same key.  The
+ * key may, or may not, have been provided by the core.  If not, protection
+ * will be disabled.  The key acquisition is attempted when the first ZONE
+ * DEVICE requests it and freed when all zones have been unmapped.
+ *
+ * Also this must be EXPORT_SYMBOL rather than EXPORT_SYMBOL_GPL because it is
+ * intended to be used in the kmap API.
+ */
+DEFINE_STATIC_KEY_FALSE(dev_pgmap_protection_static_key);
+EXPORT_SYMBOL(dev_pgmap_protection_static_key);
+
+static void devmap_protection_enable(void)
+{
+	static_branch_inc(&dev_pgmap_protection_static_key);
+}
+
+static pgprot_t devmap_protection_adjust_pgprot(pgprot_t prot)
+{
+	pgprotval_t val;
+
+	val = pgprot_val(prot);
+	return __pgprot(val | _PAGE_PKEY(PKS_KEY_PGMAP_PROTECTION));
+}
+
+static void devmap_protection_disable(void)
+{
+	static_branch_dec(&dev_pgmap_protection_static_key);
+}
+
+/*
+ * Ignore the checkpatch warning because the typedef allows
+ * param_check_pks_fault_modes to automatically check the passed value.
+ */
+typedef enum {
+	PKS_MODE_STRICT  = 0,
+	PKS_MODE_RELAXED = 1,
+} pks_fault_modes;
+
+pks_fault_modes pks_fault_mode = PKS_MODE_RELAXED;
+
+static int param_set_pks_fault_mode(const char *val, const struct kernel_param *kp)
+{
+	int ret = -EINVAL;
+
+	if (sysfs_streq(val, "relaxed")) {
+		pks_fault_mode = PKS_MODE_RELAXED;
+		ret = 0;
+	} else if (sysfs_streq(val, "strict")) {
+		pks_fault_mode = PKS_MODE_STRICT;
+		ret = 0;
+	}
+
+	return ret;
+}
+
+static int param_get_pks_fault_mode(char *buffer, const struct kernel_param *kp)
+{
+	int ret = 0;
+
+	switch (pks_fault_mode) {
+	case PKS_MODE_STRICT:
+		ret = sysfs_emit(buffer, "strict\n");
+		break;
+	case PKS_MODE_RELAXED:
+		ret = sysfs_emit(buffer, "relaxed\n");
+		break;
+	default:
+		ret = sysfs_emit(buffer, "<unknown>\n");
+		break;
+	}
+
+	return ret;
+}
+
+static const struct kernel_param_ops param_ops_pks_fault_modes = {
+	.set = param_set_pks_fault_mode,
+	.get = param_get_pks_fault_mode,
+};
+
+#define param_check_pks_fault_modes(name, p) \
+	__param_check(name, p, pks_fault_modes)
+module_param(pks_fault_mode, pks_fault_modes, 0644);
+
+static void pgmap_abandon_protection(void)
+{
+	static bool protections_abandoned = false;
+
+	if (!protections_abandoned) {
+		protections_abandoned = true;
+		pks_abandon_protections(PKS_KEY_PGMAP_PROTECTION);
+	}
+}
+
+void __pgmap_protection_flag_invalid(struct dev_pagemap *pgmap)
+{
+	BUG_ON(pks_fault_mode == PKS_MODE_STRICT);
+
+	WARN_ONCE(1, "Page map protection disabled");
+	pgmap_abandon_protection();
+}
+EXPORT_SYMBOL_GPL(__pgmap_protection_flag_invalid);
+
+bool pgmap_pks_fault_callback(unsigned long address, bool write)
+{
+	/* In strict mode just let the fault handler oops */
+	if (pks_fault_mode == PKS_MODE_STRICT)
+		return false;
+
+	WARN_ONCE(1, "Page map protection disabled");
+	pgmap_abandon_protection();
+	return true;
+}
+EXPORT_SYMBOL_GPL(pgmap_pks_fault_callback);
+
+void __pgmap_mk_readwrite(struct dev_pagemap *pgmap)
+{
+	if (!current->pgmap_prot_count++)
+		pks_mk_readwrite(PKS_KEY_PGMAP_PROTECTION);
+}
+EXPORT_SYMBOL_GPL(__pgmap_mk_readwrite);
+
+void __pgmap_mk_noaccess(struct dev_pagemap *pgmap)
+{
+	if (!--current->pgmap_prot_count)
+		pks_mk_noaccess(PKS_KEY_PGMAP_PROTECTION);
+}
+EXPORT_SYMBOL_GPL(__pgmap_mk_noaccess);
+
+bool pgmap_protection_enabled(void)
+{
+	return pks_enabled();
+}
+EXPORT_SYMBOL_GPL(pgmap_protection_enabled);
+
+#else /* !CONFIG_DEVMAP_ACCESS_PROTECTION */
+
+static void devmap_protection_enable(void) { }
+static void devmap_protection_disable(void) { }
+
+static pgprot_t devmap_protection_adjust_pgprot(pgprot_t prot)
+{
+	return prot;
+}
+#endif /* CONFIG_DEVMAP_ACCESS_PROTECTION */
 
 static void pgmap_array_delete(struct range *range)
 {
@@ -178,6 +326,9 @@ void memunmap_pages(struct dev_pagemap *pgmap)
 
 	WARN_ONCE(pgmap->altmap.alloc, "failed to free all reserved pages\n");
 	devmap_managed_enable_put(pgmap);
+
+	if (pgmap->flags & PGMAP_PROTECTION)
+		devmap_protection_disable();
 }
 EXPORT_SYMBOL_GPL(memunmap_pages);
 
@@ -325,6 +476,13 @@ void *memremap_pages(struct dev_pagemap *pgmap, int nid)
 
 	if (WARN_ONCE(!nr_range, "nr_range must be specified\n"))
 		return ERR_PTR(-EINVAL);
+
+	if (pgmap->flags & PGMAP_PROTECTION) {
+		if (!pgmap_protection_enabled())
+			return ERR_PTR(-EINVAL);
+		devmap_protection_enable();
+		params.pgprot = devmap_protection_adjust_pgprot(params.pgprot);
+	}
 
 	switch (pgmap->type) {
 	case MEMORY_DEVICE_PRIVATE:

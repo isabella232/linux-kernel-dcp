@@ -1199,6 +1199,94 @@ static inline bool is_pci_p2pdma_page(const struct page *page)
 		page->pgmap->type == MEMORY_DEVICE_PCI_P2PDMA;
 }
 
+#ifdef CONFIG_DEVMAP_ACCESS_PROTECTION
+DECLARE_STATIC_KEY_FALSE(dev_pgmap_protection_static_key);
+
+/*
+ * devmap_protected() requires a reference on the page to ensure there is no
+ * races with dev_pagemap tear down.
+ */
+static inline bool devmap_protected(struct page *page)
+{
+	if (!static_branch_unlikely(&dev_pgmap_protection_static_key))
+		return false;
+	if (!is_zone_device_page(page))
+		return false;
+	if (page->pgmap->flags & PGMAP_PROTECTION)
+		return true;
+	return false;
+}
+
+void __pgmap_protection_flag_invalid(struct dev_pagemap *pgmap);
+void __pgmap_mk_readwrite(struct dev_pagemap *pgmap);
+void __pgmap_mk_noaccess(struct dev_pagemap *pgmap);
+
+static inline bool pgmap_check_pgmap_prot(struct page *page)
+{
+	if (!devmap_protected(page))
+		return false;
+
+	/*
+	 * There is no known use case to change permissions in an irq for pgmap
+	 * pages
+	 */
+	lockdep_assert_in_irq();
+	return true;
+}
+
+/*
+ * pgmap_protection_flag_invalid - Check and flag an invalid use of a pgmap
+ *                                 protected page
+ *
+ * There are code paths which are known to not be compatible with pgmap
+ * protections.  pgmap_protection_flag_invalid() is provided as a 'relief
+ * valve' to be used in those functions which are known to be incompatible.
+ *
+ * Thus an invalid code path can be flag more precisely what code contains the
+ * bug vs just flagging a fault.  Like the fault handler code this abandons the
+ * use of the PKS key and optionally allows the calling code path to continue
+ * based on the configuration of the memremap.pks_fault_mode command line
+ * (and/or sysfs) option.
+ */
+static inline void pgmap_protection_flag_invalid(struct page *page)
+{
+	if (!pgmap_check_pgmap_prot(page))
+		return;
+	__pgmap_protection_flag_invalid(page->pgmap);
+}
+
+static inline void pgmap_mk_readwrite(struct page *page)
+{
+	if (!pgmap_check_pgmap_prot(page))
+		return;
+	__pgmap_mk_readwrite(page->pgmap);
+}
+static inline void pgmap_mk_noaccess(struct page *page)
+{
+	if (!pgmap_check_pgmap_prot(page))
+		return;
+	__pgmap_mk_noaccess(page->pgmap);
+}
+
+bool pgmap_protection_enabled(void);
+
+bool pgmap_pks_fault_callback(unsigned long address, bool write);
+
+#else
+
+static inline void __pgmap_mk_readwrite(struct dev_pagemap *pgmap) { }
+static inline void __pgmap_mk_noaccess(struct dev_pagemap *pgmap) { }
+
+static inline void pgmap_protection_flag_invalid(struct page *page) { }
+static inline void pgmap_mk_readwrite(struct page *page) { }
+static inline void pgmap_mk_noaccess(struct page *page) { }
+static inline bool pgmap_protection_enabled(void)
+{
+	return false;
+}
+
+#endif /* CONFIG_DEVMAP_ACCESS_PROTECTION */
+
 /* 127: arbitrary random number, small enough to assemble well */
 #define page_ref_zero_or_close_to_overflow(page) \
 	((unsigned int) page_ref_count(page) + 127u <= 127u)
