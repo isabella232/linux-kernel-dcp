@@ -2109,9 +2109,6 @@ static size_t vfio_pci_cap_remaining_dword(struct vfio_pci_core_device *vdev,
 	return i;
 }
 
-<<<<<<< HEAD
-static ssize_t vfio_config_do_rw(struct vfio_pci_core_device *vdev, char __user *buf,
-=======
 static bool vfio_pci_need_virt_perm(struct pci_dev *pdev, u8 cap_id)
 {
 #ifdef CONFIG_PCI_ATS
@@ -2123,8 +2120,7 @@ static bool vfio_pci_need_virt_perm(struct pci_dev *pdev, u8 cap_id)
 #endif
 }
 
-static ssize_t vfio_config_do_rw(struct vfio_pci_device *vdev, char __user *buf,
->>>>>>> 64511739a93d... vfio/pci: Emulate PASID/PRI capability for VFs
+static ssize_t vfio_config_do_rw(struct vfio_pci_core_device *vdev, char __user *buf,
 				 size_t count, loff_t *ppos, bool iswrite)
 {
 	struct pci_dev *pdev = vdev->pdev;
