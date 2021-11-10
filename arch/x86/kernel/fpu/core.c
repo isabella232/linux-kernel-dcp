@@ -278,7 +278,7 @@ int fpu_swap_kvm_fpstate(struct fpu_guest *guest_fpu, bool enter_guest)
 {
 	struct fpstate *guest_fps, *cur_fps;
 	struct fpu *fpu = &current->thread.fpu;
-	int ret;
+	int ret = 0;
 
 	if (unlikely(guest_fpu->realloc_request))
 		ret = fpu_guest_realloc_fpstate(guest_fpu, enter_guest);
@@ -317,7 +317,7 @@ int fpu_swap_kvm_fpstate(struct fpu_guest *guest_fpu, bool enter_guest)
 
 	fpregs_mark_activate();
 	fpregs_unlock();
-	return 0;
+	return ret;
 }
 EXPORT_SYMBOL_GPL(fpu_swap_kvm_fpstate);
 
