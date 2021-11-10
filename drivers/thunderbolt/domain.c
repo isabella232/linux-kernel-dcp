@@ -321,6 +321,7 @@ struct bus_type tb_bus_type = {
 	.probe = tb_service_probe,
 	.remove = tb_service_remove,
 	.shutdown = tb_service_shutdown,
+	.has_probe_authorization = true,
 };
 
 static void tb_domain_release(struct device *dev)
@@ -656,7 +657,7 @@ int tb_domain_approve_switch(struct tb *tb, struct tb_switch *sw)
 
 	/* The parent switch must be authorized before this one */
 	parent_sw = tb_to_switch(sw->dev.parent);
-	if (!parent_sw || !parent_sw->authorized)
+	if (!parent_sw || !parent_sw->dev.authorized)
 		return -EINVAL;
 
 	return tb->cm_ops->approve_switch(tb, sw);
@@ -683,7 +684,7 @@ int tb_domain_approve_switch_key(struct tb *tb, struct tb_switch *sw)
 
 	/* The parent switch must be authorized before this one */
 	parent_sw = tb_to_switch(sw->dev.parent);
-	if (!parent_sw || !parent_sw->authorized)
+	if (!parent_sw || !parent_sw->dev.authorized)
 		return -EINVAL;
 
 	ret = tb->cm_ops->add_switch_key(tb, sw);
@@ -720,7 +721,7 @@ int tb_domain_challenge_switch_key(struct tb *tb, struct tb_switch *sw)
 
 	/* The parent switch must be authorized before this one */
 	parent_sw = tb_to_switch(sw->dev.parent);
-	if (!parent_sw || !parent_sw->authorized)
+	if (!parent_sw || !parent_sw->dev.authorized)
 		return -EINVAL;
 
 	get_random_bytes(challenge, sizeof(challenge));

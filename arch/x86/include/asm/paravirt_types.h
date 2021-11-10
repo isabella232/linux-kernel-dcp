@@ -122,7 +122,6 @@ struct pv_cpu_ops {
 
 	/* Unsafe MSR operations.  These will warn or panic on failure. */
 	u64 (*read_msr)(unsigned int msr);
-	void (*write_msr)(unsigned int msr, unsigned low, unsigned high);
 
 	/*
 	 * Safe MSR operations.
@@ -136,6 +135,8 @@ struct pv_cpu_ops {
 	void (*start_context_switch)(struct task_struct *prev);
 	void (*end_context_switch)(struct task_struct *next);
 #endif
+
+	void (*write_msr)(unsigned int msr, unsigned low, unsigned high);
 } __no_randomize_layout;
 
 struct pv_irq_ops {
@@ -150,10 +151,9 @@ struct pv_irq_ops {
 	struct paravirt_callee_save save_fl;
 	struct paravirt_callee_save irq_disable;
 	struct paravirt_callee_save irq_enable;
-
+#endif
 	void (*safe_halt)(void);
 	void (*halt)(void);
-#endif
 } __no_randomize_layout;
 
 struct pv_mmu_ops {

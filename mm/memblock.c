@@ -1392,6 +1392,7 @@ done:
 		 */
 		kmemleak_alloc_phys(found, size, 0, 0);
 
+	accept_memory(found, found + size);
 	return found;
 }
 

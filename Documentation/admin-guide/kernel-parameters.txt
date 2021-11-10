@@ -367,6 +367,17 @@
 	autoconf=	[IPV6]
 			See Documentation/networking/ipv6.rst.
 
+	authorize_allow_devs= [KNL]
+			Format: bus_name:dev_name
+			Override default authorization of given device.
+			Multiple devices can be specified in comma
+			separated list. Multiple bus/devices combinations
+			can be specified separated by semicolon. For example,
+			to allow vritio device and PCI device (Virtio NET),
+			use virtio:virtio0;pci:0x1af4:0x1000;. To allow all
+			devices in PCI bus use pci:ALL or to allow all bus
+			and devices use ALL:ALL.
+
 	show_lapic=	[APIC,X86] Advanced Programmable Interrupt Controller
 			Limit apic dumping. The parameter defines the maximal
 			number of local apics being dumped. Also it is possible
@@ -1426,6 +1437,9 @@
 			Warning: use of this parameter will taint the kernel
 			and may cause unknown problems.
 
+	force_tdx_guest [x86]
+			Force enable TDX guest mode.
+
 	ftrace=[tracer]
 			[FTRACE] will set and start the specified tracer
 			as early as possible in order to facilitate early
@@ -2075,6 +2089,18 @@
 			0 - Use IOMMU translation for DMA.
 			1 - Bypass the IOMMU for DMA.
 			unset - Use value of CONFIG_IOMMU_DEFAULT_PASSTHROUGH.
+
+	ioremap_force_shared= [X86_64, CCG]
+			Force the kernel to use shared memory mappings which do
+			not use ioremap_host_shared/pcimap_host_shared to opt-in
+			to shared mappings with the host. This feature is mainly
+			used by a confidential guest when enabling new drivers
+			without proper shared memory related changes. Please note
+			that this option might also allow other non explicitly
+			enabled drivers to interact with the host in confidential
+			guest, which could cause other security risks. This option
+			will also cause BIOS data structures to be shared with the
+			host, which might open security holes.
 
 	io7=		[HW] IO7 for Marvel-based Alpha systems
 			See comment before marvel_specify_io7 in
@@ -5581,8 +5607,10 @@
 			it if 0 is given (See Documentation/admin-guide/cgroup-v1/memory.rst)
 
 	swiotlb=	[ARM,IA-64,PPC,MIPS,X86]
-			Format: { <int> | force | noforce }
+			Format: { <int> [,<int>] | force | noforce }
 			<int> -- Number of I/O TLB slabs
+			<int> -- Second integer after comma. Number of swiotlb
+				 areas with their own lock. Must be power of 2.
 			force -- force using of bounce buffers even if they
 			         wouldn't be automatically used by the kernel
 			noforce -- Never use bounce buffers (for debugging)
@@ -5621,6 +5649,16 @@
 			"tcp_no_metrics_save" section for more details.
 
 	tdfx=		[HW,DRM]
+
+	tdx_allow_acpi=table
+			Override the TDX ACPI filter allowing ACPI tables
+			table. Multiple tables can be separated by comma.
+			For example tdx_allow_acpi=HPET to allow HPET.
+			Note that allowing unhardened drivers is likely
+			a security hole
+
+	tdx_disable_filter [x86]
+			Disable TDX guest filter support.
 
 	test_suspend=	[SUSPEND][,N]
 			Specify "mem" (for Suspend-to-RAM) or "standby" (for
@@ -6320,6 +6358,14 @@
 	x2apic_phys	[X86-64,APIC] Use x2apic physical mode instead of
 			default x2apic cluster mode on platforms
 			supporting x2apic.
+
+	x86_cc_clear=val [X86-64]
+			Clear a Confidential Computing (CC) setting for x86
+			platforms. See include/linux/cc_platform.h for the
+			allowed values. Only a single value can be overridden.
+			Note that invalid values here may break the kernel,
+			this is mainly for debugging. Clearing protections
+			may cause security holes.
 
 	xen_512gb_limit		[KNL,X86-64,XEN]
 			Restricts the kernel running paravirtualized under Xen

@@ -34,7 +34,7 @@
 #include <linux/highmem.h>
 #include <linux/gfp.h>
 #include <linux/scatterlist.h>
-#include <linux/mem_encrypt.h>
+#include <linux/cc_platform.h>
 #include <linux/set_memory.h>
 #ifdef CONFIG_DEBUG_FS
 #include <linux/debugfs.h>
@@ -68,6 +68,8 @@
 
 #define INVALID_PHYS_ADDR (~(phys_addr_t)0)
 
+#define NUM_AREAS_DEFAULT 1
+
 enum swiotlb_force swiotlb_force;
 
 struct io_tlb_mem io_tlb_default_mem;
@@ -80,9 +82,51 @@ static unsigned int max_segment;
 
 static unsigned long default_nslabs = IO_TLB_DEFAULT_SIZE >> IO_TLB_SHIFT;
 
+static __read_mostly unsigned int area_index_shift;
+static __read_mostly unsigned int area_bits;
+static __read_mostly int num_areas = NUM_AREAS_DEFAULT;
+
+static __init int setup_areas(int n)
+{
+	unsigned long nslabs;
+
+	if (n < 1 || !is_power_of_2(n)) {
+		pr_err("swiotlb: Invalid areas parameter %d\n", n);
+		return -EINVAL;
+	}
+
+	/* Round up number of slabs to the next power of 2.
+	 * The last area is going be smaller than the rest if default_nslabs is
+	 * not power of two.
+	 */
+	nslabs = roundup_pow_of_two(default_nslabs);
+
+	pr_info("swiotlb: Using %d areas\n", n);
+	num_areas = n;
+	area_index_shift = __fls(nslabs) - __fls(num_areas);
+	area_bits = __fls(n);
+	return 0;
+}
+
+/*
+ * Can be called from architecture specific code when swiotlb is set up before
+ * possible cpus are setup.
+ */
+
+void __init swiotlb_hint_cpus(int cpus)
+{
+	if (num_areas == NUM_AREAS_DEFAULT && cpus > 1) {
+		if (!is_power_of_2(cpus))
+			cpus = 1U << (__fls(cpus) + 1);
+		setup_areas(cpus);
+	}
+}
+
 static int __init
 setup_io_tlb_npages(char *str)
 {
+	int ret = 0;
+
 	if (isdigit(*str)) {
 		/* avoid tail segment of size < IO_TLB_SEGSIZE */
 		default_nslabs =
@@ -90,12 +134,16 @@ setup_io_tlb_npages(char *str)
 	}
 	if (*str == ',')
 		++str;
+	if (isdigit(*str))
+		ret = setup_areas(simple_strtoul(str, &str, 0));
+	if (*str == ',')
+		++str;
 	if (!strcmp(str, "force"))
 		swiotlb_force = SWIOTLB_FORCE;
 	else if (!strcmp(str, "noforce"))
 		swiotlb_force = SWIOTLB_NO_FORCE;
 
-	return 0;
+	return ret;
 }
 early_param("swiotlb", setup_io_tlb_npages);
 
@@ -129,6 +177,7 @@ void __init swiotlb_adjust_size(unsigned long size)
 		return;
 	size = ALIGN(size, IO_TLB_SIZE);
 	default_nslabs = ALIGN(size >> IO_TLB_SHIFT, IO_TLB_SEGSIZE);
+	setup_areas(num_areas);
 	pr_info("SWIOTLB bounce buffer size adjusted to %luMB", size >> 20);
 }
 
@@ -184,17 +233,22 @@ static void swiotlb_init_io_tlb_mem(struct io_tlb_mem *mem, phys_addr_t start,
 	mem->nslabs = nslabs;
 	mem->start = start;
 	mem->end = mem->start + bytes;
-	mem->index = 0;
 	mem->late_alloc = late_alloc;
 
 	if (swiotlb_force == SWIOTLB_FORCE)
 		mem->force_bounce = true;
 
-	spin_lock_init(&mem->lock);
+	for (i = 0; i < num_areas; i++) {
+		INIT_LIST_HEAD(&mem->areas[i].free_slots);
+		spin_lock_init(&mem->areas[i].lock);
+	}
 	for (i = 0; i < mem->nslabs; i++) {
-		mem->slots[i].list = IO_TLB_SEGSIZE - io_tlb_offset(i);
+		int aindex = area_index_shift ? i >> area_index_shift : 0;
+		__set_bit(i, mem->bitmap);
 		mem->slots[i].orig_addr = INVALID_PHYS_ADDR;
 		mem->slots[i].alloc_size = 0;
+		list_add_tail(&mem->slots[i].node,
+			      &mem->areas[aindex].free_slots);
 	}
 	memset(vaddr, 0, bytes);
 }
@@ -216,6 +270,15 @@ int __init swiotlb_init_with_tbl(char *tlb, unsigned long nslabs, int verbose)
 	if (!mem->slots)
 		panic("%s: Failed to allocate %zu bytes align=0x%lx\n",
 		      __func__, alloc_size, PAGE_SIZE);
+	mem->areas = memblock_alloc(sizeof(struct io_tlb_area) * num_areas,
+				    SMP_CACHE_BYTES);
+	if (!mem->areas)
+		panic("Cannot allocate io_tlb_areas");
+
+	mem->bitmap = memblock_alloc(DIV_ROUND_UP(nslabs, BITS_PER_BYTE), SMP_CACHE_BYTES);
+	if (!mem->bitmap)
+		panic("%s: Failed to allocate %lu bytes align=0x%x\n",
+		      __func__, DIV_ROUND_UP(nslabs, BITS_PER_BYTE), SMP_CACHE_BYTES);
 
 	swiotlb_init_io_tlb_mem(mem, __pa(tlb), nslabs, false);
 
@@ -305,6 +368,7 @@ swiotlb_late_init_with_tbl(char *tlb, unsigned long nslabs)
 {
 	struct io_tlb_mem *mem = &io_tlb_default_mem;
 	unsigned long bytes = nslabs << IO_TLB_SHIFT;
+	int order;
 
 	if (swiotlb_force == SWIOTLB_NO_FORCE)
 		return 0;
@@ -313,10 +377,22 @@ swiotlb_late_init_with_tbl(char *tlb, unsigned long nslabs)
 	if (WARN_ON_ONCE(mem->nslabs))
 		return -ENOMEM;
 
-	mem->slots = (void *)__get_free_pages(GFP_KERNEL | __GFP_ZERO,
-		get_order(array_size(sizeof(*mem->slots), nslabs)));
-	if (!mem->slots)
+	mem->bitmap = kzalloc(DIV_ROUND_UP(nslabs, BITS_PER_BYTE), GFP_KERNEL);
+	order = get_order(array_size(sizeof(*mem->slots), nslabs));
+	mem->slots = (void *)__get_free_pages(GFP_KERNEL | __GFP_ZERO, order);
+	if (!mem->slots || !mem->bitmap) {
+		kfree(mem->bitmap);
+		kfree(mem->slots);
 		return -ENOMEM;
+	}
+
+	mem->areas = (struct io_tlb_area *)kcalloc(num_areas,
+						   sizeof(struct io_tlb_area),
+						   GFP_KERNEL);
+	if (!mem->areas) {
+		free_pages((unsigned long)mem->slots, order);
+		return -ENOMEM;
+	}
 
 	set_memory_decrypted((unsigned long)tlb, bytes >> PAGE_SHIFT);
 	swiotlb_init_io_tlb_mem(mem, virt_to_phys(tlb), nslabs, true);
@@ -342,9 +418,12 @@ void __init swiotlb_exit(void)
 
 	set_memory_encrypted(tbl_vaddr, tbl_size >> PAGE_SHIFT);
 	if (mem->late_alloc) {
+		kfree(mem->areas);
 		free_pages(tbl_vaddr, get_order(tbl_size));
 		free_pages((unsigned long)mem->slots, get_order(slots_size));
 	} else {
+		memblock_free_late(__pa(mem->areas),
+				   num_areas * sizeof(struct io_tlb_area));
 		memblock_free_late(mem->start, tbl_size);
 		memblock_free_late(__pa(mem->slots), slots_size);
 	}
@@ -447,55 +526,68 @@ static inline unsigned long get_max_slots(unsigned long boundary_mask)
 	return nr_slots(boundary_mask + 1);
 }
 
-static unsigned int wrap_index(struct io_tlb_mem *mem, unsigned int index)
+static inline unsigned long area_nslabs(struct io_tlb_mem *mem)
 {
-	if (index >= mem->nslabs)
-		return 0;
-	return index;
+	return area_index_shift ? (1UL << area_index_shift) + 1 :
+			mem->nslabs;
+}
+
+static inline unsigned int area_start(int aindex)
+{
+	return aindex << area_index_shift;
+}
+
+static inline unsigned int area_end(struct io_tlb_mem *mem, int aindex)
+{
+	return area_start(aindex) + area_nslabs(mem);
 }
 
 /*
  * Find a suitable number of IO TLB entries size that will fit this request and
  * allocate a buffer from that IO TLB pool.
  */
-static int swiotlb_find_slots(struct device *dev, phys_addr_t orig_addr,
-			      size_t alloc_size)
+static int swiotlb_do_find_slots(struct io_tlb_mem *mem,
+				 struct io_tlb_area *area,
+				 int area_index,
+				 struct device *dev, phys_addr_t orig_addr,
+				 size_t alloc_size)
 {
-	struct io_tlb_mem *mem = dev->dma_io_tlb_mem;
+	struct io_tlb_slot *slot, *tmp;
 	unsigned long boundary_mask = dma_get_seg_boundary(dev);
 	dma_addr_t tbl_dma_addr =
 		phys_to_dma_unencrypted(dev, mem->start) & boundary_mask;
 	unsigned long max_slots = get_max_slots(boundary_mask);
 	unsigned int iotlb_align_mask =
 		dma_get_min_align_mask(dev) & ~(IO_TLB_SIZE - 1);
-	unsigned int nslots = nr_slots(alloc_size), stride;
-	unsigned int index, wrap, count = 0, i;
+	unsigned int nslots = nr_slots(alloc_size);
+	unsigned int index, i;
 	unsigned int offset = swiotlb_align_offset(dev, orig_addr);
 	unsigned long flags;
 
 	BUG_ON(!nslots);
+	BUG_ON(area_index >= num_areas);
 
-	/*
-	 * For mappings with an alignment requirement don't bother looping to
-	 * unaligned slots once we found an aligned one.  For allocations of
-	 * PAGE_SIZE or larger only look for page aligned allocations.
-	 */
-	stride = (iotlb_align_mask >> IO_TLB_SHIFT) + 1;
-	if (alloc_size >= PAGE_SIZE)
-		stride = max(stride, stride << (PAGE_SHIFT - IO_TLB_SHIFT));
-
-	spin_lock_irqsave(&mem->lock, flags);
-	if (unlikely(nslots > mem->nslabs - mem->used))
+	spin_lock_irqsave(&area->lock, flags);
+	if (unlikely(nslots > area_nslabs(mem) - area->used))
 		goto not_found;
 
-	index = wrap = wrap_index(mem, ALIGN(mem->index, stride));
-	do {
+	list_for_each_entry_safe(slot, tmp, &area->free_slots, node) {
+		index = slot - mem->slots;
 		if (orig_addr &&
 		    (slot_addr(tbl_dma_addr, index) & iotlb_align_mask) !=
 			    (orig_addr & iotlb_align_mask)) {
-			index = wrap_index(mem, index + 1);
 			continue;
 		}
+
+		if (io_tlb_offset(index) + nslots > IO_TLB_SEGSIZE)
+			continue;
+
+		/*
+		 * If requested size is larger than a page, ensure allocated
+		 * memory to be page aligned.
+		 */
+		if (alloc_size >= PAGE_SIZE && (slot_addr(tbl_dma_addr, index) & ~PAGE_MASK))
+			continue;
 
 		/*
 		 * If we find a slot that indicates we have 'nslots' number of
@@ -505,38 +597,58 @@ static int swiotlb_find_slots(struct device *dev, phys_addr_t orig_addr,
 		if (!iommu_is_span_boundary(index, nslots,
 					    nr_slots(tbl_dma_addr),
 					    max_slots)) {
-			if (mem->slots[index].list >= nslots)
+			if (find_next_zero_bit(mem->bitmap, index + nslots, index) ==
+					index + nslots)
 				goto found;
 		}
-		index = wrap_index(mem, index + stride);
-	} while (index != wrap);
+	}
 
 not_found:
-	spin_unlock_irqrestore(&mem->lock, flags);
+	spin_unlock_irqrestore(&area->lock, flags);
 	return -1;
 
 found:
 	for (i = index; i < index + nslots; i++) {
-		mem->slots[i].list = 0;
+		__clear_bit(i, mem->bitmap);
 		mem->slots[i].alloc_size =
 			alloc_size - (offset + ((i - index) << IO_TLB_SHIFT));
+		list_del(&mem->slots[i].node);
 	}
-	for (i = index - 1;
-	     io_tlb_offset(i) != IO_TLB_SEGSIZE - 1 &&
-	     mem->slots[i].list; i--)
-		mem->slots[i].list = ++count;
 
-	/*
-	 * Update the indices to avoid searching in the next round.
-	 */
-	if (index + nslots < mem->nslabs)
-		mem->index = index + nslots;
-	else
-		mem->index = 0;
-	mem->used += nslots;
+	area->used += nslots;
 
-	spin_unlock_irqrestore(&mem->lock, flags);
+	spin_unlock_irqrestore(&area->lock, flags);
 	return index;
+}
+
+static int swiotlb_find_slots(struct device *dev, phys_addr_t orig_addr,
+			      size_t alloc_size)
+{
+	struct io_tlb_mem *mem = dev->dma_io_tlb_mem;
+	int start = raw_smp_processor_id() & ((1U << area_bits) - 1);
+	int i, index;
+
+	i = start;
+	do {
+		index = swiotlb_do_find_slots(mem, mem->areas + i, i,
+					      dev, orig_addr, alloc_size);
+		if (index >= 0)
+			return index;
+		if (++i >= num_areas)
+			i = 0;
+	} while (i != start);
+	return -1;
+}
+
+/* Somewhat racy estimate */
+static unsigned long mem_used(struct io_tlb_mem *mem)
+{
+	int i;
+	unsigned long used = 0;
+
+	for (i = 0; i < num_areas; i++)
+		used += mem->areas[i].used;
+	return used;
 }
 
 phys_addr_t swiotlb_tbl_map_single(struct device *dev, phys_addr_t orig_addr,
@@ -552,7 +664,7 @@ phys_addr_t swiotlb_tbl_map_single(struct device *dev, phys_addr_t orig_addr,
 	if (!mem)
 		panic("Can not allocate SWIOTLB buffer earlier and can't now provide you with the DMA bounce buffer");
 
-	if (mem_encrypt_active())
+	if (cc_platform_has(CC_ATTR_MEM_ENCRYPT))
 		pr_warn_once("Memory encryption is active and system is using DMA bounce buffers\n");
 
 	if (mapping_size > alloc_size) {
@@ -566,7 +678,7 @@ phys_addr_t swiotlb_tbl_map_single(struct device *dev, phys_addr_t orig_addr,
 		if (!(attrs & DMA_ATTR_NO_WARN))
 			dev_warn_ratelimited(dev,
 	"swiotlb buffer is full (sz: %zd bytes), total %lu (slots), used %lu (slots)\n",
-				 alloc_size, mem->nslabs, mem->used);
+				 alloc_size, mem->nslabs, mem_used(mem));
 		return (phys_addr_t)DMA_MAPPING_ERROR;
 	}
 
@@ -591,40 +703,27 @@ static void swiotlb_release_slots(struct device *dev, phys_addr_t tlb_addr)
 	unsigned int offset = swiotlb_align_offset(dev, tlb_addr);
 	int index = (tlb_addr - offset - mem->start) >> IO_TLB_SHIFT;
 	int nslots = nr_slots(mem->slots[index].alloc_size + offset);
-	int count, i;
+	int aindex = area_index_shift ? index >> area_index_shift : 0;
+	struct io_tlb_area *area = mem->areas + aindex;
+	int i;
+
+	BUG_ON(aindex >= num_areas);
+
+	spin_lock_irqsave(&area->lock, flags);
 
 	/*
-	 * Return the buffer to the free list by setting the corresponding
-	 * entries to indicate the number of contiguous entries available.
-	 * While returning the entries to the free list, we merge the entries
-	 * with slots below and above the pool being returned.
-	 */
-	spin_lock_irqsave(&mem->lock, flags);
-	if (index + nslots < ALIGN(index + 1, IO_TLB_SEGSIZE))
-		count = mem->slots[index + nslots].list;
-	else
-		count = 0;
-
-	/*
-	 * Step 1: return the slots to the free list, merging the slots with
-	 * superceeding slots
+	 * Return the slots to swiotlb, updating bitmap to indicate
+	 * corresponding entries are free.
 	 */
 	for (i = index + nslots - 1; i >= index; i--) {
-		mem->slots[i].list = ++count;
+		__set_bit(i, mem->bitmap);
 		mem->slots[i].orig_addr = INVALID_PHYS_ADDR;
 		mem->slots[i].alloc_size = 0;
+		list_add(&mem->slots[i].node, &area->free_slots);
 	}
 
-	/*
-	 * Step 2: merge the returned slots with the preceding slots, if
-	 * available (non zero)
-	 */
-	for (i = index - 1;
-	     io_tlb_offset(i) != IO_TLB_SEGSIZE - 1 && mem->slots[i].list;
-	     i--)
-		mem->slots[i].list = ++count;
-	mem->used -= nslots;
-	spin_unlock_irqrestore(&mem->lock, flags);
+	area->used -= nslots;
+	spin_unlock_irqrestore(&area->lock, flags);
 }
 
 /*
@@ -705,17 +804,27 @@ bool is_swiotlb_active(struct device *dev)
 {
 	struct io_tlb_mem *mem = dev->dma_io_tlb_mem;
 
-	return mem && mem->nslabs;
+	return mem && mem->start != mem->end;
 }
 EXPORT_SYMBOL_GPL(is_swiotlb_active);
 
 #ifdef CONFIG_DEBUG_FS
+
+static int used_get(void *data, u64 *val)
+{
+	struct io_tlb_mem *mem = (struct io_tlb_mem *)data;
+	*val = mem_used(mem);
+	return 0;
+}
+
+DEFINE_DEBUGFS_ATTRIBUTE(used_fops, used_get, NULL, "%llu\n");
+
 static struct dentry *debugfs_dir;
 
 static void swiotlb_create_debugfs_files(struct io_tlb_mem *mem)
 {
 	debugfs_create_ulong("io_tlb_nslabs", 0400, mem->debugfs, &mem->nslabs);
-	debugfs_create_ulong("io_tlb_used", 0400, mem->debugfs, &mem->used);
+	debugfs_create_file("io_tlb_used", 0400, mem->debugfs, mem, &used_fops);
 }
 
 static int __init swiotlb_create_default_debugfs(void)
@@ -796,9 +905,12 @@ static int rmem_swiotlb_device_init(struct reserved_mem *rmem,
 		if (!mem)
 			return -ENOMEM;
 
+		mem->bitmap = kzalloc(DIV_ROUND_UP(nslabs, BITS_PER_BYTE), GFP_KERNEL);
 		mem->slots = kzalloc(array_size(sizeof(*mem->slots), nslabs),
 				     GFP_KERNEL);
-		if (!mem->slots) {
+		if (!mem->slots || !mem->bitmap) {
+			kfree(mem->slots);
+			kfree(mem->bitmap);
 			kfree(mem);
 			return -ENOMEM;
 		}
