@@ -10067,18 +10067,26 @@ static void kvm_load_guest_fpu(struct kvm_vcpu *vcpu)
 	trace_kvm_fpu(1);
 }
 
-/* When vcpu_run ends, restore user space FPU context. */
-static void kvm_put_guest_fpu(struct kvm_vcpu *vcpu)
+/*
+ * When vcpu_run ends, restore user space FPU context.
+ * Propagate error to userspace.
+ */
+static int kvm_put_guest_fpu(struct kvm_vcpu *vcpu)
 {
-	fpu_swap_kvm_fpstate(&vcpu->arch.guest_fpu, false);
+	int ret;
+
+	ret = fpu_swap_kvm_fpstate(&vcpu->arch.guest_fpu, false);
+
 	++vcpu->stat.fpu_reload;
 	trace_kvm_fpu(0);
+
+	return ret;
 }
 
 int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu)
 {
 	struct kvm_run *kvm_run = vcpu->run;
-	int r;
+	int r, put_ret;
 
 	vcpu_load(vcpu);
 	kvm_sigset_activate(vcpu);
@@ -10146,7 +10154,16 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu)
 		r = vcpu_run(vcpu);
 
 out:
-	kvm_put_guest_fpu(vcpu);
+	put_ret = kvm_put_guest_fpu(vcpu);
+	/*
+	 * kvm_put_guest_fpu() only returns negative error when there was
+	 * realloction request but failed to reallocate. And in such case,
+	 * vcpu_run() should return zero.
+	 */
+	WARN_ON_ONCE(r && put_ret);
+	/* Propagate reallocation error to userspace */
+	if (put_ret)
+		r = put_ret;
 	if (kvm_run->kvm_valid_regs && !vcpu->arch.guest_state_protected)
 		store_regs(vcpu);
 	post_kvm_run_save(vcpu);
