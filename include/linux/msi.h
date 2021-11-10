@@ -95,6 +95,17 @@ struct ti_sci_inta_msi_desc {
 };
 
 /**
+ * device_msi_desc - Device MSI specific MSI descriptor data
+ * @priv:		Pointer to device specific private data
+ * @priv_iomem:		Pointer to device specific private io memory
+ * @hwirq:		The hardware irq number in the device domain
+ */
+struct device_msi_desc {
+	void __iomem	*priv_iomem;
+	u16		hwirq;
+};
+
+/**
  * struct msi_desc - Descriptor structure for MSI based interrupts
  * @list:	List head for management
  * @irq:	The base interrupt number
@@ -170,24 +181,52 @@ struct msi_desc {
 		struct platform_msi_desc platform;
 		struct fsl_mc_msi_desc fsl_mc;
 		struct ti_sci_inta_msi_desc inta;
+		struct device_msi_desc device_msi;
 	};
 };
 
 /* Helpers to hide struct msi_desc implementation details */
 #define msi_desc_to_dev(desc)		((desc)->dev)
 #define dev_to_msi_list(dev)		(&(dev)->msi_list)
+#define dev_to_dev_msi_list(dev)	(&(dev)->dev_msi_list)
 #define first_msi_entry(dev)		\
 	list_first_entry(dev_to_msi_list((dev)), struct msi_desc, list)
-#define for_each_msi_entry(desc, dev)	\
-	list_for_each_entry((desc), dev_to_msi_list((dev)), list)
+#define __for_each_msi_entry(desc, msi_list)    \
+	list_for_each_entry((desc), (msi_list), list)
+#define for_each_msi_entry(desc, dev)		\
+	__for_each_msi_entry((desc), dev_to_msi_list((dev)))
 #define for_each_msi_entry_safe(desc, tmp, dev)	\
 	list_for_each_entry_safe((desc), (tmp), dev_to_msi_list((dev)), list)
-#define for_each_msi_vector(desc, __irq, dev)				\
-	for_each_msi_entry((desc), (dev))				\
-		if ((desc)->irq)					\
-			for (__irq = (desc)->irq;			\
-			     __irq < ((desc)->irq + (desc)->nvec_used);	\
+#define __for_each_msi_vector(desc, __irq, msi_list)	\
+	__for_each_msi_entry((desc), (msi_list))	\
+		if ((desc)->irq)			\
+			for (__irq = (desc)->irq;	\
+			     __irq < ((desc)->irq + (desc)->nvec_used); \
 			     __irq++)
+#define for_each_msi_vector(desc, __irq, dev)		\
+	__for_each_msi_vector(desc, __irq, dev_to_msi_list((dev)))
+
+/* Iterate through all the msi_descs starting from a given desc */
+#define __for_each_new_msi_entry(desc, msi_last_list, msi_list) \
+	(desc) = list_entry((msi_last_list)->next, struct msi_desc, list);	\
+	list_for_each_entry_from((desc), (msi_list), list)
+#define for_each_new_msi_entry(desc, dev)			\
+	 __for_each_new_msi_entry((desc), (dev)->msi_last_list, dev_to_msi_list((dev)))
+#define __for_each_new_msi_vector(desc, __irq, msi_last_list, msi_list)	\
+	__for_each_new_msi_entry((desc), (msi_last_list), (msi_list))	\
+		if ((desc)->irq)					\
+			for ((__irq) = (desc)->irq;			\
+			     (__irq) < ((desc)->irq + (desc)->nvec_used);	\
+			     (__irq)++)
+#define for_each_new_msi_vector(desc, __irq, dev)	\
+	__for_each_new_msi_vector((desc), (__irq), (dev)->msi_last_list, dev_to_msi_list((dev)))
+#define for_each_new_msi_entry_safe(desc, tmp, dev)	\
+	(desc) = list_entry((dev)->msi_last_list->next, struct msi_desc, list);	\
+	list_for_each_entry_safe_from((desc), (tmp), dev_to_msi_list((dev)), list)
+#define for_each_dev_msi_entry(desc, dev)	\
+	list_for_each_entry((desc), dev_to_dev_msi_list((dev)), list)
+#define for_each_new_dev_msi_entry(desc, dev)                       \
+	__for_each_new_msi_entry((desc), (dev)->dev_msi_last_list, dev_to_dev_msi_list((dev)))
 
 #ifdef CONFIG_IRQ_MSI_IOMMU
 static inline const void *msi_desc_get_iommu_cookie(struct msi_desc *desc)
@@ -216,6 +255,10 @@ static inline void msi_desc_set_iommu_cookie(struct msi_desc *desc,
 #define first_pci_msi_entry(pdev)	first_msi_entry(&(pdev)->dev)
 #define for_each_pci_msi_entry(desc, pdev)	\
 	for_each_msi_entry((desc), &(pdev)->dev)
+#define for_each_new_pci_msi_entry(desc, pdev)        \
+	for_each_new_msi_entry((desc), &(pdev)->dev)
+#define for_each_new_pci_msi_entry_safe(desc, tmp, pdev)	\
+	for_each_new_msi_entry_safe((desc), (tmp), &(pdev)->dev)
 
 struct pci_dev *msi_desc_to_pci_dev(struct msi_desc *desc);
 void *msi_desc_to_pci_sysdata(struct msi_desc *desc);
@@ -301,6 +344,10 @@ struct msi_domain_info;
  *			function.
  * @domain_free_irqs:	Optional function to override the default free
  *			function.
+ * @msi_alloc_store:	Optional callback to allocate storage in a device
+ *			specific non-standard MSI store
+ * @msi_alloc_free:	Optional callback to free storage in a device
+ *			specific non-standard MSI store
  *
  * @get_hwirq, @msi_init and @msi_free are callbacks used by
  * msi_create_irq_domain() and related interfaces
@@ -350,6 +397,16 @@ struct msi_domain_ops {
 					     struct device *dev, int nvec);
 	void		(*domain_free_irqs)(struct irq_domain *domain,
 					    struct device *dev);
+	void		(*domain_free_irq)(struct irq_domain *domain,
+					   struct device *dev,
+					   unsigned int irq);
+	int		(*msi_alloc_store)(struct irq_domain *domain,
+					   struct device *dev, int nvec);
+	void		(*msi_free_store)(struct irq_domain *domain,
+					  struct device *dev);
+	void            (*msi_free_irq)(struct irq_domain *domain,
+					struct device *dev, unsigned int irq);
+
 };
 
 /**
@@ -413,6 +470,9 @@ int msi_domain_alloc_irqs(struct irq_domain *domain, struct device *dev,
 			  int nvec);
 void __msi_domain_free_irqs(struct irq_domain *domain, struct device *dev);
 void msi_domain_free_irqs(struct irq_domain *domain, struct device *dev);
+int device_msi_add_irq(struct irq_domain *domain, struct device *dev);
+void msi_domain_free_irq(struct irq_domain *domain, struct device *dev, unsigned int irq);
+void __msi_domain_free_irq(struct irq_domain *domain, struct device *dev, unsigned int irq);
 struct msi_domain_info *msi_get_domain_info(struct irq_domain *domain);
 
 struct irq_domain *platform_msi_create_irq_domain(struct fwnode_handle *fwnode,
@@ -421,6 +481,8 @@ struct irq_domain *platform_msi_create_irq_domain(struct fwnode_handle *fwnode,
 int platform_msi_domain_alloc_irqs(struct device *dev, unsigned int nvec,
 				   irq_write_msi_msg_t write_msi_msg);
 void platform_msi_domain_free_irqs(struct device *dev);
+int dev_msi_irq_vector(struct device *dev, unsigned int nr);
+int dev_msi_hwirq(struct device *dev, unsigned int nr);
 
 /* When an MSI domain is used as an intermediate domain */
 int msi_domain_prepare_irqs(struct irq_domain *domain, struct device *dev,
@@ -445,7 +507,21 @@ int platform_msi_domain_alloc(struct irq_domain *domain, unsigned int virq,
 void platform_msi_domain_free(struct irq_domain *domain, unsigned int virq,
 			      unsigned int nvec);
 void *platform_msi_get_host_data(struct irq_domain *domain);
+void msi_domain_set_default_info_flags(struct msi_domain_info *info);
 #endif /* CONFIG_GENERIC_MSI_IRQ_DOMAIN */
+
+#ifdef CONFIG_DEVICE_MSI
+struct irq_domain *device_msi_create_irq_domain(struct fwnode_handle *fn,
+						struct msi_domain_info *info,
+						struct irq_domain *parent);
+
+# ifdef CONFIG_PCI
+struct irq_domain *pci_subdevice_msi_create_irq_domain(struct pci_dev *pdev,
+						       struct msi_domain_info *info);
+# endif
+#endif /* CONFIG_DEVICE_MSI */
+
+bool arch_support_pci_device_msi(struct pci_dev *pdev);
 
 #ifdef CONFIG_PCI_MSI_IRQ_DOMAIN
 void pci_msi_domain_write_msg(struct irq_data *irq_data, struct msi_msg *msg);
@@ -463,5 +539,9 @@ static inline struct irq_domain *pci_msi_get_device_domain(struct pci_dev *pdev)
 	return NULL;
 }
 #endif /* CONFIG_PCI_MSI_IRQ_DOMAIN */
+
+#ifndef arch_msi_prepare
+# define arch_msi_prepare	NULL
+#endif
 
 #endif /* LINUX_MSI_H */
