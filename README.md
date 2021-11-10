@@ -12,6 +12,11 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v1.13
+----------------
+12. DSA/IAX (Dave Jiang):
+https://github.com/intel-sandbox/idxd     djiang5/bkc-5.15
+
 SPR-BKC-PC-v1.12
 ----------------
 
