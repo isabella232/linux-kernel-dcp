@@ -40,10 +40,18 @@ int iommu_sva_alloc_pasid(struct mm_struct *mm, ioasid_t min, ioasid_t max)
 			ret = -EOVERFLOW;
 	} else {
 		pasid = ioasid_alloc(&iommu_sva_pasid, min, max, mm);
-		if (pasid == INVALID_IOASID)
+		if (pasid == INVALID_IOASID) {
 			ret = -ENOMEM;
-		else
+		} else {
 			mm->pasid = pasid;
+#ifdef CONFIG_FREE_PASID_MM_EXIT
+			/*
+			 * Take an extra reference to the PASID so that the mm
+			 * will keep the PASID until the mm exits.
+			 */
+			ioasid_get(pasid);
+#endif
+		}
 	}
 	mutex_unlock(&iommu_sva_lock);
 	return ret;

@@ -486,4 +486,8 @@ config SPRD_IOMMU
 
 	  Say Y here if you want to use the multimedia devices listed above.
 
+# Selected by architectures that lazily free PASID on mm exit
+config FREE_PASID_MM_EXIT
+	bool
+
 endif # IOMMU_SUPPORT
