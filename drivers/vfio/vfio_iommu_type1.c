@@ -170,6 +170,7 @@ struct domain_capsule {
 	void			*data;
 	/* set if @data contains a user pointer*/
 	bool			user;
+	u64			flags;
 };
 
 /* iommu->lock must be held */
@@ -2786,7 +2787,7 @@ static int vfio_dev_unbind_gpasid_fn(struct device *dev, void *data)
 	} else {
 		ioasid_t pasid = *(ioasid_t *)dc->data;
 
-		iommu_sva_unbind_gpasid(dc->domain, iommu_device, pasid);
+		iommu_sva_unbind_gpasid(dc->domain, iommu_device, pasid, dc->flags);
 	}
 	return 0;
 }
