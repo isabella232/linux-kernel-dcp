@@ -294,6 +294,25 @@ static int fpu_guest_realloc_fpstate(struct fpu_guest *guest_fpu,
 	return xfd_enable_guest_features(guest_fpu);
 }
 
+static void fpu_guest_swap_xfd_err(struct fpu_guest *guest_fpu, bool enter_guest)
+{
+	if (!fpu_state_size_dynamic())
+		return;
+
+	if (enter_guest) {
+		if (guest_fpu->xfd_err) {
+			wrmsrl(MSR_IA32_XFD_ERR, guest_fpu->xfd_err);
+			if (guest_fpu->xfd_err_dirty)
+				guest_fpu->xfd_err_dirty = false;
+		}
+	} else {
+		if (!guest_fpu->xfd_err_dirty)
+			rdmsrl(MSR_IA32_XFD_ERR, guest_fpu->xfd_err);
+		if (guest_fpu->xfd_err)
+			wrmsrl(MSR_IA32_XFD_ERR, 0);
+	}
+}
+
 int fpu_swap_kvm_fpstate(struct fpu_guest *guest_fpu, bool enter_guest)
 {
 	struct fpstate *guest_fps, *cur_fps;
@@ -334,6 +353,9 @@ int fpu_swap_kvm_fpstate(struct fpu_guest *guest_fpu, bool enter_guest)
 		 */
 		xfd_update_state(cur_fps);
 	}
+
+	/* Swap XFD_ERR */
+	fpu_guest_swap_xfd_err(guest_fpu, enter_guest);
 
 	fpregs_mark_activate();
 	fpregs_unlock();
