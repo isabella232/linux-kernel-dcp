@@ -4,6 +4,10 @@
 #ifndef _X86_TDX_SEAM_H
 #define _X86_TDX_SEAM_H
 
+#include <linux/earlycpio.h>
+
+#include <asm/vmx.h>
+
 bool __init seam_get_firmware(struct cpio_data *blob, const char *name);
 
 int __init seam_init_vmx_early(void);
