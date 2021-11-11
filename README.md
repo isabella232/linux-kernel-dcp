@@ -12,6 +12,11 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v1.14
+----------------
+13. SIOV (Jacob Pan):
+https://github.com/intel-sandbox/linux-svm-kernel.git  SPR-BKC-PC-v1.rc7.siov
+
 SPR-BKC-PC-v1.13
 ----------------
 12. DSA/IAX (Dave Jiang):
