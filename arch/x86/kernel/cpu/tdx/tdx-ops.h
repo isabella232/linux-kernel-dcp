@@ -64,24 +64,15 @@ static inline u64 tdh_sys_tdmr_config(u64 tdmr, int nr_entries, int hkid)
 			NULL);
 }
 
-static inline u64 tdh_trace_seamcalls(u64 level)
+static inline u64 tddebugconfig(u64 subleaf, u64 param1, u64 param2)
 {
-	u64 err = 0;
+	return seamcall(SEAMCALL_TDDEBUGCONFIG, subleaf, param1, param2,
+			0, NULL);
+}
 
-	if (is_debug_seamcall_available) {
-		err = seamcall(SEAMCALL_TDDEBUGCONFIG,
-			DEBUGCONFIG_SET_TRACE_LEVEL, level, 0, 0, NULL);
-		if (err == TDX_OPERAND_INVALID) {
-			pr_warn("TDX module doesn't support DEBUG TRACE SEAMCALL API\n");
-			is_debug_seamcall_available = false;
-		} else if (err) {
-			pr_err_ratelimited("SEAMCALL[TDDBUTCONFIG] failed on cpu %d: %s (0x%llx)\n",
-					smp_processor_id(),
-					tdx_seamcall_error_name(err), err);
-		}
-	}
-
-	return err;
+static inline void tdh_trace_seamcalls(u64 level)
+{
+	tddebugconfig(DEBUGCONFIG_SET_TRACE_LEVEL, level, 0);
 }
 
 static inline void tdxmode(bool intercept_vmexits, u64 intercept_bitmap)

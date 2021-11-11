@@ -120,10 +120,8 @@ enum TDX_MODULE_STATE {
 static enum TDX_MODULE_STATE tdx_module_state __ro_after_init;
 
 bool is_debug_seamcall_available __read_mostly = true;
-EXPORT_SYMBOL_GPL(is_debug_seamcall_available);
 
 bool is_nonarch_seamcall_available __read_mostly = true;
-EXPORT_SYMBOL_GPL(is_nonarch_seamcall_available);
 
 /* TDX system information returned by TDH_SYS_INFO. */
 static struct tdsysinfo_struct *tdx_tdsysinfo;
@@ -1034,7 +1032,8 @@ static int __init __tdx_init_module(void)
 		 * causes too many debug messages to take long time.
 		 */
 		tdh_trace_seamcalls(DEBUGCONFIG_TRACE_CUSTOM);
-	tdxmode(false, 0);
+	/* Unconditionally intercept triple faults to aid debug. */
+	tdxmode(true, BIT_ULL(EXIT_REASON_TRIPLE_FAULT));
 
 	ret = tdx_init_tdmrs();
 out:
@@ -1153,6 +1152,8 @@ out_err:
 		setup_force_cpu_cap(X86_FEATURE_TDX);
 		for_each_online_cpu(cpu)
 			set_cpu_cap(&cpu_data(cpu), X86_FEATURE_TDX);
+
+		tdx_debugfs_init();
 	}
 	cpus_read_unlock();
 

@@ -223,42 +223,6 @@ static inline u64 tdh_vp_wr(hpa_t tdvpr, u64 field, u64 val, u64 mask,
 {
 	return seamcall(TDH_VP_WR, tdvpr, field, val, mask, 0, ex);
 }
-
-static inline u64 tddebugconfig(u64 subleaf, u64 param1, u64 param2)
-{
-	return seamcall(TDDEBUGCONFIG, subleaf, param1, param2, 0, 0, NULL);
-}
-
-static inline void tdh_trace_seamcalls(u64 level)
-{
-	u64 err;
-
-	if (is_debug_seamcall_available) {
-		err = tddebugconfig(DEBUGCONFIG_SET_TRACE_LEVEL, level, 0);
-		if (err == TDX_OPERAND_INVALID) {
-			pr_warn("TDX module doesn't support DEBUG TRACE SEAMCALL API\n");
-			is_debug_seamcall_available = false;
-		} else if (err) {
-			pr_seamcall_error(TDDEBUGCONFIG, err, NULL);
-		}
-	}
-}
-
-static inline void tdxmode(bool intercept_vmexits, u64 intercept_bitmap)
-{
-	u64 err;
-
-	if (is_nonarch_seamcall_available) {
-		err = seamcall(TDXMODE, intercept_vmexits, intercept_bitmap,
-			       0, 0, 0, NULL);
-		if (err == TDX_OPERAND_INVALID) {
-			pr_warn("TDX module doesn't support NON-ARCH SEAMCALL API\n");
-			is_nonarch_seamcall_available = false;
-		} else if (err) {
-			pr_seamcall_error(TDXMODE, err, NULL);
-		}
-	}
-}
 #endif /* CONFIG_INTEL_TDX_HOST */
 
 #endif /* __KVM_X86_TDX_OPS_H */

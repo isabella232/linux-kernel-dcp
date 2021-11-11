@@ -6,6 +6,7 @@
 #ifdef CONFIG_SYSFS
 extern struct kobject *tdx_kobj;
 int __init tdx_sysfs_init(void);
+int __init tdx_debugfs_init(void);
 #endif
 
 #endif /* _X86_TDX_H */
