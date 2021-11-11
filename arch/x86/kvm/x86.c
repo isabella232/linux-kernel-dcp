@@ -4973,6 +4973,17 @@ static int kvm_vcpu_ioctl_x86_get_xsave(struct kvm_vcpu *vcpu,
 	return 0;
 }
 
+static void kvm_vcpu_ioctl_x86_get_xsave2(struct kvm_vcpu *vcpu,
+					  u8 *state, u32 size)
+{
+	if (fpstate_is_confidential(&vcpu->arch.guest_fpu))
+		return;
+
+	fpu_copy_guest_fpstate_to_uabi(&vcpu->arch.guest_fpu,
+				       state, size,
+				       vcpu->arch.pkru);
+}
+
 static int kvm_vcpu_ioctl_x86_set_xsave(struct kvm_vcpu *vcpu,
 					struct kvm_xsave *guest_xsave)
 {
@@ -4984,6 +4995,15 @@ static int kvm_vcpu_ioctl_x86_set_xsave(struct kvm_vcpu *vcpu,
 
 	return fpu_copy_uabi_to_guest_fpstate(&vcpu->arch.guest_fpu,
 					      guest_xsave->region,
+					      supported_xcr0, &vcpu->arch.pkru);
+}
+
+static int kvm_vcpu_ioctl_x86_set_xsave2(struct kvm_vcpu *vcpu, u8 *state)
+{
+	if (fpstate_is_confidential(&vcpu->arch.guest_fpu))
+		return 0;
+
+	return fpu_copy_uabi_to_guest_fpstate(&vcpu->arch.guest_fpu, state,
 					      supported_xcr0, &vcpu->arch.pkru);
 }
 
@@ -5334,6 +5354,51 @@ long kvm_arch_vcpu_ioctl(struct file *filp,
 		}
 
 		r = kvm_vcpu_ioctl_x86_set_xsave(vcpu, u.xsave);
+		break;
+	}
+	case KVM_GET_XSAVE2: {
+		struct kvm_xsave2 __user *xsave2_arg = argp;
+		struct kvm_xsave2 xsave2;
+		u8 *state;
+
+		r = -EFAULT;
+		if (copy_from_user(&xsave2, xsave2_arg, sizeof(struct kvm_xsave2)))
+			goto out;
+
+		state = kzalloc(xsave2.size, GFP_KERNEL_ACCOUNT);
+
+		r = -ENOMEM;
+		if (!state)
+			break;
+
+		kvm_vcpu_ioctl_x86_get_xsave2(vcpu, state, xsave2.size);
+
+		r = -EFAULT;
+		if (copy_to_user(xsave2_arg->state, state, xsave2.size))
+			goto out_free;
+
+		r = 0;
+out_free:
+		kfree(state);
+		break;
+	}
+	case KVM_SET_XSAVE2: {
+		struct kvm_xsave2 __user *xsave2_arg = argp;
+		struct kvm_xsave2 xsave2;
+		u8 *state;
+
+		r = -EFAULT;
+		if (copy_from_user(&xsave2, xsave2_arg, sizeof(struct kvm_xsave2)))
+			goto out;
+
+		state = memdup_user(xsave2_arg->state, xsave2.size);
+
+		r = -ENOMEM;
+		if (IS_ERR(state))
+			break;
+
+		r = kvm_vcpu_ioctl_x86_set_xsave2(vcpu, state);
+		kfree(state);
 		break;
 	}
 	case KVM_GET_XCRS: {
