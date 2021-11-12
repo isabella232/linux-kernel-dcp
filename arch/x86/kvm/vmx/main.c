@@ -1111,6 +1111,7 @@ static struct kvm_x86_ops vt_x86_ops __initdata = {
 #ifdef CONFIG_X86_64
 	.set_hv_timer = vt_set_hv_timer,
 	.cancel_hv_timer = vt_cancel_hv_timer,
+	.set_xfd_passthrough = vmx_set_xfd_passthrough,
 #endif
 
 	.setup_mce = vt_setup_mce,
