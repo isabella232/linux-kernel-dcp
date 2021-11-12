@@ -446,6 +446,7 @@ static inline bool kvm_pkrs_valid(u64 data)
 
 void kvm_load_guest_xsave_state(struct kvm_vcpu *vcpu);
 void kvm_load_host_xsave_state(struct kvm_vcpu *vcpu);
+bool kvm_guest_realloc_fpstate(struct kvm_vcpu *vcpu, u64 new_xfd);
 int kvm_spec_ctrl_test_value(u64 value);
 bool kvm_is_valid_cr4(struct kvm_vcpu *vcpu, unsigned long cr4);
 int kvm_handle_memory_failure(struct kvm_vcpu *vcpu, int r,
@@ -460,6 +461,7 @@ bool kvm_msr_allowed(struct kvm_vcpu *vcpu, u32 index, u32 type);
  */
 #define  KVM_MSR_RET_INVALID	2	/* in-kernel MSR emulation #GP condition */
 #define  KVM_MSR_RET_FILTERED	3	/* #GP due to userspace MSR filter */
+#define  KVM_MSR_RET_USERSPACE	4	/* Userspace handling */
 
 #define __cr4_reserved_bits(__cpu_has, __c)             \
 ({                                                      \

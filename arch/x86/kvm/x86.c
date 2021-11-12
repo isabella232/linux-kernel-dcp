@@ -998,6 +998,41 @@ void kvm_load_host_xsave_state(struct kvm_vcpu *vcpu)
 }
 EXPORT_SYMBOL_GPL(kvm_load_host_xsave_state);
 
+/*
+ * Return dynamic feature bitmap that xcr0[i]=1 && xfd[i]=0
+ */
+static u64 check_realloc_request(u64 new_xfd, u64 new_xcr0)
+{
+	new_xcr0 &= XFEATURE_MASK_USER_DYNAMIC;
+
+	if ((new_xfd & new_xcr0) != new_xcr0)
+		return (new_xcr0 ^ new_xfd) & new_xcr0;
+
+	return 0;
+}
+
+bool kvm_guest_realloc_fpstate(struct kvm_vcpu *vcpu, u64 new_xfd)
+{
+	u64 request = 0;
+	u64 new_xcr0 = vcpu->arch.xcr0;
+
+	request = check_realloc_request(new_xfd, new_xcr0);
+	if (request) {
+		vcpu->arch.guest_fpu.realloc_request = request;
+
+		return true;
+	}
+
+	return false;
+}
+EXPORT_SYMBOL_GPL(kvm_guest_realloc_fpstate);
+
+void kvm_set_xfd_passthrough(struct kvm_vcpu *vcpu)
+{
+	if (kvm_x86_ops.set_xfd_passthrough)
+		static_call(kvm_x86_set_xfd_passthrough)(vcpu);
+}
+
 static int __kvm_set_xcr(struct kvm_vcpu *vcpu, u32 index, u64 xcr)
 {
 	u64 xcr0 = xcr;
@@ -1839,6 +1874,8 @@ static u64 kvm_msr_reason(int r)
 		return KVM_MSR_EXIT_REASON_UNKNOWN;
 	case KVM_MSR_RET_FILTERED:
 		return KVM_MSR_EXIT_REASON_FILTER;
+	case KVM_MSR_RET_USERSPACE:
+		return KVM_MSR_EXIT_REASON_USERSPACE;
 	default:
 		return KVM_MSR_EXIT_REASON_INVAL;
 	}
@@ -3574,6 +3611,17 @@ int kvm_set_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 			return 1;
 		vcpu->arch.msr_misc_features_enables = data;
 		break;
+#ifdef CONFIG_X86_64
+	case MSR_IA32_XFD:
+		WARN_ON_ONCE(current->thread.fpu.fpstate !=
+			     vcpu->arch.guest_fpu.fpstate);
+		fpregs_lock();
+		/* current XFD must be the same with hardware */
+		current->thread.fpu.fpstate->xfd = data;
+		xfd_update_state(current->thread.fpu.fpstate);
+		fpregs_unlock();
+		break;
+#endif
 	default:
 		if (kvm_pmu_is_valid_msr(vcpu, msr))
 			return kvm_pmu_set_msr(vcpu, msr_info);
@@ -9820,6 +9868,9 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 
 	vcpu->arch.last_vmentry_cpu = vcpu->cpu;
 	vcpu->arch.last_guest_tsc = kvm_read_l1_tsc(vcpu, rdtsc());
+
+	if (vcpu->arch.dyn_feature_enabled)
+		kvm_update_guest_xfd_state();
 
 	vcpu->mode = OUTSIDE_GUEST_MODE;
 	smp_wmb();
