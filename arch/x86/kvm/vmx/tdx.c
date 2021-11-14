@@ -6,6 +6,7 @@
 #include <linux/pagemap.h>
 #include <linux/perf_event.h>
 #include <linux/debugfs.h>
+#include <linux/refcount.h>
 
 #include <asm/tdx_errno.h>
 #include <asm/tdx_host.h>
@@ -82,6 +83,75 @@ static int tdx_get_caps(void)
 	if (!memcpy(tdx_caps.cpuid_configs, tdsysinfo->cpuid_configs,
 		    tdsysinfo->num_cpuid_config * sizeof(struct tdx_cpuid_config)))
 		return -EIO;
+
+	return 0;
+}
+
+/*
+ * Reference count of TDX module
+ *
+ * 0 denotes KVM doesn't attach to TDX module. In this case, KVM
+ * shouldn't use TDX module, for example, create TDs.
+ */
+static refcount_t kvm_tdx_refcnt = REFCOUNT_INIT(0);
+
+/*
+ * Try to increase the reference count of TDX module by 1.
+ *
+ * Return an error if KVM hasn't attached to TDX module.
+ */
+static int try_tdx_get(void)
+{
+	if (!refcount_inc_not_zero(&kvm_tdx_refcnt))
+		return -ENODEV;
+
+	return 0;
+}
+
+static void tdx_put(void)
+{
+	WARN_ON(!refcount_dec_not_one(&kvm_tdx_refcnt));
+}
+
+/*
+ * Attach KVM to TDX module.
+ *
+ * Set the reference count to 1 and retrieve TDX capabilities.
+ */
+static int attach_tdx_module(void)
+{
+	int ret;
+
+	/* Already attached */
+	if (refcount_read(&kvm_tdx_refcnt))
+		return 0;
+
+	/*
+	 * Shouldn't fail as this function is called by notifier callback when
+	 * TDX module is ready. TDX module state isn't supposed to be changed
+	 */
+	ret = tdx_get_caps();
+	if (WARN_ON(ret))
+		return ret;
+
+	refcount_set(&kvm_tdx_refcnt, 1);
+
+	return 0;
+}
+
+/*
+ * Detach from TDX module
+ *
+ * return -EBUSY if TDX module is in use.
+ */
+static int detach_tdx_module(void)
+{
+	/* Already detached */
+	if (!refcount_read(&kvm_tdx_refcnt))
+		return 0;
+
+	if (!refcount_dec_if_one(&kvm_tdx_refcnt))
+		return -EBUSY;
 
 	return 0;
 }
@@ -441,6 +511,7 @@ static void tdx_vm_destroy(struct kvm *kvm)
 		return;
 
 	free_page(kvm_tdx->tdr.va);
+	tdx_put();
 }
 
 static int tdx_do_tdh_mng_key_config(void *param)
@@ -491,9 +562,15 @@ static int tdx_vm_init(struct kvm *kvm)
 	/* vCPUs can't be created until after KVM_TDX_INIT_VM. */
 	kvm->max_vcpus = 0;
 
+	ret = try_tdx_get();
+	if (ret)
+		return ret;
+
 	kvm_tdx->hkid = tdx_keyid_alloc();
-	if (kvm_tdx->hkid < 0)
-		return -EBUSY;
+	if (kvm_tdx->hkid < 0) {
+		ret = -EBUSY;
+		goto put_tdx;
+	}
 	if (WARN_ON_ONCE(kvm_tdx->hkid >> 16)) {
 		ret = -EIO;
 		goto free_hkid;
@@ -553,6 +630,8 @@ free_tdcs:
 	free_page(kvm_tdx->tdr.va);
 free_hkid:
 	tdx_keyid_free(kvm_tdx->hkid);
+put_tdx:
+	tdx_put();
 	return ret;
 }
 
@@ -1976,6 +2055,7 @@ static int tdx_dev_ioctl(void __user *argp)
 	struct kvm_tdx_capabilities __user *user_caps;
 	struct kvm_tdx_capabilities caps;
 	struct kvm_tdx_cmd cmd;
+	int ret;
 
 	BUILD_BUG_ON(sizeof(struct kvm_tdx_cpuid_config) !=
 		     sizeof(struct tdx_cpuid_config));
@@ -1990,13 +2070,22 @@ static int tdx_dev_ioctl(void __user *argp)
 	if (copy_from_user(&caps, user_caps, sizeof(caps)))
 		return -EFAULT;
 
-	if (caps.nr_cpuid_configs < tdx_caps.nr_cpuid_configs)
-		return -E2BIG;
+	ret = try_tdx_get();
+	if (ret)
+		return ret;
+
+	if (caps.nr_cpuid_configs < tdx_caps.nr_cpuid_configs) {
+		ret = -E2BIG;
+		goto put_tdx;
+	}
+
 	caps.nr_cpuid_configs = tdx_caps.nr_cpuid_configs;
 
 	if (copy_to_user(user_caps->cpuid_configs, &tdx_caps.cpuid_configs,
-			 tdx_caps.nr_cpuid_configs * sizeof(struct tdx_cpuid_config)))
-		return -EFAULT;
+			 tdx_caps.nr_cpuid_configs * sizeof(struct tdx_cpuid_config))) {
+		ret = -EFAULT;
+		goto put_tdx;
+	}
 
 	caps.attrs_fixed0 = tdx_caps.attrs_fixed0;
 	caps.attrs_fixed1 = tdx_caps.attrs_fixed1;
@@ -2004,9 +2093,11 @@ static int tdx_dev_ioctl(void __user *argp)
 	caps.xfam_fixed1 = tdx_caps.xfam_fixed1;
 
 	if (copy_to_user((void __user *)cmd.data, &caps, sizeof(caps)))
-		return -EFAULT;
+		ret = -EFAULT;
 
-	return 0;
+put_tdx:
+	tdx_put();
+	return ret;
 }
 
 /*
@@ -3138,13 +3229,42 @@ static int tdx_skip_emulated_instruction(struct kvm_vcpu *vcpu)
 	return 1;
 }
 
+static int tdx_notifier_callback(struct notifier_block *notifier,
+				 unsigned long val, void *v)
+{
+	int ret = NOTIFY_OK;
+
+	switch (val) {
+	case TDX_MODULE_LOAD_BEGIN:
+		ret = detach_tdx_module();
+		if (ret)
+			ret = notifier_from_errno(ret);
+		break;
+
+	case TDX_MODULE_LOAD_DONE:
+		attach_tdx_module();
+		break;
+
+	default:
+		break;
+	}
+
+	return ret;
+}
+
+static struct notifier_block tdx_notifier = {
+	.notifier_call = tdx_notifier_callback,
+};
+
 static int __init tdx_init(void)
 {
+	register_tdx_notifier(&tdx_notifier);
 	return 0;
 }
 
 static void __exit tdx_exit(void)
 {
+	unregister_tdx_notifier(&tdx_notifier);
 }
 
 static int __init tdx_hardware_setup(struct kvm_x86_ops *x86_ops)
@@ -3156,9 +3276,6 @@ static int __init tdx_hardware_setup(struct kvm_x86_ops *x86_ops)
 		pr_warn("Cannot enable TDX with EPT disabled\n");
 		return -EINVAL;
 	}
-
-	if (tdx_get_caps())
-		return -EIO;
 
 	if (WARN_ON_ONCE(x86_ops->tlb_remote_flush))
 		return -EIO;
