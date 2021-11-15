@@ -108,6 +108,8 @@ enum TDX_MODULE_STATE {
 	TDX_MODULE_LOADED,
 	/* Initialization is done so that the TDX module is functional. */
 	TDX_MODULE_INITIALIZED,
+	/* TDX module is already shut down. Futher SEAMCALLs are prevented */
+	TDX_MODULE_SHUTDOWN,
 	/*
 	 * No SEAMCALLs are allowed so that the TDX module is not functional.
 	 * It's ready for P-SEAMLDR to update the TDX module.  As something went
@@ -762,6 +764,52 @@ out:
 	return err;
 }
 
+static void tdx_shutdown_cpu(void *data)
+{
+	u64 err;
+	int ret = 0;
+
+	WARN_ON_ONCE(!irqs_disabled());
+
+	err = tdh_sys_lp_shutdown();
+	if (WARN_ON_ONCE(err)) {
+		pr_seamcall_error(SEAMCALL_TDH_SYS_LP_SHUTDOWN,
+				  "TDH_SYS_LP_SHUTDOWN", err, NULL);
+		ret = -EIO;
+	}
+
+	/* Don't care what exact errors occurred on which cpus. */
+	if (ret)
+		atomic_set((atomic_t *)data, ret);
+}
+
+static int tdx_module_shutdown(void)
+{
+	atomic_t error;
+	int ret, state;
+
+	state = get_tdx_module_state();
+	if (state != TDX_MODULE_INITIALIZED && state != TDX_MODULE_LOADED)
+		return 0;
+
+	/*
+	 * TDX module cannot function after entering to shutdown state. Set
+	 * tdx_module_state first which may inform registered notifiers. It
+	 * gives notifiers a chance to block this action.
+	 */
+	ret = set_tdx_module_state(TDX_MODULE_SHUTDOWN);
+	if (ret)
+		return ret;
+
+	atomic_set(&error, 0);
+	on_each_cpu(tdx_shutdown_cpu, &error, 1);
+	ret = atomic_read(&error);
+	if (ret)
+		set_tdx_module_state(TDX_MODULE_ERROR);
+
+	return ret;
+}
+
 /*
  * tdx_load_module - load TDX module by P-SEAMLDR seam_install call.
  * @module: virtual address of TDX module.
@@ -788,6 +836,10 @@ static int tdx_load_module(
 	if (IS_ERR(params))
 		return -ENOMEM;
 
+	ret = tdx_module_shutdown();
+	if (ret)
+		goto out;
+
 	install_module.params = params;
 	atomic_set(&install_module.error, 0);
 	/*
@@ -803,6 +855,7 @@ static int tdx_load_module(
 		if (ret)
 			break;
 	}
+out:
 	free_seamldr_params(params);
 	return ret;
 }
