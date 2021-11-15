@@ -48,6 +48,11 @@ static inline u64 tdh_sys_lp_init(struct tdx_ex_ret *ex)
 	return ret;
 }
 
+static inline u64 tdh_sys_lp_shutdown(void)
+{
+	return seamcall(SEAMCALL_TDH_SYS_LP_SHUTDOWN, 0, 0, 0, 0, NULL);
+}
+
 static inline u64 tdh_sys_tdmr_init(u64 tdmr, struct tdx_ex_ret *ex)
 {
 	return seamcall(SEAMCALL_TDH_SYS_TDMR_INIT, tdmr, 0, 0, 0, ex);
