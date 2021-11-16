@@ -1799,7 +1799,13 @@ static int tdx_handle_dr(struct kvm_vcpu *vcpu)
 	return vmx_handle_dr(vcpu);
 }
 
-static int tdx_handle_exit(struct kvm_vcpu *vcpu,
+static int tdx_handle_bus_lock_vmexit(struct kvm_vcpu *vcpu)
+{
+	to_tdx(vcpu)->exit_reason.bus_lock_detected = true;
+	return 1;
+}
+
+static int __tdx_handle_exit(struct kvm_vcpu *vcpu,
 			   enum exit_fastpath_completion fastpath)
 {
 	union tdx_exit_reason exit_reason = to_tdx(vcpu)->exit_reason;
@@ -1858,6 +1864,8 @@ static int tdx_handle_exit(struct kvm_vcpu *vcpu,
 		 * - If it's not an MSMI, don't need to do anything here.
 		 */
 		return 1;
+	case EXIT_REASON_BUS_LOCK:
+		return tdx_handle_bus_lock_vmexit(vcpu);
 	default:
 		break;
 	}
@@ -1866,6 +1874,24 @@ unhandled_exit:
 	vcpu->run->exit_reason = KVM_EXIT_UNKNOWN;
 	vcpu->run->hw.hardware_exit_reason = exit_reason.full;
 	return 0;
+}
+
+static int tdx_handle_exit(struct kvm_vcpu *vcpu, fastpath_t exit_fastpath)
+{
+	int ret = __tdx_handle_exit(vcpu, exit_fastpath);
+
+	/*
+	 * Exit to user space when bus lock detected to inform that there is
+	 * a bus lock in guest.
+	 */
+	if (to_tdx(vcpu)->exit_reason.bus_lock_detected) {
+		if (ret > 0)
+			vcpu->run->exit_reason = KVM_EXIT_X86_BUS_LOCK;
+
+		vcpu->run->flags |= KVM_RUN_X86_BUS_LOCK;
+		return 0;
+	}
+	return ret;
 }
 
 static void tdx_get_exit_info(struct kvm_vcpu *vcpu, u64 *info1, u64 *info2,
@@ -2384,6 +2410,11 @@ static int tdx_vcpu_ioctl(struct kvm_vcpu *vcpu, void __user *argp)
 				 CPU_BASED_MOV_DR_EXITING);
 		pr_info("Set DR access VMExit for debug enabled TD guest\n");
 	}
+
+	if (vcpu->kvm->arch.bus_lock_detection_enabled)
+		td_vmcs_setbit32(tdx,
+				 SECONDARY_VM_EXEC_CONTROL,
+				 SECONDARY_EXEC_BUS_LOCK_DETECTION);
 
 	return 0;
 }
