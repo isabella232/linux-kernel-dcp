@@ -54,7 +54,7 @@ union tdx_exit_reason {
 		u64 reserved23		: 1;
 		u64 reserved24		: 1;
 		u64 reserved25		: 1;
-		u64 reserved26		: 1;
+		u64 bus_lock_detected	: 1;
 		u64 enclave_mode	: 1;
 		u64 smi_pending_mtf	: 1;
 		u64 smi_from_vmx_root	: 1;
