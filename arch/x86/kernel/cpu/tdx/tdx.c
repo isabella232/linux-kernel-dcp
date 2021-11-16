@@ -1473,6 +1473,43 @@ release:
 	return ret;
 }
 
+int tdx_module_reload(void)
+{
+	int ret, cpu;
+
+	cpus_read_lock();
+	ret = tdx_load_module_late();
+	if (ret)
+		goto unlock;
+
+	ret = tdx_init_system();
+	if (ret)
+		goto unlock;
+
+	ret = tdx_get_system_info();
+	if (ret)
+		goto unlock;
+
+	ret = __tdx_init_module();
+	if (ret)
+		goto unlock;
+
+	/* Reset to default values so that their support will be re-probed */
+	is_nonarch_seamcall_available = true;
+	is_debug_seamcall_available = true;
+
+	pr_info("Successfully initialized TDX module\n");
+	set_tdx_module_state(TDX_MODULE_INITIALIZED);
+
+	setup_force_cpu_cap(X86_FEATURE_TDX);
+	for_each_online_cpu(cpu)
+		set_cpu_cap(&cpu_data(cpu), X86_FEATURE_TDX);
+
+unlock:
+	cpus_read_unlock();
+	return ret;
+}
+
 static int __init tdx_module_sysfs_init(void)
 {
 	int ret = 0;
