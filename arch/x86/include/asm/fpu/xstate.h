@@ -122,4 +122,6 @@ static __always_inline __pure bool fpu_state_size_dynamic(void)
 }
 #endif
 
+extern inline void kvm_update_guest_xfd_state(void);
+
 #endif
