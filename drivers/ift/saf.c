@@ -152,8 +152,8 @@ static int scan_test_worker(void *info)
 		start = per_cpu(saf_state, cpu).start_index;
 		last = per_cpu(saf_state, cpu).stop_index;
 		eax = last << 8 | start;
-		edx = (trigger_mce << 31) | msec_to_tsc(thread_wait);
 retry:
+		edx = (trigger_mce << 31) | msec_to_tsc(thread_wait);
 		per_cpu(saf_state, cpu).result = SCAN_TEST_BUSY;
 
 		/* scan start */
