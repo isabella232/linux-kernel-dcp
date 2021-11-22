@@ -117,7 +117,7 @@ enum TDX_MODULE_STATE {
 };
 
 /* TODO: export the state via sysfs. */
-static enum TDX_MODULE_STATE tdx_module_state __ro_after_init;
+static enum TDX_MODULE_STATE tdx_module_state;
 
 bool is_debug_seamcall_available __read_mostly = true;
 
@@ -126,8 +126,49 @@ bool is_nonarch_seamcall_available __read_mostly = true;
 /* TDX system information returned by TDH_SYS_INFO. */
 static struct tdsysinfo_struct *tdx_tdsysinfo;
 
+static BLOCKING_NOTIFIER_HEAD(tdx_notify_list);
+
+/* Inform notifiers about an event, expecting no error from notifiers. */
+static void tdx_notify(unsigned long val)
+{
+	int ret;
+
+	ret = blocking_notifier_call_chain(&tdx_notify_list, val, NULL);
+	WARN_ON_ONCE(notifier_to_errno(ret));
+}
+
+/* Inform notifiers about an event and rollback on error */
+static int tdx_notify_rollback(unsigned long val, unsigned long val_rollback)
+{
+	int ret;
+
+	ret = blocking_notifier_call_chain_robust(&tdx_notify_list, val,
+						  val_rollback, NULL);
+	return notifier_to_errno(ret);
+}
+
 static int set_tdx_module_state(int state)
 {
+	int ret;
+
+	if (state == tdx_module_state)
+		return 0;
+
+	/*
+	 * Send notifications when TDX module state changes between
+	 * TDX_MODULE_INITIALIZED and other states. When TDX module
+	 * is about to go down, notifiers are allowed to return errors
+	 * to abort this attempt in case that shutting down a busy TDX
+	 * module leads to data loss.
+	 */
+	if (tdx_module_state == TDX_MODULE_INITIALIZED) {
+		ret = tdx_notify_rollback(TDX_MODULE_LOAD_BEGIN,
+					  TDX_MODULE_LOAD_DONE);
+		if (ret)
+			return ret;
+	} else if (state == TDX_MODULE_INITIALIZED)
+		tdx_notify(TDX_MODULE_LOAD_DONE);
+
 	tdx_module_state = state;
 	return 0;
 }
@@ -136,6 +177,39 @@ static int get_tdx_module_state(void)
 {
 	return tdx_module_state;
 }
+
+/**
+ * register_tdx_notifier - subscribe to state change of TDX module
+ * @nb: new entry to subscribe in notifier chain
+ *
+ * Note that the nb::notifier_call is invoked during registration
+ * if TDX module is already available.
+ */
+int register_tdx_notifier(struct notifier_block *nb)
+{
+	int ret;
+
+	ret = blocking_notifier_chain_register(&tdx_notify_list, nb);
+	/*
+	 * Registering a notifier may happen after TDX module is ready to
+	 * function. If that's the case, send a notification now.
+	 */
+	if (!ret && (get_tdx_module_state() == TDX_MODULE_INITIALIZED))
+		nb->notifier_call(nb, TDX_MODULE_LOAD_DONE, NULL);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(register_tdx_notifier);
+
+/**
+ * unregister_tdx_notifier - unsubscribe to state change of TDX module
+ * @nb: entry to unsbuscribe from notifier chain
+ */
+int unregister_tdx_notifier(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_unregister(&tdx_notify_list, nb);
+}
+EXPORT_SYMBOL_GPL(unregister_tdx_notifier);
 
 /*
  * Return pointer to TDX system info (TDSYSINFO_STRUCT) if TDX has been
