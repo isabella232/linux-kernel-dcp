@@ -2803,6 +2803,18 @@ static void vfio_group_unbind_gpasid_fn(ioasid_t pasid, void *data)
 				 dc, vfio_dev_unbind_gpasid_fn);
 }
 
+static void vfio_group_unbind_default_gpasid(ioasid_t pasid, void *data)
+{
+	struct domain_capsule *dc = (struct domain_capsule *)data;
+
+	dc->user = false;
+	dc->data = &pasid;
+	dc->flags = IOMMU_SVA_HPASID_DEF;
+
+	iommu_group_for_each_dev(dc->group->iommu_group,
+				 dc, vfio_dev_unbind_gpasid_fn);
+}
+
 static void vfio_iommu_type1_detach_group(void *iommu_data,
 					  struct iommu_group *iommu_group)
 {
@@ -2866,6 +2878,11 @@ static void vfio_iommu_type1_detach_group(void *iommu_data,
 					       vfio_group_unbind_gpasid_fn);
 				ioasid_user_put(iuser);
 			}
+			/*
+			 * We should explicitly call interface to unbind default pasid gIOVA
+			 * page table here.
+			 */
+			vfio_group_unbind_default_gpasid(0, &dc);
 		}
 
 		vfio_iommu_detach_group(domain, group);
