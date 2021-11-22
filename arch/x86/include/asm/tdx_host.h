@@ -4,6 +4,22 @@
 #ifndef __ASM_X86_TDX_HOST_H
 #define __ASM_X86_TDX_HOST_H
 
+#include <linux/notifier.h>
+
+/*
+ * Events that may happen to TDX module
+ *
+ * TDX_MODULE_LOAD_DONE event is sent to notifiers when TDX module becomes
+ * ready to function. After receiving this event, users of TDX module can
+ * start to interact with TDX module.
+ * TDX_MODULE_LOAD_BEGIN event is sent to notifiers when TDX module driver
+ * attempts to update TDX module. Users of TDX module can either return an
+ * error in notifier callbacks to indicate that TDX module is in use, or
+ * stop using TDX module until next TDX_MODULE_LOAD_DONE event.
+ */
+#define TDX_MODULE_LOAD_BEGIN	0 /* TDX module is about to go down */
+#define TDX_MODULE_LOAD_DONE	1 /* TDX module is ready */
+
 #ifdef CONFIG_INTEL_TDX_HOST
 /*
  * TDX extended return:
@@ -106,6 +122,8 @@ extern bool is_debug_seamcall_available __read_mostly;
 /* Non-architectural configuration SEAMCALLs */
 extern bool is_nonarch_seamcall_available __read_mostly;
 
+int register_tdx_notifier(struct notifier_block *n);
+int unregister_tdx_notifier(struct notifier_block *n);
 #else
 static inline const char *tdx_seamcall_error_name(u64 error_code)
 {
@@ -132,6 +150,15 @@ static inline int tdx_seamcall_on_each_pkg(int (*fn)(void *), void *param)
 static inline bool range_is_tdx_memory(phys_addr_t start, phys_addr_t end)
 {
 	return false;
+}
+
+static inline int register_tdx_notifier(struct notifier_block *n)
+{
+	return -EOPNOTSUPP;
+}
+static inline int unregister_tdx_notifier(struct notifier_block *n)
+{
+	return -EOPNOTSUPP;
 }
 #endif
 
