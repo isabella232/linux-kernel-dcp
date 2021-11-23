@@ -12,6 +12,10 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v1.15
+----------------
+14. SEAM TDX bug fix (Chenyi Qiang)
+
 SPR-BKC-PC-v1.14
 ----------------
 13. SIOV (Jacob Pan):
