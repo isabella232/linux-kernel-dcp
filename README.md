@@ -12,6 +12,11 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v1.16
+----------------
+15. SAF (Jithu Joseph and Kyung Min Park):
+https://gitlab.devtools.intel.com/kyungmin/iommu.git   forbkc
+
 SPR-BKC-PC-v1.15
 ----------------
 14. SEAM TDX bug fix (Chenyi Qiang)
@@ -56,8 +61,3 @@ https://gitlab.devtools.intel.com/ranerica/linux-dev.git   rneri/hfi-for-SPR-BKC
 https://github.com/YuanYao0329/os.linux.sapphirerapids.thirdparty.kernel tdx-host-v1.9-ready
 11. Fixes for TDX host and KVM (Yuan Yao):
 https://github.com/YuanYao0329/os.linux.sapphirerapids.thirdparty.kernel host-tdx-quick-fix-for-SPR-BKC-PC-v1.10
-
-Features cannot be merged to SPR BKC kernel
--------------------------------------------
-1. SAF (KM Park):
-The SAF spec will be available in Nov.
