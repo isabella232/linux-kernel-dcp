@@ -12,6 +12,11 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v1.17
+----------------
+16. SGX Seamless fix (Cathy Zhang):
+https://github.com/bjzhjing/os.linux.sapphirerapids.thirdparty.kernel.git sgx-seamless-spr-bkc-v1.15
+
 SPR-BKC-PC-v1.16
 ----------------
 15. SAF (Jithu Joseph and Kyung Min Park):
