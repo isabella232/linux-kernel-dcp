@@ -2334,9 +2334,6 @@ static int hardware_enable(void)
 	int cpu = raw_smp_processor_id();
 	int r;
 
-	if (cr4_read_shadow() & X86_CR4_VMXE)
-		return -EBUSY;
-
 	/*
 	 * This can happen if we hot-added a CPU but failed to allocate
 	 * VP assist page for it.
