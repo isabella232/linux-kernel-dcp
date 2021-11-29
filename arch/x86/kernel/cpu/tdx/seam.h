@@ -9,8 +9,6 @@ bool __init seam_get_firmware(struct cpio_data *blob, const char *name);
 int __init seam_init_vmx_early(void);
 void __init seam_init_vmxon_vmcs(struct vmcs *vmcs);
 
-void __init seam_free_vmcs_tmp_set(void);
-int __init seam_alloc_init_vmcs_tmp_set(void);
 int __init seam_vmxon_on_each_cpu(void);
 int __init seam_vmxoff_on_each_cpu(void);
 

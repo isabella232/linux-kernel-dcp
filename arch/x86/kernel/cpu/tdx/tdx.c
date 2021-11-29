@@ -777,9 +777,6 @@ static int __init tdx_arch_init(void)
 	}
 
 	/* SEAMCALL requires to enable VMXON on CPUs. */
-	ret = seam_alloc_init_vmcs_tmp_set();
-	if (ret)
-		goto out;
 	ret = seam_vmxon_on_each_cpu();
 	if (ret)
 		goto out;
@@ -809,7 +806,6 @@ out:
 		tdx_module_state = TDX_MODULE_ERROR;
 	cpus_read_unlock();
 
-	seam_free_vmcs_tmp_set();
 	if (ret && cpuhp_state != CPUHP_INVALID) {
 		cpuhp_remove_state_nocalls(cpuhp_state);
 		cpuhp_state = CPUHP_INVALID;
@@ -1128,9 +1124,6 @@ static int __init tdx_late_init(void)
 		goto out_err;
 
 	/* SEAMCALL requires to enable VMXON on CPUs. */
-	ret = seam_alloc_init_vmcs_tmp_set();
-	if (ret)
-		goto out_err;
 	ret = seam_vmxon_on_each_cpu();
 	if (ret)
 		goto out;
@@ -1163,7 +1156,6 @@ out_err:
 	}
 	cpus_read_unlock();
 
-	seam_free_vmcs_tmp_set();
 	kfree(tdmr_info);
 	kfree(tdx_cmrs);
 	cleanup_subtype_tdx_memory();
