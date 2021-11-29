@@ -970,6 +970,9 @@ static ssize_t wq_enqcmds_retries_store(struct device *dev, struct device_attrib
 	if (rc < 0)
 		return rc;
 
+	if (retries > IDXD_ENQCMDS_MAX_RETRIES)
+		retries = IDXD_ENQCMDS_MAX_RETRIES;
+
 	wq->enqcmds_retries = retries;
 	return count;
 }
