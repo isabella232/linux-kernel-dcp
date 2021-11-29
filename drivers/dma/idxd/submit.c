@@ -125,7 +125,6 @@ static void llist_abort_desc(struct idxd_wq *wq, struct idxd_irq_entry *ie,
 		idxd_dma_complete_txd(found, IDXD_COMPLETE_ABORT, false);
 }
 
-
 /*
  * ENQCMDS typically fail when the WQ is inactive or busy. On host submission, the driver
  * has better control of number of descriptors being submitted to a shared wq by limiting
