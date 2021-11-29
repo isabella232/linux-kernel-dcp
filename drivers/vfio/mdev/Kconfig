@@ -8,3 +8,12 @@ config VFIO_MDEV
 	  See Documentation/driver-api/vfio-mediated-device.rst for more details.
 
 	  If you don't know what do here, say N.
+
+config VFIO_MDEV_IDXD
+	tristate "VFIO Mediated device driver for Intel IDXD"
+	depends on VFIO && VFIO_MDEV && X86_64
+	select IMS_MSI_ARRAY
+	default n
+	help
+	  VFIO based mediated device driver for
+	  Intel Accelerator Devices driver.

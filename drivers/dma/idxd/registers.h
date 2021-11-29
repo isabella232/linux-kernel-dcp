@@ -90,6 +90,9 @@ struct opcap {
 	u64 bits[4];
 };
 
+#define OPCAP_OFS(op) (op - (0x40 * (op >> 6)))
+#define OPCAP_BIT(op) (BIT_ULL(OPCAP_OFS(op)))
+
 #define IDXD_OPCAP_OFFSET		0x40
 
 #define IDXD_TABLE_OFFSET		0x60
@@ -170,6 +173,7 @@ union idxd_command_reg {
 	};
 	u32 bits;
 } __packed;
+#define IDXD_CMD_INT_MASK		0x80000000
 
 enum idxd_cmd {
 	IDXD_CMD_ENABLE_DEVICE = 1,
@@ -186,6 +190,7 @@ enum idxd_cmd {
 	IDXD_CMD_ABORT_PASID,
 	IDXD_CMD_REQUEST_INT_HANDLE,
 	IDXD_CMD_RELEASE_INT_HANDLE,
+	IDXD_CMD_REVOKED_HANDLES_PROCESSED,
 };
 
 #define CMD_INT_HANDLE_IMS		0x10000
@@ -200,7 +205,8 @@ union cmdsts_reg {
 	};
 	u32 bits;
 } __packed;
-#define IDXD_CMDSTS_ACTIVE		0x80000000
+#define IDXD_CMDS_ACTIVE_BIT		31
+#define IDXD_CMDSTS_ACTIVE		BIT(IDXD_CMDS_ACTIVE_BIT)
 #define IDXD_CMDSTS_ERR_MASK		0xff
 #define IDXD_CMDSTS_RES_SHIFT		8
 
@@ -232,10 +238,11 @@ enum idxd_cmdsts_err {
 	/* disable device errors */
 	IDXD_CMDSTS_ERR_DIS_DEV_EN = 0x31,
 	/* disable WQ, drain WQ, abort WQ, reset WQ */
-	IDXD_CMDSTS_ERR_DEV_NOT_EN,
+	IDXD_CMDSTS_ERR_WQ_NOT_EN,
 	/* request interrupt handle */
 	IDXD_CMDSTS_ERR_INVAL_INT_IDX = 0x41,
 	IDXD_CMDSTS_ERR_NO_HANDLE,
+	IDXD_CMDSTS_ERR_INVAL_INT_IDX_RELEASE,
 };
 
 #define IDXD_CMDCAP_OFFSET		0xb0
@@ -282,6 +289,11 @@ union msix_perm {
 	};
 	u32 bits;
 } __packed;
+
+#define IDXD_MSIX_PERM_MASK	0xfffff00c
+#define IDXD_MSIX_PERM_IGNORE	0x3
+#define MSIX_ENTRY_MASK_INT	0x1
+#define MSIX_ENTRY_CTRL_BYTE	12
 
 union group_flags {
 	struct {
@@ -352,8 +364,18 @@ union wqcfg {
 	u32 bits[8];
 } __packed;
 
-#define WQCFG_PASID_IDX                2
+enum idxd_wq_hw_state {
+	IDXD_WQ_DEV_DISABLED = 0,
+	IDXD_WQ_DEV_ENABLED,
+	IDXD_WQ_DEV_BUSY,
+};
+
+#define WQCFG_PASID_IDX		2
+#define WQCFG_PRIV_IDX		2
 #define WQCFG_OCCUP_IDX		6
+
+#define WQCFG_MODE_DEDICATED	1
+#define WQCFG_MODE_SHARED	0
 
 #define WQCFG_OCCUP_MASK	0xffff
 
