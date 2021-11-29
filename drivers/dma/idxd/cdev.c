@@ -158,7 +158,7 @@ static int idxd_cdev_release(struct inode *node, struct file *filep)
 			if (rc < 0)
 				dev_err(dev, "wq disable pasid failed.\n");
 		} else {
-			idxd_wq_drain(wq);
+			idxd_wq_drain(wq, NULL);
 		}
 	}
 
@@ -204,7 +204,7 @@ static int idxd_cdev_mmap(struct file *filp, struct vm_area_struct *vma)
 
 	vma->vm_flags |= VM_DONTCOPY;
 	pfn = (base + idxd_get_wq_portal_full_offset(wq->id,
-				IDXD_PORTAL_LIMITED)) >> PAGE_SHIFT;
+				IDXD_PORTAL_LIMITED, IDXD_IRQ_MSIX)) >> PAGE_SHIFT;
 	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
 	vma->vm_private_data = ctx;
 

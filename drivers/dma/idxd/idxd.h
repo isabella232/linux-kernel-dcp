@@ -12,6 +12,7 @@
 #include <linux/pci.h>
 #include <linux/ioasid.h>
 #include <linux/perf_event.h>
+#include <linux/vfio_pci_core.h>
 #include <uapi/linux/idxd.h>
 #include "registers.h"
 
@@ -54,12 +55,17 @@ enum idxd_type {
 
 #define IDXD_ENQCMDS_RETRIES	32
 
+struct idxd_device_ops {
+	 void (*notify_error)(struct idxd_wq *wq);
+};
+
 struct idxd_device_driver {
 	const char *name;
 	enum idxd_dev_type *type;
 	int (*probe)(struct idxd_dev *idxd_dev);
 	void (*remove)(struct idxd_dev *idxd_dev);
 	struct device_driver drv;
+	struct idxd_device_ops *ops;
 };
 
 extern struct idxd_device_driver dsa_drv;
@@ -128,17 +134,20 @@ struct idxd_pmu {
 enum idxd_wq_state {
 	IDXD_WQ_DISABLED = 0,
 	IDXD_WQ_ENABLED,
+	IDXD_WQ_LOCKED,
 };
 
 enum idxd_wq_flag {
 	WQ_FLAG_DEDICATED = 0,
 	WQ_FLAG_BLOCK_ON_FAULT,
+	WQ_FLAG_MODE_1,
 };
 
 enum idxd_wq_type {
 	IDXD_WQT_NONE = 0,
 	IDXD_WQT_KERNEL,
 	IDXD_WQT_USER,
+	IDXD_WQT_MDEV,
 };
 
 struct idxd_cdev {
@@ -212,6 +221,7 @@ struct idxd_wq {
 	bool ats_dis;
 
 	void *private_data;
+	struct list_head vdcm_list;
 };
 
 struct idxd_engine {
@@ -242,6 +252,7 @@ enum idxd_device_flag {
 	IDXD_FLAG_CONFIGURABLE = 0,
 	IDXD_FLAG_CMD_RUNNING,
 	IDXD_FLAG_PASID_ENABLED,
+	IDXD_FLAG_IMS_SUPPORTED,
 };
 
 struct idxd_dma_dev {
@@ -285,6 +296,7 @@ struct idxd_device {
 	int irq_cnt;
 	bool request_int_handles;
 
+	u32 ims_offset;
 	u32 msix_perm_offset;
 	u32 wqcfg_offset;
 	u32 grpcfg_offset;
@@ -292,6 +304,7 @@ struct idxd_device {
 
 	u64 max_xfer_bytes;
 	u32 max_batch_size;
+	int ims_size;
 	int max_groups;
 	int max_engines;
 	int max_tokens;
@@ -308,6 +321,14 @@ struct idxd_device {
 	struct idxd_dma_dev *idxd_dma;
 	struct workqueue_struct *wq;
 	struct work_struct work;
+
+	struct irq_domain *ims_domain;
+	struct vfio_pci_core_device vfio_pdev;
+	struct kref mdev_kref;
+	struct mutex kref_lock;
+	bool mdev_host_init;
+	int *new_handles;
+	struct ida vdev_ida;
 
 	struct idxd_pmu *idxd_pmu;
 };
@@ -405,6 +426,11 @@ extern struct device_type idxd_wq_device_type;
 extern struct device_type idxd_engine_device_type;
 extern struct device_type idxd_group_device_type;
 
+static inline bool is_idxd_wq_mdev(struct idxd_wq *wq)
+{
+	return (wq->type == IDXD_WQT_MDEV);
+}
+
 static inline bool is_dsa_dev(struct idxd_dev *idxd_dev)
 {
 	return idxd_dev->type == IDXD_DEV_DSA;
@@ -472,15 +498,17 @@ enum idxd_interrupt_type {
 	IDXD_IRQ_IMS,
 };
 
-static inline int idxd_get_wq_portal_offset(enum idxd_portal_prot prot)
+static inline int idxd_get_wq_portal_offset(enum idxd_portal_prot prot,
+					    enum idxd_interrupt_type irq_type)
 {
-	return prot * 0x1000;
+	return prot * 0x1000 + irq_type * 0x2000;
 }
 
 static inline int idxd_get_wq_portal_full_offset(int wq_id,
-						 enum idxd_portal_prot prot)
+						 enum idxd_portal_prot prot,
+						 enum idxd_interrupt_type irq_type)
 {
-	return ((wq_id * 4) << PAGE_SHIFT) + idxd_get_wq_portal_offset(prot);
+	return ((wq_id * 4) << PAGE_SHIFT) + idxd_get_wq_portal_offset(prot, irq_type);
 }
 
 #define IDXD_PORTAL_MASK	(PAGE_SIZE - 1)
@@ -570,9 +598,9 @@ int idxd_device_release_int_handle(struct idxd_device *idxd, int handle,
 void idxd_wqs_unmap_portal(struct idxd_device *idxd);
 int idxd_wq_alloc_resources(struct idxd_wq *wq);
 void idxd_wq_free_resources(struct idxd_wq *wq);
-int idxd_wq_enable(struct idxd_wq *wq);
-int idxd_wq_disable(struct idxd_wq *wq, bool reset_config);
-void idxd_wq_drain(struct idxd_wq *wq);
+int idxd_wq_enable(struct idxd_wq *wq, u32 *status);
+int idxd_wq_disable(struct idxd_wq *wq, bool reset_config, u32 *status);
+int idxd_wq_drain(struct idxd_wq *wq, u32 *status);
 void idxd_wq_reset(struct idxd_wq *wq);
 int idxd_wq_map_portal(struct idxd_wq *wq);
 void idxd_wq_unmap_portal(struct idxd_wq *wq);
@@ -583,6 +611,9 @@ void idxd_wq_quiesce(struct idxd_wq *wq);
 int idxd_wq_init_percpu_ref(struct idxd_wq *wq);
 void idxd_wq_free_irq(struct idxd_wq *wq);
 int idxd_wq_enable_irq(struct idxd_wq *wq);
+int idxd_wq_abort(struct idxd_wq *wq, u32 *status);
+void idxd_wq_setup_pasid(struct idxd_wq *wq, int pasid);
+void idxd_wq_setup_priv(struct idxd_wq *wq, int priv);
 
 /* submission */
 int idxd_submit_desc(struct idxd_wq *wq, struct idxd_desc *desc);
