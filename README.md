@@ -12,6 +12,11 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v1.18
+----------------
+17. SDSI (Dave Box):
+https://gitlab.devtools.intel.com/kyungmin/iommu.git v5.15-sdsi-for-spr
+
 SPR-BKC-PC-v1.17
 ----------------
 16. SGX Seamless fix (Cathy Zhang):
