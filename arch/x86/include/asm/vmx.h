@@ -28,6 +28,12 @@ struct vmcs {
 	char data[];
 };
 
+struct vmx_basic_info {
+	int size;
+	u32 rev_id;
+	u32 cap;
+};
+
 #define VMCS_CONTROL_BIT(x)	BIT(VMX_FEATURE_##x & 0x1f)
 
 /*

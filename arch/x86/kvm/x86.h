@@ -5,10 +5,9 @@
 #include <linux/kvm_host.h>
 #include <asm/mce.h>
 #include <asm/pvclock.h>
+#include <asm/virtext.h>
 #include "kvm_cache_regs.h"
 #include "kvm_emulate.h"
-
-void kvm_spurious_fault(void);
 
 static __always_inline void kvm_guest_enter_irqoff(void)
 {

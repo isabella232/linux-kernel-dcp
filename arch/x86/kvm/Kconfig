@@ -75,6 +75,7 @@ config KVM_WERROR
 config KVM_INTEL
 	tristate "KVM for Intel (and compatible) processors support"
 	depends on KVM && IA32_FEAT_CTL
+	select VIRTUALIZATION_EXTENSION
 	help
 	  Provides support for KVM on processors equipped with Intel's VT
 	  extensions, a.k.a. Virtual Machine Extensions (VMX).
@@ -111,6 +112,7 @@ config KVM_INTEL_TDX_SEAM_BACKDOOR
 config KVM_AMD
 	tristate "KVM for AMD processors support"
 	depends on KVM
+	select VIRTUALIZATION_EXTENSION
 	help
 	  Provides support for KVM on AMD processors equipped with the AMD-V
 	  (SVM) extensions.

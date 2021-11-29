@@ -67,3 +67,5 @@ $(obj)/capflags.c: $(cpufeature) $(vmxfeature) $(src)/mkcapflags.sh FORCE
 	$(call if_changed,mkcapflags)
 endif
 targets += capflags.c
+
+obj-$(CONFIG_VIRTUALIZATION_EXTENSION)	+= virtext.o
