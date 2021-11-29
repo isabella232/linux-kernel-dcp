@@ -60,7 +60,7 @@ SYM_FUNC_START(kvm_seamcall)
 .pushsection .fixup, "ax"
 	/* The seamcall instruction above can cause an exception. */
 3:
-	call	kvm_spurious_fault
+	call	virt_spurious_fault
 	jmp	2b
 .popsection
 	_ASM_EXTABLE(1b, 3b)

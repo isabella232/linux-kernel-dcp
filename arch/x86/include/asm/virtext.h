@@ -102,6 +102,27 @@ static inline void cpu_emergency_vmxoff(void)
 		__cpu_emergency_vmxoff();
 }
 
+#ifdef CONFIG_VIRTUALIZATION_EXTENSION
+extern int cpu_vmx_get(void);
+extern void cpu_vmx_put(void);
+extern int cpu_vmx_get_basic_info(struct vmx_basic_info *info);
+extern void virt_spurious_fault(void);
+#else
+static inline int cpu_vmx_get(void)
+{
+	return -EOPNOTSUPP;
+}
+static inline void cpu_vmx_put(void)
+{
+}
+static inline int cpu_vmx_get_basic_info(struct vmx_basic_info *info)
+{
+	return -EIO;
+}
+static inline void virt_spurious_fault(void)
+{
+}
+#endif
 
 
 

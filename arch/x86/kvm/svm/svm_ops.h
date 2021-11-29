@@ -4,6 +4,7 @@
 
 #include <linux/compiler_types.h>
 
+#include <asm/virtext.h>
 #include "x86.h"
 
 #define svm_asm(insn, clobber...)				\
@@ -13,7 +14,7 @@ do {								\
 			  ::: clobber : fault);			\
 	return;							\
 fault:								\
-	kvm_spurious_fault();					\
+	virt_spurious_fault();					\
 } while (0)
 
 #define svm_asm1(insn, op1, clobber...)				\
@@ -23,7 +24,7 @@ do {								\
 			  :: op1 : clobber : fault);		\
 	return;							\
 fault:								\
-	kvm_spurious_fault();					\
+	virt_spurious_fault();					\
 } while (0)
 
 #define svm_asm2(insn, op1, op2, clobber...)				\
@@ -33,7 +34,7 @@ do {									\
 			  :: op1, op2 : clobber : fault);		\
 	return;								\
 fault:									\
-	kvm_spurious_fault();						\
+	virt_spurious_fault();						\
 } while (0)
 
 static inline void clgi(void)

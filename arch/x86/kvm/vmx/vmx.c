@@ -392,7 +392,7 @@ do {					\
 asmlinkage void vmread_error(unsigned long field, bool fault)
 {
 	if (fault)
-		kvm_spurious_fault();
+		virt_spurious_fault();
 	else
 		vmx_insn_failed("kvm: vmread failed: field=%lx\n", field);
 }
@@ -425,7 +425,6 @@ noinline void invept_error(unsigned long ext, u64 eptp, gpa_t gpa)
 			ext, eptp, gpa);
 }
 
-static DEFINE_PER_CPU(struct vmcs *, vmxarea);
 DEFINE_PER_CPU(struct vmcs *, current_vmcs);
 /*
  * We maintain a per-CPU linked-list of VMCS loaded on that CPU. This is needed
@@ -2333,7 +2332,6 @@ static __init int vmx_disabled_by_bios(void)
 static int hardware_enable(void)
 {
 	int cpu = raw_smp_processor_id();
-	u64 phys_addr = __pa(per_cpu(vmxarea, cpu));
 	int r;
 
 	if (cr4_read_shadow() & X86_CR4_VMXE)
@@ -2347,13 +2345,9 @@ static int hardware_enable(void)
 	    !hv_get_vp_assist_page(cpu))
 		return -EFAULT;
 
-	intel_pt_handle_vmx(1);
-
-	r = cpu_vmxon(phys_addr);
-	if (r) {
-		intel_pt_handle_vmx(0);
+	r = cpu_vmx_get();
+	if (r)
 		return r;
-	}
 
 	if (enable_ept)
 		ept_sync_global();
@@ -2375,10 +2369,7 @@ static void hardware_disable(void)
 {
 	vmclear_local_loaded_vmcss();
 
-	if (cpu_vmxoff())
-		kvm_spurious_fault();
-
-	intel_pt_handle_vmx(0);
+	cpu_vmx_put();
 }
 
 /*
@@ -2429,7 +2420,6 @@ static __init int adjust_vmx_controls_64(u64 ctl_min, u64 ctl_opt,
 static __init int setup_vmcs_config(struct vmcs_config *vmcs_conf,
 				    struct vmx_capability *vmx_cap)
 {
-	u32 vmx_msr_low, vmx_msr_high;
 	u32 min, opt, min2, opt2;
 	u32 _pin_based_exec_control = 0;
 	u32 _cpu_based_exec_control = 0;
@@ -2437,6 +2427,7 @@ static __init int setup_vmcs_config(struct vmcs_config *vmcs_conf,
 	u64 _cpu_based_3rd_exec_control = 0;
 	u32 _vmexit_control = 0;
 	u32 _vmentry_control = 0;
+	struct vmx_basic_info basic_info;
 
 	memset(vmcs_conf, 0, sizeof(*vmcs_conf));
 	min = CPU_BASED_HLT_EXITING |
@@ -2606,27 +2597,14 @@ static __init int setup_vmcs_config(struct vmcs_config *vmcs_conf,
 	}
 
 
-	rdmsr(MSR_IA32_VMX_BASIC, vmx_msr_low, vmx_msr_high);
-
-	/* IA-32 SDM Vol 3B: VMCS size is never greater than 4kB. */
-	if ((vmx_msr_high & 0x1fff) > PAGE_SIZE)
+	if (cpu_vmx_get_basic_info(&basic_info))
 		return -EIO;
 
-#ifdef CONFIG_X86_64
-	/* IA-32 SDM Vol 3B: 64-bit CPUs always have VMX_BASIC_MSR[48]==0. */
-	if (vmx_msr_high & (1u<<16))
-		return -EIO;
-#endif
-
-	/* Require Write-Back (WB) memory type for VMCS accesses. */
-	if (((vmx_msr_high >> 18) & 15) != 6)
-		return -EIO;
-
-	vmcs_conf->size = vmx_msr_high & 0x1fff;
+	vmcs_conf->size = basic_info.size;
 	vmcs_conf->order = get_order(vmcs_conf->size);
-	vmcs_conf->basic_cap = vmx_msr_high & ~0x1fff;
+	vmcs_conf->basic_cap = basic_info.cap;
 
-	vmcs_conf->revision_id = vmx_msr_low;
+	vmcs_conf->revision_id = basic_info.rev_id;
 
 	vmcs_conf->pin_based_exec_ctrl = _pin_based_exec_control;
 	vmcs_conf->cpu_based_exec_ctrl = _cpu_based_exec_control;
@@ -2725,47 +2703,6 @@ int alloc_loaded_vmcs(struct loaded_vmcs *loaded_vmcs)
 out_vmcs:
 	free_loaded_vmcs(loaded_vmcs);
 	return -ENOMEM;
-}
-
-static void free_kvm_area(void)
-{
-	int cpu;
-
-	for_each_possible_cpu(cpu) {
-		free_vmcs(per_cpu(vmxarea, cpu));
-		per_cpu(vmxarea, cpu) = NULL;
-	}
-}
-
-static __init int alloc_kvm_area(void)
-{
-	int cpu;
-
-	for_each_possible_cpu(cpu) {
-		struct vmcs *vmcs;
-
-		vmcs = alloc_vmcs_cpu(false, cpu, GFP_KERNEL);
-		if (!vmcs) {
-			free_kvm_area();
-			return -ENOMEM;
-		}
-
-		/*
-		 * When eVMCS is enabled, alloc_vmcs_cpu() sets
-		 * vmcs->revision_id to KVM_EVMCS_VERSION instead of
-		 * revision_id reported by MSR_IA32_VMX_BASIC.
-		 *
-		 * However, even though not explicitly documented by
-		 * TLFS, VMXArea passed as VMXON argument should
-		 * still be marked with revision_id reported by
-		 * physical CPU.
-		 */
-		if (static_branch_unlikely(&enable_evmcs))
-			vmcs->hdr.revision_id = vmcs_config.revision_id;
-
-		per_cpu(vmxarea, cpu) = vmcs;
-	}
-	return 0;
 }
 
 static void fix_pmode_seg(struct kvm_vcpu *vcpu, int seg,
@@ -7637,8 +7574,6 @@ static void hardware_unsetup(void)
 {
 	if (nested)
 		nested_vmx_hardware_unsetup();
-
-	free_kvm_area();
 }
 
 static bool vmx_check_apicv_inhibit_reasons(ulong bit)
@@ -7848,9 +7783,6 @@ static __init int hardware_setup(void)
 
 	vmx_set_cpu_caps();
 
-	r = alloc_kvm_area();
-	if (r)
-		nested_vmx_hardware_unsetup();
 	return r;
 }
 

@@ -4,6 +4,7 @@
 
 #include <linux/nospec.h>
 
+#include <asm/virtext.h>
 #include <asm/vmx.h>
 
 #include "evmcs.h"
@@ -153,7 +154,7 @@ error:									\
 	instrumentation_end();						\
 	return;								\
 fault:									\
-	kvm_spurious_fault();						\
+	virt_spurious_fault();						\
 } while (0)
 
 #define vmx_asm2(insn, op1, op2, error_args...)				\
@@ -170,7 +171,7 @@ error:									\
 	instrumentation_end();						\
 	return;								\
 fault:									\
-	kvm_spurious_fault();						\
+	virt_spurious_fault();						\
 } while (0)
 
 static __always_inline void __vmcs_writel(unsigned long field, unsigned long value)
