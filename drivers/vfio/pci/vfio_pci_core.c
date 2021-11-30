@@ -372,7 +372,7 @@ unlock:
 
 #define DMA_FAULT_RING_LENGTH 512
 
-static int vfio_pci_dma_fault_init(struct vfio_pci_core_device *vdev)
+int vfio_pci_dma_fault_init(struct vfio_pci_core_device *vdev, bool register_fault)
 {
 	struct vfio_region_dma_fault *header;
 	size_t size;
@@ -406,11 +406,13 @@ static int vfio_pci_dma_fault_init(struct vfio_pci_core_device *vdev)
 	header->nb_entries = DMA_FAULT_RING_LENGTH;
 	header->offset = PAGE_SIZE;
 
-	ret = iommu_register_device_fault_handler(&vdev->pdev->dev,
-					vfio_pci_iommu_dev_fault_handler,
-					vdev);
-	if (ret) /* the dma fault region is freed in vfio_pci_disable() */
-		goto out;
+	if (register_fault) {
+		ret = iommu_register_device_fault_handler(&vdev->pdev->dev,
+							  vfio_pci_iommu_dev_fault_handler,
+							  vdev);
+		if (ret) /* the dma fault region is freed in vfio_pci_disable() */
+			goto out;
+	}
 
 	ret = vfio_pci_register_irq(vdev, VFIO_IRQ_TYPE_NESTED,
 				    VFIO_IRQ_SUBTYPE_DMA_FAULT,
@@ -423,6 +425,7 @@ out:
 	kfree(vdev->fault_pages);
 	return ret;
 }
+EXPORT_SYMBOL_GPL(vfio_pci_dma_fault_init);
 
 int vfio_pci_core_enable(struct vfio_pci_core_device *vdev)
 {
@@ -493,7 +496,7 @@ int vfio_pci_core_enable(struct vfio_pci_core_device *vdev)
 	if (!vfio_vga_disabled() && vfio_pci_is_vga(pdev))
 		vdev->has_vga = true;
 
-	ret = vfio_pci_dma_fault_init(vdev);
+	ret = vfio_pci_dma_fault_init(vdev, true);
 	if (ret) {
 		pci_disable_device(pdev);
 		return ret;

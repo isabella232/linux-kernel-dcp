@@ -636,7 +636,7 @@ static int vfio_pci_set_req_trigger(struct vfio_pci_core_device *vdev,
 					       count, flags, data);
 }
 
-static int vfio_pci_set_ext_irq_trigger(struct vfio_pci_core_device *vdev,
+int vfio_pci_set_ext_irq_trigger(struct vfio_pci_core_device *vdev,
 					unsigned int index, unsigned int start,
 					unsigned int count, uint32_t flags,
 					void *data)
@@ -653,6 +653,7 @@ static int vfio_pci_set_ext_irq_trigger(struct vfio_pci_core_device *vdev,
 	return vfio_pci_set_ctx_trigger_single(&vdev->ext_irqs[i].trigger,
 					       count, flags, data);
 }
+EXPORT_SYMBOL_GPL(vfio_pci_set_ext_irq_trigger);
 
 int vfio_pci_set_irqs_ioctl(struct vfio_pci_core_device *vdev, uint32_t flags,
 			    unsigned index, unsigned start, unsigned count,
