@@ -12,6 +12,11 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v1.19
+----------------
+18. AMX-KVM (Jing Liu):
+https://gitlab.devtools.intel.com/liujing/amx-kvm.git spr-bkc-amx
+
 SPR-BKC-PC-v1.18
 ----------------
 17. SDSI (Dave Box):
