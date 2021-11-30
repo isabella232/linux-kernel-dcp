@@ -56,6 +56,10 @@ struct vfio_pci_irq_ctx {
 struct vfio_pci_core_device;
 struct vfio_pci_region;
 
+struct vfio_pci_migops {
+	int	(*state_change)(struct vfio_pci_core_device *vdev, u32 new_state);
+};
+
 struct vfio_pci_regops {
 	ssize_t (*rw)(struct vfio_pci_core_device *vdev, char __user *buf,
 		      size_t count, loff_t *ppos, bool iswrite);
@@ -148,6 +152,10 @@ struct vfio_pci_core_device {
 	struct mutex		vma_lock;
 	struct list_head	vma_list;
 	struct rw_semaphore	memory_lock;
+
+	struct vfio_pci_migops	*migops;
+	u8			*mig_pages;
+	struct mutex		mig_lock;
 };
 
 #define is_intx(vdev) (vdev->irq_type == VFIO_PCI_INTX_IRQ_INDEX)
@@ -184,6 +192,9 @@ extern long vfio_pci_ioeventfd(struct vfio_pci_core_device *vdev, loff_t offset,
 extern ssize_t vfio_pci_dma_fault_rw(struct vfio_pci_core_device *vdev,
 				    char __user *buf, size_t count,
 				    loff_t *ppos, bool iswrite);
+extern ssize_t vfio_pci_mregion_rw(struct vfio_pci_core_device *vdev,
+				   char __user *buf, size_t count,
+				   loff_t *ppos, bool iswrite);
 
 extern int vfio_pci_init_perm_bits(void);
 extern void vfio_pci_uninit_perm_bits(void);
@@ -260,4 +271,5 @@ int vfio_pci_dma_fault_init(struct vfio_pci_core_device *vdev, bool register_fau
 int vfio_pci_set_ext_irq_trigger(struct vfio_pci_core_device *vdev,
 				 unsigned int index, unsigned int start,
 				 unsigned int count, uint32_t flags, void *data);
+int vfio_pci_migration_init(struct vfio_pci_core_device *vdev, uint32_t size);
 #endif /* VFIO_PCI_CORE_H */
