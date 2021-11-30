@@ -318,6 +318,114 @@ static const struct vfio_pci_regops vfio_pci_dma_fault_regops = {
 	.add_capability = vfio_pci_dma_fault_add_capability,
 };
 
+static void vfio_pci_mregion_release(struct vfio_pci_core_device *vdev,
+				       struct vfio_pci_region *region)
+{
+}
+
+static int vfio_pci_mregion_mmap(struct vfio_pci_core_device *vdev,
+				   struct vfio_pci_region *region,
+				   struct vm_area_struct *vma)
+{
+	u64 phys_len, req_len, pgoff, req_start;
+	unsigned long long addr;
+	unsigned int ret;
+
+	phys_len = region->size;
+
+	req_len = vma->vm_end - vma->vm_start;
+	pgoff = vma->vm_pgoff &
+		((1U << (VFIO_PCI_OFFSET_SHIFT - PAGE_SHIFT)) - 1);
+	req_start = pgoff << PAGE_SHIFT;
+
+	/* only the second page of the producer fault region is mmappable */
+	if (req_start < PAGE_SIZE)
+		return -EINVAL;
+
+	if (req_start + req_len > phys_len)
+		return -EINVAL;
+
+	addr = virt_to_phys(vdev->mig_pages);
+	vma->vm_private_data = vdev;
+	vma->vm_pgoff = (addr >> PAGE_SHIFT) + pgoff;
+
+	printk("%s, mmap addr %llx\n", __func__, addr);
+	ret = remap_pfn_range(vma, vma->vm_start, vma->vm_pgoff,
+			      req_len, vma->vm_page_prot);
+	return ret;
+}
+
+static int vfio_pci_mregion_add_capability(struct vfio_pci_core_device *vdev,
+					     struct vfio_pci_region *region,
+					     struct vfio_info_cap *caps)
+{
+	struct vfio_region_info_cap_sparse_mmap *sparse = NULL;
+	size_t size = sizeof(*sparse) + sizeof(*sparse->areas);
+	int ret;
+
+	/* TODO: Look into re-enabling it */
+	return 0;
+
+	sparse = kzalloc(size, GFP_KERNEL);
+	if (!sparse)
+		return -ENOMEM;
+
+	sparse->header.id = VFIO_REGION_INFO_CAP_SPARSE_MMAP;
+	sparse->header.version = 1;
+	sparse->nr_areas = 1;
+	/* first page of the region is for vfio_device_migration_info */
+	sparse->areas[0].offset = PAGE_SIZE;
+	sparse->areas[0].size = region->size - PAGE_SIZE;
+
+	ret = vfio_info_add_capability(caps, &sparse->header, size);
+	if (ret)
+		kfree(sparse);
+
+	return ret;
+}
+
+static const struct vfio_pci_regops vfio_pci_mig_regops = {
+	.rw		= vfio_pci_mregion_rw,
+	.release	= vfio_pci_mregion_release,
+	.mmap		= vfio_pci_mregion_mmap,
+	.add_capability = vfio_pci_mregion_add_capability,
+};
+
+int vfio_pci_migration_init(struct vfio_pci_core_device *vdev, uint32_t state_size)
+{
+	struct vfio_device_migration_info *mig_info;
+	size_t size;
+	int ret;
+
+	mutex_init(&vdev->mig_lock);
+
+	size = ALIGN(sizeof(*mig_info) + state_size, PAGE_SIZE);
+
+	vdev->mig_pages = kzalloc(size, GFP_KERNEL);
+	if (!vdev->mig_pages)
+		return -ENOMEM;
+
+	mig_info = (struct vfio_device_migration_info *) vdev->mig_pages;
+	ret = vfio_pci_register_dev_region(vdev,
+		VFIO_REGION_TYPE_MIGRATION,
+		VFIO_REGION_SUBTYPE_MIGRATION,
+		&vfio_pci_mig_regops, size,
+		VFIO_REGION_INFO_FLAG_READ | VFIO_REGION_INFO_FLAG_WRITE,
+		//VFIO_REGION_INFO_FLAG_MMAP,
+		vdev->mig_pages);
+	if (ret)
+		goto out;
+
+	mig_info->data_offset = sizeof(*mig_info);
+	pr_info("%s, mig_info->data_offset: 0x%lx\n", __func__, (unsigned long) mig_info->data_offset);
+	return 0;
+out:
+	kfree(vdev->mig_pages);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(vfio_pci_migration_init);
+
+
 int vfio_pci_iommu_dev_fault_handler(struct iommu_fault *fault, void *data)
 {
 	struct vfio_pci_core_device *vdev = (struct vfio_pci_core_device *)data;
