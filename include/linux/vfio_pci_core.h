@@ -256,4 +256,8 @@ static inline bool vfio_pci_is_vga(struct pci_dev *pdev)
 	return (pdev->class >> 8) == PCI_CLASS_DISPLAY_VGA;
 }
 
+int vfio_pci_dma_fault_init(struct vfio_pci_core_device *vdev, bool register_fault);
+int vfio_pci_set_ext_irq_trigger(struct vfio_pci_core_device *vdev,
+				 unsigned int index, unsigned int start,
+				 unsigned int count, uint32_t flags, void *data);
 #endif /* VFIO_PCI_CORE_H */
