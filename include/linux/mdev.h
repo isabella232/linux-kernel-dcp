@@ -22,6 +22,7 @@ struct mdev_device {
 	void *iommu_domain;
 	void *iommu_fault_data;
 	bool active;
+	struct eventfd_ctx *req_trigger;
 };
 
 static inline struct mdev_device *to_mdev_device(struct device *dev)
