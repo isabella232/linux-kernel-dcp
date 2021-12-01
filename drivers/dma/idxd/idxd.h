@@ -210,6 +210,8 @@ struct idxd_wq {
 	u64 max_xfer_bytes;
 	u32 max_batch_size;
 	bool ats_dis;
+
+	void *private_data;
 };
 
 struct idxd_engine {
