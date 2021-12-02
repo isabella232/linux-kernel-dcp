@@ -710,6 +710,7 @@ int msi_domain_alloc_irqs(struct irq_domain *domain, struct device *dev,
 
 	return ops->domain_alloc_irqs(domain, dev, nvec);
 }
+EXPORT_SYMBOL_GPL(msi_domain_alloc_irqs);
 
 void __msi_domain_free_irqs(struct irq_domain *domain, struct device *dev)
 {
