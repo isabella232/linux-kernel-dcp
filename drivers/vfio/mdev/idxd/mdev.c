@@ -677,6 +677,13 @@ static int vidxd_migration_state_change(struct vfio_pci_core_device *vfio_vdev,
 			__func__, mig_info->device_state);
 		if (mig_info->device_state & VFIO_DEVICE_STATE_RESUMING)
 			vidxd_dest_complete_migration(vidxd);
+
+		mutex_lock(&vidxd->mig_submit_lock);
+		/* The VMM may continue the VM after pausing it. So get ready
+		* for normal operation */
+		vidxd->paused = false;
+		mutex_unlock(&vidxd->mig_submit_lock);
+
 		break;
 	case VFIO_DEVICE_STATE_SAVING | VFIO_DEVICE_STATE_RUNNING:
 		pr_info("%s, VFIO_DEVICE_STATE_SAVING | VFIO_DEVICE_STATE_RUNNING!!\n", __func__);
