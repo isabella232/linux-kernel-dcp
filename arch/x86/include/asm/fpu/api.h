@@ -173,7 +173,10 @@ extern long fpu_xstate_prctl(struct task_struct *tsk, int option, unsigned long 
 
 void *start_update_xsave_msrs(int xfeature_nr);
 void end_update_xsave_msrs(void);
-int xsave_rdmsrl(void *state, unsigned int msr, unsigned long long *p);
-int xsave_wrmsrl(void *state, u32 msr, u64 val);
-int xsave_set_clear_bits_msrl(void *state, u32 msr, u64 set, u64 clear);
+int xsave_rdmsrl(void *xstate, unsigned int msr, unsigned long long *p);
+int xsave_wrmsrl(void *xstate, u32 msr, u64 val);
+int xsave_set_clear_bits_msrl(void *xstate, u32 msr, u64 set, u64 clear);
+
+void *get_xsave_buffer_unsafe(struct fpu *fpu, int xfeature_nr);
+int xsave_wrmsrl_unsafe(void *xstate, u32 msr, u64 val);
 #endif /* _ASM_X86_FPU_API_H */

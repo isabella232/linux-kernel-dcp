@@ -1868,6 +1868,17 @@ static u64 *__get_xsave_member(void *xstate, u32 msr)
 }
 
 /*
+ * Operate on the xsave buffer directly. It makes no gaurantees that the
+ * buffer will stay valid now or in the futre. This function is pretty
+ * much only useful when the caller knows the fpu's thread can't be
+ * scheduled or otherwise operated on concurrently.
+ */
+void *get_xsave_buffer_unsafe(struct fpu *fpu, int xfeature_nr)
+{
+	return get_xsave_addr(&fpu->fpstate->regs.xsave, xfeature_nr);
+}
+
+/*
  * Return a pointer to the xstate for the feature if it should be used, or NULL
  * if the MSRs should be written to directly. To do this safely, using the
  * associated read/write helpers is required.
@@ -1957,13 +1968,10 @@ int xsave_rdmsrl(void *xstate, unsigned int msr, unsigned long long *p)
 	return 0;
 }
 
-int xsave_wrmsrl(void *xstate, u32 msr, u64 val)
+
+int xsave_wrmsrl_unsafe(void *xstate, u32 msr, u64 val)
 {
 	u64 *member_ptr;
-
-	__xsave_msrl_prepare_write();
-	if (!xstate)
-		return wrmsrl_safe(msr, val);
 
 	member_ptr = __get_xsave_member(xstate, msr);
 	if (!member_ptr)
@@ -1972,6 +1980,15 @@ int xsave_wrmsrl(void *xstate, u32 msr, u64 val)
 	*member_ptr = val;
 
 	return 0;
+}
+
+int xsave_wrmsrl(void *xstate, u32 msr, u64 val)
+{
+	__xsave_msrl_prepare_write();
+	if (!xstate)
+		return wrmsrl_safe(msr, val);
+
+	return xsave_wrmsrl_unsafe(xstate, msr, val);
 }
 
 int xsave_set_clear_bits_msrl(void *xstate, u32 msr, u64 set, u64 clear)
