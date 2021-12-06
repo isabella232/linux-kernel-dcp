@@ -17,6 +17,23 @@
 #include <uapi/asm/vmx.h>
 #include <asm/vmxfeatures.h>
 
+#define vmx_asm1(insn, op1, fault_fn, error_fn, error_args...)		\
+do {									\
+	asm_volatile_goto("1: " __stringify(insn) " %0\n\t"		\
+			  ".byte 0x2e\n\t" /* branch not taken hint */	\
+			  "jna %l[error]\n\t"				\
+			  _ASM_EXTABLE(1b, %l[fault])			\
+			  : : op1 : "cc" : error, fault);		\
+	return;								\
+error:									\
+	instrumentation_begin();					\
+	error_fn(error_args);						\
+	instrumentation_end();						\
+	return;								\
+fault:									\
+	fault_fn();							\
+} while (0)
+
 struct vmcs_hdr {
 	u32 revision_id:31;
 	u32 shadow_vmcs:1;
