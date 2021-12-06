@@ -140,24 +140,10 @@ static __always_inline unsigned long vmcs_readl(unsigned long field)
 	return __vmcs_readl(field);
 }
 
-#define vmx_asm1(insn, op1, error_args...)				\
-do {									\
-	asm_volatile_goto("1: " __stringify(insn) " %0\n\t"		\
-			  ".byte 0x2e\n\t" /* branch not taken hint */	\
-			  "jna %l[error]\n\t"				\
-			  _ASM_EXTABLE(1b, %l[fault])			\
-			  : : op1 : "cc" : error, fault);		\
-	return;								\
-error:									\
-	instrumentation_begin();					\
-	insn##_error(error_args);					\
-	instrumentation_end();						\
-	return;								\
-fault:									\
-	virt_spurious_fault();						\
-} while (0)
+#define vmx_asm1_kvm(insn, op1, error_args...)				\
+	vmx_asm1(insn, op1, virt_spurious_fault, insn##_error, error_args)
 
-#define vmx_asm2(insn, op1, op2, error_args...)				\
+#define vmx_asm2_kvm(insn, op1, op2, error_args...)			\
 do {									\
 	asm_volatile_goto("1: "  __stringify(insn) " %1, %0\n\t"	\
 			  ".byte 0x2e\n\t" /* branch not taken hint */	\
@@ -176,7 +162,7 @@ fault:									\
 
 static __always_inline void __vmcs_writel(unsigned long field, unsigned long value)
 {
-	vmx_asm2(vmwrite, "r"(field), "rm"(value), field, value);
+	vmx_asm2_kvm(vmwrite, "r"(field), "rm"(value), field, value);
 }
 
 static __always_inline void vmcs_write16(unsigned long field, u16 value)
@@ -242,7 +228,7 @@ static inline void vmcs_clear(struct vmcs *vmcs)
 {
 	u64 phys_addr = __pa(vmcs);
 
-	vmx_asm1(vmclear, "m"(phys_addr), vmcs, phys_addr);
+	vmx_asm1_kvm(vmclear, "m"(phys_addr), vmcs, phys_addr);
 }
 
 static inline void vmcs_load(struct vmcs *vmcs)
@@ -252,7 +238,7 @@ static inline void vmcs_load(struct vmcs *vmcs)
 	if (static_branch_unlikely(&enable_evmcs))
 		return evmcs_load(phys_addr);
 
-	vmx_asm1(vmptrld, "m"(phys_addr), vmcs, phys_addr);
+	vmx_asm1_kvm(vmptrld, "m"(phys_addr), vmcs, phys_addr);
 }
 
 static inline void __invvpid(unsigned long ext, u16 vpid, gva_t gva)
@@ -263,7 +249,7 @@ static inline void __invvpid(unsigned long ext, u16 vpid, gva_t gva)
 		u64 gva;
 	} operand = { vpid, 0, gva };
 
-	vmx_asm2(invvpid, "r"(ext), "m"(operand), ext, vpid, gva);
+	vmx_asm2_kvm(invvpid, "r"(ext), "m"(operand), ext, vpid, gva);
 }
 
 static inline void __invept(unsigned long ext, u64 eptp, gpa_t gpa)
@@ -272,7 +258,7 @@ static inline void __invept(unsigned long ext, u64 eptp, gpa_t gpa)
 		u64 eptp, gpa;
 	} operand = {eptp, gpa};
 
-	vmx_asm2(invept, "r"(ext), "m"(operand), ext, eptp, gpa);
+	vmx_asm2_kvm(invept, "r"(ext), "m"(operand), ext, eptp, gpa);
 }
 
 static inline void vpid_sync_vcpu_single(int vpid)
