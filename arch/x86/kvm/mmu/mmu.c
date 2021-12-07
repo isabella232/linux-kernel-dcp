@@ -6380,7 +6380,13 @@ static void kvm_mmu_invalidate_zap_pages_in_memslot(struct kvm *kvm,
 			struct kvm_memory_slot *slot,
 			struct kvm_page_track_notifier_node *node)
 {
-	if (memslot_update_zap_all &&
+	/*
+	 * FIXME: seems kvm_mmu_zap_memslot doesn't take TDP MMU into consideration.
+	 * Without proper zapping pages, TDP MMU would cause the BUG() in
+	 * __handle_changed_spte. As a workaround, Zap pages in all levels if TDP
+	 * MMU is enabled.
+	 */
+	if ((memslot_update_zap_all || is_tdp_mmu_enabled(kvm)) &&
 	    !kvm->arch.gfn_shared_mask)
 		kvm_mmu_zap_all_fast(kvm);
 	else
