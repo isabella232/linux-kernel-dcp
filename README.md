@@ -12,6 +12,11 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v1.20
+----------------
+19 SPI-NOR (Mika Westerberg):
+https://gitlab.devtools.intel.com/mwesterb/linux.git spi-for-SPR-BKC-PC-v1.rc7
+
 SPR-BKC-PC-v1.19
 ----------------
 18. AMX-KVM (Jing Liu):
