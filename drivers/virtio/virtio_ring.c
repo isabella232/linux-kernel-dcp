@@ -2348,7 +2348,7 @@ void vring_transport_features(struct virtio_device *vdev)
 
 		switch (i) {
 		case VIRTIO_RING_F_INDIRECT_DESC:
-			if (cc_platform_has(CC_ATTR_GUEST_MEM_ENCRYPT))
+			if (cc_platform_has(CC_ATTR_GUEST_DEVICE_FILTER))
 				goto clear;
 			break;
 		case VIRTIO_RING_F_EVENT_IDX:
@@ -2358,7 +2358,7 @@ void vring_transport_features(struct virtio_device *vdev)
 		case VIRTIO_F_ACCESS_PLATFORM:
 			break;
 		case VIRTIO_F_RING_PACKED:
-			if (cc_platform_has(CC_ATTR_GUEST_MEM_ENCRYPT))
+			if (cc_platform_has(CC_ATTR_GUEST_DEVICE_FILTER))
 				goto clear;
 			break;
 		case VIRTIO_F_ORDER_PLATFORM:

@@ -983,8 +983,8 @@ static inline void __iomem *ioremap(phys_addr_t addr, size_t size)
 #endif
 
 /* Share memory with host in confidential guest platforms */
-#ifndef ioremap_host_shared
-#define ioremap_host_shared ioremap
+#ifndef ioremap_driver_hardened
+#define ioremap_driver_hardened ioremap
 #endif
 
 /*

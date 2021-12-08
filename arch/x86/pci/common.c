@@ -801,3 +801,8 @@ bool arch_support_pci_device_msi(struct pci_dev *pdev)
 	 */
 	return on_bare_metal(&pdev->dev);
 }
+
+void pci_disable_mmconf(void)
+{
+	pci_probe &= ~PCI_PROBE_MMCONF;
+}

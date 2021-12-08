@@ -20,6 +20,8 @@
 #include <asm/insn-eval.h>
 #include <linux/sched/signal.h> /* force_sig_fault() */
 #include <linux/swiotlb.h>
+#include <linux/pci.h>
+#include <linux/nmi.h>
 #include <linux/random.h>
 
 #define CREATE_TRACE_POINTS
@@ -68,9 +70,10 @@ static struct {
 void (*tdx_event_notify_handler)(void);
 EXPORT_SYMBOL_GPL(tdx_event_notify_handler);
 
+static int tdx_guest = -1;
+
 bool is_tdx_guest(void)
 {
-	static int tdx_guest = -1;
 	u32 eax, sig[3];
 
 	if (tdx_guest >= 0)
@@ -604,7 +607,7 @@ static bool tdx_handle_io(struct pt_regs *regs, u32 exit_qual)
 			regs->ax &= ~mask;
 			regs->ax |= (UINT_MAX & mask);
 		}
-		return false;
+		return true;
 	}
 
 	if (!out) {
@@ -886,6 +889,11 @@ bool tdx_handle_virtualization_exception(struct pt_regs *regs,
 		ret = tdx_handle_io(regs, ve->exit_qual);
 		break;
 	case EXIT_REASON_EPT_VIOLATION:
+		if (!(ve->gpa & tdx_shared_mask())) {
+			panic("#VE due to access to unaccepted memory. "
+			      "GPA: %#llx\n", ve->gpa);
+		}
+
 		/* Currently only MMIO triggers EPT violation */
 		ve->instr_len = tdx_handle_mmio(regs, ve);
 		if (ve->instr_len < 0) {
@@ -958,12 +966,17 @@ static __init bool tdx_early_io(struct pt_regs *regs, u32 exit_qual)
 __init bool tdx_early_handle_ve(struct pt_regs *regs)
 {
 	struct ve_info ve;
+	int ret;
 
 	if (tdx_get_ve_info(&ve))
 		return false;
 
-	if (ve.exit_reason == EXIT_REASON_IO_INSTRUCTION)
-		return tdx_early_io(regs, ve.exit_qual);
+	if (ve.exit_reason == EXIT_REASON_IO_INSTRUCTION) {
+		ret = tdx_early_io(regs, ve.exit_qual);
+		if (!ret)
+			regs->ip += ve.instr_len;
+		return ret;
+	}
 
 	return false;
 }
@@ -974,10 +987,11 @@ void __init tdx_early_init(void)
 
 	tdx_guest_forced = cmdline_find_option_bool(boot_command_line,
 						    "force_tdx_guest");
-	if (tdx_guest_forced)
+	if (tdx_guest_forced) {
+		tdx_guest = 1;
 		pr_info("Force enabling TDX Guest feature\n");
-
-	if (!is_tdx_guest() && !tdx_guest_forced)
+	}
+	if (!is_tdx_guest())
 		return;
 
 	setup_force_cpu_cap(X86_FEATURE_TDX_GUEST);
@@ -985,6 +999,7 @@ void __init tdx_early_init(void)
 	setup_clear_cpu_cap(X86_FEATURE_MTRR);
 	setup_clear_cpu_cap(X86_FEATURE_APERFMPERF);
 	setup_clear_cpu_cap(X86_FEATURE_TME);
+	setup_clear_cpu_cap(X86_FEATURE_CQM_LLC);
 
 	/*
 	 * The only secure (mononotonous) timer inside a TD guest
@@ -1004,6 +1019,14 @@ void __init tdx_early_init(void)
 
 	legacy_pic = &null_legacy_pic;
 	swiotlb_force = SWIOTLB_FORCE;
+
+	/*
+	 * Disable NMI watchdog because of the risk of false positives
+	 * and also can increase overhead in the TDX module.
+	 * This is already done for KVM, but covers other hypervisors
+	 * here.
+	 */
+	hardlockup_detector_disable();
 
 	/*
 	 * In TDX relying on environmental noise like interrupt
@@ -1029,6 +1052,9 @@ void __init tdx_early_init(void)
 
 	if (tdx_hcall_set_notify_intr(TDX_GUEST_EVENT_NOTIFY_VECTOR))
 		pr_warn("Setting event notification interrupt failed\n");
+
+	pci_disable_early();
+	pci_disable_mmconf();
 
 	pr_info("Guest initialized\n");
 }

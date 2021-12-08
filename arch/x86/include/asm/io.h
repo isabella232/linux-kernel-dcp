@@ -380,9 +380,9 @@ extern void __iomem *ioremap_wc(resource_size_t offset, unsigned long size);
 extern void __iomem *ioremap_wt(resource_size_t offset, unsigned long size);
 #define ioremap_wt ioremap_wt
 
-extern void __iomem *ioremap_host_shared(resource_size_t offset,
+extern void __iomem *ioremap_driver_hardened(resource_size_t offset,
 					 unsigned long size);
-#define ioremap_host_shared ioremap_host_shared
+#define ioremap_driver_hardened ioremap_driver_hardened
 
 extern bool is_early_ioremap_ptep(pte_t *ptep);
 
@@ -422,8 +422,6 @@ static inline bool phys_mem_access_encrypted(unsigned long phys_addr,
 	return true;
 }
 #endif
-
-extern bool ioremap_force_shared;
 
 /**
  * iosubmit_cmds512 - copy data to single MMIO location, in 512-bit units

@@ -69,8 +69,8 @@ static inline bool early_cpuid_has_tdx_guest(void)
 bool early_is_tdx_guest(void)
 {
 	if (tdx_guest < 0)
-		tdx_guest = early_cpuid_has_tdx_guest() ||
-			cmdline_find_option_bool("force_tdx_guest");
+		tdx_guest = cmdline_find_option_bool("force_tdx_guest") ||
+			    early_cpuid_has_tdx_guest();
 
 	return !!tdx_guest;
 }
