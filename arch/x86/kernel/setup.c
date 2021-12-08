@@ -752,6 +752,21 @@ dump_kernel_offset(struct notifier_block *self, unsigned long v, void *p)
 	return 0;
 }
 
+void __init show_spr_bkc_pc_banner(void)
+{
+	char spr_bkc_pc_banner[] =
+"=============================================================\n\
+WARNING this kernel contains technology preview code that is\n\
+subject to change once it goes upstream. This kernel is\n\
+strictly for hardware validation, not production. Applications\n\
+tested against this kernel may behave differently, or may not\n\
+operate at all once the code is finalized in the mainline kernel.\n\
+Use at your own risk.\n\
+==============================================================\n";
+
+	printk(KERN_INFO "%s", spr_bkc_pc_banner);
+}
+
 /*
  * Determine if we were loaded by an EFI loader.  If so, then we have also been
  * passed the efi memmap, systab, etc., so we should use these data structures
@@ -767,6 +782,8 @@ dump_kernel_offset(struct notifier_block *self, unsigned long v, void *p)
 
 void __init setup_arch(char **cmdline_p)
 {
+	show_spr_bkc_pc_banner();
+
 #ifdef CONFIG_X86_32
 	memcpy(&boot_cpu_data, &new_cpu_data, sizeof(new_cpu_data));
 
