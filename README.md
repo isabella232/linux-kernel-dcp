@@ -12,9 +12,14 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v1.21
+----------------
+20. KVM TDP/TDX fixes (Chao Gao):
+https://gitlab.devtools.intel.com/cqiang/linux.git    for-bkc-12-8
+
 SPR-BKC-PC-v1.20
 ----------------
-19 SPI-NOR (Mika Westerberg):
+19. SPI-NOR (Mika Westerberg):
 https://gitlab.devtools.intel.com/mwesterb/linux.git spi-for-SPR-BKC-PC-v1.rc7
 
 SPR-BKC-PC-v1.19
