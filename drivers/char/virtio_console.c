@@ -1566,10 +1566,13 @@ static void handle_control_message(struct virtio_device *vdev,
 	struct port *port;
 	size_t name_size;
 	int err;
+	unsigned id;
 
 	cpkt = (struct virtio_console_control *)(buf->buf + buf->offset);
 
-	port = find_port_by_id(portdev, virtio32_to_cpu(vdev, cpkt->id));
+	/* Make sure the host cannot change id under us */
+	id = virtio32_to_cpu(vdev, READ_ONCE(cpkt->id));
+	port = find_port_by_id(portdev, id);
 	if (!port &&
 	    cpkt->event != cpu_to_virtio16(vdev, VIRTIO_CONSOLE_PORT_ADD)) {
 		/* No valid header at start of buffer.  Drop it. */
@@ -1586,15 +1589,14 @@ static void handle_control_message(struct virtio_device *vdev,
 			send_control_msg(port, VIRTIO_CONSOLE_PORT_READY, 1);
 			break;
 		}
-		if (virtio32_to_cpu(vdev, cpkt->id) >=
-		    portdev->max_nr_ports) {
+		if (id >= portdev->max_nr_ports) {
 			dev_warn(&portdev->vdev->dev,
 				"Request for adding port with "
 				"out-of-bound id %u, max. supported id: %u\n",
 				cpkt->id, portdev->max_nr_ports - 1);
 			break;
 		}
-		add_port(portdev, virtio32_to_cpu(vdev, cpkt->id));
+		add_port(portdev, id);
 		break;
 	case VIRTIO_CONSOLE_PORT_REMOVE:
 		unplug_port(port);
@@ -1846,6 +1848,9 @@ static int init_vqs(struct ports_device *portdev)
 	int err;
 
 	nr_ports = portdev->max_nr_ports;
+	if (use_multiport(portdev) && nr_ports < 1)
+		return -EINVAL;
+
 	nr_queues = use_multiport(portdev) ? (nr_ports + 1) * 2 : 2;
 
 	vqs = kmalloc_array(nr_queues, sizeof(struct virtqueue *), GFP_KERNEL);
@@ -1981,6 +1986,8 @@ static void virtcons_remove(struct virtio_device *vdev)
 	kfree(portdev);
 }
 
+#define MAX_VIRTIO_PORTS 64
+
 /*
  * Once we're further in boot, we get probed like any other virtio
  * device.
@@ -2036,6 +2043,10 @@ static int virtcons_probe(struct virtio_device *vdev)
 	    virtio_cread_feature(vdev, VIRTIO_CONSOLE_F_MULTIPORT,
 				 struct virtio_console_config, max_nr_ports,
 				 &portdev->max_nr_ports) == 0) {
+		if (portdev->max_nr_ports >= MAX_VIRTIO_PORTS) {
+			err = -EINVAL;
+			goto free;
+		}
 		multiport = true;
 	}
 

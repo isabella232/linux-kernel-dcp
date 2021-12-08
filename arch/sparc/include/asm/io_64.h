@@ -410,7 +410,7 @@ static inline void __iomem *ioremap(unsigned long offset, unsigned long size)
 #define ioremap_wc(X,Y)			ioremap((X),(Y))
 #define ioremap_wt(X,Y)			ioremap((X),(Y))
 /* Share memory with host in confidential guest platforms */
-#define ioremap_host_shared(X, Y)	ioremap((X), (Y))
+#define ioremap_driver_hardened(X, Y)	ioremap((X), (Y))
 static inline void __iomem *ioremap_np(unsigned long offset, unsigned long size)
 {
 	return NULL;

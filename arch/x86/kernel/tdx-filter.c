@@ -202,14 +202,21 @@ bool tdx_filter_enabled(void)
 
 bool tdx_allowed_port(short int port)
 {
-	if (tdx_debug_enabled() && tdx_filter_enabled())
+	if (tdx_debug_enabled() && !tdx_filter_enabled())
 		return true;
 
 	switch (port) {
 	/* MC146818 RTC */
 	case 0x70 ... 0x71:
+	/* i8237A DMA controller */
+	case 0x80 ... 0x8f:
 	/* PCI */
+	case 0xcd8 ... 0xcdf:
 	case 0xcf8 ... 0xcff:
+		return true;
+	/* PCIE hotplug device state for Q35 machine type */
+	case 0xcc4:
+	case 0xcc8:
 		return true;
 	/* ACPI ports list:
 	 * 0600-0603 : ACPI PM1a_EVT_BLK
@@ -219,11 +226,11 @@ bool tdx_allowed_port(short int port)
 	 */
 	case 0x600 ... 0x62f:
 		return true;
-	/* COM1 */
-	case 0x3f8:
-	case 0x3f9:
-	case 0x3fa:
-	case 0x3fd:
+	/* serial */
+	case 0x2e8 ... 0x2ef:
+	case 0x2f8 ... 0x2ff:
+	case 0x3e8 ... 0x3ef:
+	case 0x3f8 ... 0x3ff:
 		return tdx_debug_enabled();
 	default:
 		return false;
@@ -243,22 +250,13 @@ void __init tdx_filter_init(void)
 
 	if (!tdx_filter_enabled()) {
 		pr_info("Disabled TDX guest filter support\n");
-		ioremap_force_shared = true;
 		add_taint(TAINT_CONF_NO_LOCKDOWN, LOCKDEP_STILL_OK);
 		return;
 	}
 
 	dev_default_authorization = false;
 
-	pci_disable_early();
-
 	if (filter_overridden) {
-		/*
-		 * Since the default allow list is overridden to
-		 * make sure new drivers use ioremap_host_shared,
-		 * force it on all drivers.
-		 */
-		ioremap_force_shared = true;
 		add_taint(TAINT_CONF_NO_LOCKDOWN, LOCKDEP_STILL_OK);
 		pr_debug("Device filter is overridden\n");
 	}
@@ -270,11 +268,6 @@ void __init tdx_filter_init(void)
 		snprintf(acpi_allowed, sizeof(acpi_allowed), "%s,%s", allowed,
 			 a_allowed);
 		allowed = acpi_allowed;
-		/*
-		 * Similar to previous overrides, ACPI table override also
-		 * requires ioremap as shared. So force enable it.
-		 */
-		ioremap_force_shared = true;
 	}
 	acpi_tbl_allow_setup(allowed);
 
