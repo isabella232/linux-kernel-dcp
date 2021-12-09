@@ -899,12 +899,8 @@ static void vt_write_tsc_offset(struct kvm_vcpu *vcpu, u64 offset)
 
 static void vt_write_tsc_multiplier(struct kvm_vcpu *vcpu, u64 multiplier)
 {
-	if (is_td_vcpu(vcpu)) {
-		if (kvm_scale_tsc(vcpu, tsc_khz, multiplier) !=
-		    vcpu->kvm->arch.initial_tsc_khz)
-			KVM_BUG_ON(is_td_vcpu(vcpu), vcpu->kvm);
+	if (is_td_vcpu(vcpu))
 		return;
-	}
 
 	vmx_write_tsc_multiplier(vcpu, multiplier);
 }
