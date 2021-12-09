@@ -12,6 +12,11 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v1.22
+----------------
+21. SPR BKC PC kernel banne (Fenghua Yu):
+0001-x86-boot-Print-an-SPR-BKC-PC-kernel-banner.patch
+
 SPR-BKC-PC-v1.21
 ----------------
 20. KVM TDP/TDX fixes (Chao Gao):
