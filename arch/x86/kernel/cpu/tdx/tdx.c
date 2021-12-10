@@ -1432,6 +1432,40 @@ static const struct attribute_group tdx_module_attr_group = {
 	.attrs = tdx_module_attrs,
 };
 
+/*
+ * Search for TDX module and its sigstruct from /lib/firmware and
+ * load TDX module through P-SEAMLDR.
+ */
+int tdx_load_module_late(void)
+{
+	const struct firmware *module = NULL;
+	const struct firmware *sigstruct = NULL;
+	char *tdx_module_name = "intel-seam/libtdx.so";
+	char *tdx_sigstruct_name = "intel-seam/libtdx.so.sigstruct";
+	int ret;
+
+	pr_info("Loading TDX module via P-SEAMLDR with %s and %s\n",
+		tdx_module_name, tdx_sigstruct_name);
+
+	ret = request_firmware_direct(&module, tdx_module_name,
+				      &tdx_module_dev->dev);
+	if (ret)
+		return ret;
+
+	ret = request_firmware_direct(&sigstruct, tdx_sigstruct_name,
+				      &tdx_module_dev->dev);
+	if (ret)
+		goto release;
+
+	ret = tdx_load_module(module->data, module->size,
+			      sigstruct->data, sigstruct->size,
+			      SEAMLDR_SCENARIO_LOAD);
+release:
+	release_firmware(sigstruct);
+	release_firmware(module);
+	return ret;
+}
+
 static int __init tdx_module_sysfs_init(void)
 {
 	int ret = 0;
