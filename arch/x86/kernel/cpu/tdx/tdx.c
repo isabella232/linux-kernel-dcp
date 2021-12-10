@@ -488,7 +488,7 @@ static int __init tdx_sys_info_alloc(struct tdsysinfo_struct **tdsysinfo,
  *			 pages by params.
  * @params: virtual address of struct seamldr_params to free
  */
-static void __init free_seamldr_params(struct seamldr_params *params)
+static void free_seamldr_params(struct seamldr_params *params)
 {
 	int i;
 
@@ -519,7 +519,7 @@ static void __init free_seamldr_params(struct seamldr_params *params)
  * Here module and sigstruct come from initrd image, not from memory allocator.
  * Annotate it with __no_sanitize_address to apiece KASAN.
  */
-static struct seamldr_params * __init __no_sanitize_address alloc_seamldr_params(
+static struct seamldr_params *__no_sanitize_address alloc_seamldr_params(
 	const void *module, unsigned long module_size, const void *sigstruct,
 	unsigned long sigstruct_size, u64 scenario)
 {
@@ -597,7 +597,7 @@ struct tdx_install_module_data {
 };
 
 /* Load seam module on one CPU */
-static void __init tdx_install_module_cpu(void *data)
+static void tdx_install_module_cpu(void *data)
 {
 	struct tdx_install_module_data *install_module = data;
 	int ret = seamldr_install(__pa(install_module->params));
@@ -774,7 +774,7 @@ out:
  * load TDX module on all CPUs through P-SEAMLDR and does get system info about
  * TDX module.
  */
-static int __init tdx_load_module(
+static int tdx_load_module(
 	const void *module, unsigned long module_size, const void *sigstruct,
 	unsigned long sigstruct_size, u64 scenario)
 {
