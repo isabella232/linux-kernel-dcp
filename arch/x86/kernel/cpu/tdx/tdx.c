@@ -801,26 +801,8 @@ static int __init tdx_load_module(
 		/* don't care what exact error occurred on which cpus. */
 		ret = atomic_read(&install_module.error);
 		if (ret)
-			goto out;
+			break;
 	}
-
-	ret = tdx_init_system();
-	if (ret)
-		goto out;
-
-	ret = tdx_get_system_info();
-	if (ret)
-		goto out;
-
-	ret = init_package_leaders();
-	if (ret)
-		goto out;
-
-	ret = tdx_init_cpuhp();
-	if (ret)
-		goto out;
-
-out:
 	free_seamldr_params(params);
 	return ret;
 }
@@ -886,6 +868,19 @@ static int __init tdx_arch_init(void)
 	pr_info("Loaded TDX module via P-SEAMLDR.\n");
 	set_tdx_module_state(TDX_MODULE_LOADED);
 
+	ret = tdx_init_system();
+	if (ret)
+		goto out;
+
+	ret = tdx_get_system_info();
+	if (ret)
+		goto out;
+
+	ret = init_package_leaders();
+	if (ret)
+		goto out;
+
+	ret = tdx_init_cpuhp();
 out:
 	/*
 	 * Other codes (Especially kvm_intel) expect that they're the first to
