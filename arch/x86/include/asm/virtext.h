@@ -107,6 +107,13 @@ extern int cpu_vmx_get(void);
 extern void cpu_vmx_put(void);
 extern int cpu_vmx_get_basic_info(struct vmx_basic_info *info);
 extern void virt_spurious_fault(void);
+extern noinline void vmptrld_error(struct vmcs *vmcs, u64 phys_addr);
+
+#define vmx_insn_failed(fmt...)		\
+do {					\
+	WARN_ONCE(1, fmt);		\
+	pr_warn_ratelimited(fmt);	\
+} while (0)
 #else
 static inline int cpu_vmx_get(void)
 {
@@ -122,6 +129,11 @@ static inline int cpu_vmx_get_basic_info(struct vmx_basic_info *info)
 static inline void virt_spurious_fault(void)
 {
 }
+static inline void vmptrld_err(struct vmcs *vmcs, u64 phys_addr)
+{
+}
+
+#define vmx_insn_failed(fmt...) do {} while (0)
 #endif
 
 
