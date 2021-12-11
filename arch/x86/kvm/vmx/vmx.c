@@ -383,12 +383,6 @@ module_param_cb(vmentry_l1d_flush, &vmentry_l1d_flush_ops, NULL, 0644);
 
 void vmx_vmexit(void);
 
-#define vmx_insn_failed(fmt...)		\
-do {					\
-	WARN_ONCE(1, fmt);		\
-	pr_warn_ratelimited(fmt);	\
-} while (0)
-
 asmlinkage void vmread_error(unsigned long field, bool fault)
 {
 	if (fault)
@@ -406,11 +400,6 @@ noinline void vmwrite_error(unsigned long field, unsigned long value)
 noinline void vmclear_error(struct vmcs *vmcs, u64 phys_addr)
 {
 	vmx_insn_failed("kvm: vmclear failed: %p/%llx\n", vmcs, phys_addr);
-}
-
-noinline void vmptrld_error(struct vmcs *vmcs, u64 phys_addr)
-{
-	vmx_insn_failed("kvm: vmptrld failed: %p/%llx\n", vmcs, phys_addr);
 }
 
 noinline void invvpid_error(unsigned long ext, u16 vpid, gva_t gva)

@@ -55,6 +55,12 @@ static struct notifier_block virt_reboot_notifier = {
 	.priority = 0,
 };
 
+noinline void vmptrld_error(struct vmcs *vmcs, u64 phys_addr)
+{
+	vmx_insn_failed("vmptrld failed: %p/%llx\n", vmcs, phys_addr);
+}
+EXPORT_SYMBOL_GPL(vmptrld_error);
+
 static void free_vmxon_vmcs(int size)
 {
 	int cpu = raw_smp_processor_id();
