@@ -126,6 +126,17 @@ bool is_nonarch_seamcall_available __read_mostly = true;
 /* TDX system information returned by TDH_SYS_INFO. */
 static struct tdsysinfo_struct *tdx_tdsysinfo;
 
+static int set_tdx_module_state(int state)
+{
+	tdx_module_state = state;
+	return 0;
+}
+
+static int get_tdx_module_state(void)
+{
+	return tdx_module_state;
+}
+
 /*
  * Return pointer to TDX system info (TDSYSINFO_STRUCT) if TDX has been
  * successfully initialized, or NULL.
@@ -786,7 +797,7 @@ static int __init tdx_arch_init(void)
 		goto out;
 	}
 	pr_info("Loaded TDX module via P-SEAMLDR.\n");
-	tdx_module_state = TDX_MODULE_LOADED;
+	set_tdx_module_state(TDX_MODULE_LOADED);
 
 out:
 	/*
@@ -801,7 +812,7 @@ out:
 			ret = vmxoff_err;
 	}
 	if (ret)
-		tdx_module_state = TDX_MODULE_ERROR;
+		set_tdx_module_state(TDX_MODULE_ERROR);
 	cpus_read_unlock();
 
 	if (ret && cpuhp_state != CPUHP_INVALID) {
@@ -1090,7 +1101,7 @@ static int __init tdx_late_init(void)
 
 	BUILD_BUG_ON(sizeof(struct tdmr_info) != 512);
 
-	if (tdx_module_state != TDX_MODULE_LOADED)
+	if (get_tdx_module_state() != TDX_MODULE_LOADED)
 		return -ENODEV;
 
 	pr_info("Initializing TDX module.\n");
@@ -1132,7 +1143,7 @@ static int __init tdx_late_init(void)
 		goto out;
 
 	pr_info("Successfully initialized TDX module\n");
-	tdx_module_state = TDX_MODULE_INITIALIZED;
+	set_tdx_module_state(TDX_MODULE_INITIALIZED);
 
 out:
 	vmxoff_err = seam_vmxoff_on_each_cpu();
@@ -1144,9 +1155,9 @@ out:
 out_err:
 	if (ret) {
 		pr_info("Failed to initialize TDX module %d\n", ret);
-		tdx_module_state = TDX_MODULE_ERROR;
+		set_tdx_module_state(TDX_MODULE_ERROR);
 	}
-	if (tdx_module_state == TDX_MODULE_INITIALIZED) {
+	if (get_tdx_module_state() == TDX_MODULE_INITIALIZED) {
 		int cpu;
 
 		setup_force_cpu_cap(X86_FEATURE_TDX);
