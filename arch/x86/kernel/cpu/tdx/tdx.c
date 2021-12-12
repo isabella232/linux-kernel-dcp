@@ -240,8 +240,8 @@ const struct tdsysinfo_struct *tdx_get_sysinfo(void)
 EXPORT_SYMBOL_GPL(tdx_get_sysinfo);	/* kvm_intel will use this. */
 
 /* CMR info array returned by TDH_SYS_INFO. */
-static struct cmr_info *tdx_cmrs __initdata;
-static int tdx_nr_cmrs __initdata;
+static struct cmr_info *tdx_cmrs;
+static int tdx_nr_cmrs;
 
 /* KeyID range reserved to TDX by BIOS */
 u32 tdx_keyids_start __read_mostly;
@@ -464,8 +464,8 @@ EXPORT_SYMBOL_GPL(tdx_seamcall_on_each_pkg);
  *
  * NOTE: kmalloc() returns size-aligned when size of power of 2.
  */
-static int __init tdx_sys_info_alloc(struct tdsysinfo_struct **tdsysinfo,
-				     struct cmr_info **cmrs)
+static int tdx_sys_info_alloc(struct tdsysinfo_struct **tdsysinfo,
+			      struct cmr_info **cmrs)
 {
 	/* tdh_sys_info() requires special alignment. */
 	BUILD_BUG_ON(sizeof(struct tdsysinfo_struct) != 1024);
@@ -712,7 +712,7 @@ static int tdx_init_system(void)
  * get info about system. i.e. info about TDX module and Convertible Memory
  * Regions(CMRs).
  */
-static int __init tdx_get_system_info(void)
+static int tdx_get_system_info(void)
 {
 	struct tdx_ex_ret ex_ret;
 	int err;
