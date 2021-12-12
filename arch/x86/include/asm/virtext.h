@@ -114,6 +114,14 @@ do {					\
 	WARN_ONCE(1, fmt);		\
 	pr_warn_ratelimited(fmt);	\
 } while (0)
+
+static inline void raw_vmcs_load(struct vmcs *vmcs)
+{
+	u64 phys_addr = __pa(vmcs);
+
+	vmx_asm1(vmptrld, "m"(phys_addr), virt_spurious_fault,
+		 vmptrld_error, vmcs, phys_addr);
+}
 #else
 static inline int cpu_vmx_get(void)
 {
@@ -134,6 +142,10 @@ static inline void vmptrld_err(struct vmcs *vmcs, u64 phys_addr)
 }
 
 #define vmx_insn_failed(fmt...) do {} while (0)
+
+static inline void raw_vmcs_load(struct vmcs *vmcs)
+{
+}
 #endif
 
 

@@ -232,12 +232,10 @@ static inline void vmcs_clear(struct vmcs *vmcs)
 
 static inline void vmcs_load(struct vmcs *vmcs)
 {
-	u64 phys_addr = __pa(vmcs);
-
 	if (static_branch_unlikely(&enable_evmcs))
-		return evmcs_load(phys_addr);
+		return evmcs_load(__pa(vmcs));
 
-	vmx_asm1_kvm(vmptrld, "m"(phys_addr), vmcs, phys_addr);
+	raw_vmcs_load(vmcs);
 }
 
 static inline void __invvpid(unsigned long ext, u16 vpid, gva_t gva)
