@@ -251,7 +251,7 @@ EXPORT_SYMBOL_GPL(tdx_nr_keyids);	/* kvm_intel will use this. */
 u32 tdx_seam_keyid __read_mostly;
 EXPORT_SYMBOL_GPL(tdx_seam_keyid);	/* kvm_intel will use this. */
 
-static void __init tdx_get_keyids(u32 *keyids_start, u32 *nr_keyids)
+static void tdx_get_keyids(u32 *keyids_start, u32 *nr_keyids)
 {
 	u32 nr_mktme_ids;
 
@@ -613,7 +613,7 @@ static void tdx_install_module_cpu(void *data)
 		atomic_set(&install_module->error, ret);
 }
 
-static int __init tdx_init_lp(void)
+static int tdx_init_lp(void)
 {
 	u32 keyids_start, nr_keyids;
 	struct tdx_ex_ret ex_ret;
@@ -642,7 +642,7 @@ static int __init tdx_init_lp(void)
 	return 0;
 }
 
-static void __init tdx_init_cpu(void *data)
+static void tdx_init_cpu(void *data)
 {
 	atomic_t *error = data;
 	int ret = tdx_init_lp();
@@ -654,7 +654,7 @@ static void __init tdx_init_cpu(void *data)
 /*
  * Invoke TDH.SYS.LP.INIT on all CPUs to perform processor-wide initialization.
  */
-static int __init tdx_init_cpus(void)
+static int tdx_init_cpus(void)
 {
 	atomic_t error;
 
@@ -666,12 +666,12 @@ static int __init tdx_init_cpus(void)
 }
 
 /*
- * tdx_init_system - early system wide initialization of TDX module.
+ * tdx_init_system - system wide initialization of TDX module.
  * @return: 0 on success, error code on failure.
  *
  * Does system wide initialization of TDX module.
  */
-static int __init tdx_init_system(void)
+static int tdx_init_system(void)
 {
 	struct tdx_ex_ret ex_ret;
 	int err;
