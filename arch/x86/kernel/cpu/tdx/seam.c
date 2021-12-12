@@ -89,7 +89,7 @@ void __init seam_init_vmxon_vmcs(struct vmcs *vmcs)
 	vmcs->hdr.revision_id = seam_vmxon_version_id;
 }
 
-static void __init seam_vmxon(void *data)
+static void seam_vmxon(void *data)
 {
 	atomic_t *error = data;
 	int r;
@@ -99,7 +99,7 @@ static void __init seam_vmxon(void *data)
 		atomic_set(error, r);
 }
 
-int __init seam_vmxon_on_each_cpu(void)
+int seam_vmxon_on_each_cpu(void)
 {
 	atomic_t error;
 
@@ -113,12 +113,12 @@ int __init seam_vmxon_on_each_cpu(void)
 	return atomic_read(&error);
 }
 
-static void __init seam_vmxoff(void *data)
+static void seam_vmxoff(void *data)
 {
 	cpu_vmx_put();
 }
 
-int __init seam_vmxoff_on_each_cpu(void)
+int seam_vmxoff_on_each_cpu(void)
 {
 	atomic_t error;
 
