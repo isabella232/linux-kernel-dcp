@@ -122,6 +122,8 @@ static inline void raw_vmcs_load(struct vmcs *vmcs)
 	vmx_asm1(vmptrld, "m"(phys_addr), virt_spurious_fault,
 		 vmptrld_error, vmcs, phys_addr);
 }
+
+int raw_vmcs_store(u64 *vmcs_pa);
 #else
 static inline int cpu_vmx_get(void)
 {
@@ -145,6 +147,11 @@ static inline void vmptrld_err(struct vmcs *vmcs, u64 phys_addr)
 
 static inline void raw_vmcs_load(struct vmcs *vmcs)
 {
+}
+
+static inline int raw_vmcs_store(u64 *vmcs_pa)
+{
+	return -EIO;
 }
 #endif
 
