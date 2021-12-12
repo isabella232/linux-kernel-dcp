@@ -1312,8 +1312,15 @@ out_err:
 	}
 	cpus_read_unlock();
 
-	kfree(tdmr_info);
-	kfree(tdx_cmrs);
+	/*
+	 * Don't free tdmr_info and tdx_cmrs. tdmr_info can be reused
+	 * to configure TDMRs for the new TDX module. tdx_cmrs can be
+	 * used to hold CMRs passed from TDX module.
+	 */
+	if (ret) {
+		kfree(tdmr_info);
+		kfree(tdx_cmrs);
+	}
 	cleanup_subtype_tdx_memory();
 	mutex_unlock(&tdx_mutex);
 
