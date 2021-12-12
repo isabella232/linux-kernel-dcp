@@ -971,9 +971,9 @@ out_free:
 arch_initcall(tdx_arch_init);
 
 /* Array of all TDMR info array. */
-static struct tdmr_info *tdmr_info __initdata; /* aligned to TDX_TDMR_INFO_ALIGNMENT. */
+static struct tdmr_info *tdmr_info; /* aligned to TDX_TDMR_INFO_ALIGNMENT. */
 /* Number of actual TDMRs */
-static int tdx_nr_tdmrs __initdata;
+static int tdx_nr_tdmrs;
 
 /* data structure for tdx_init_tdmrs() */
 struct tdx_tdmr_init_data {
@@ -998,7 +998,7 @@ struct tdx_tdmr_init_request {
  * Get an uninitialized TDMR, initialize it and loop until all TDMRs are
  * initialized.
  */
-static void __init __tdx_init_tdmrs(struct work_struct *work)
+static void __tdx_init_tdmrs(struct work_struct *work)
 {
 	struct tdx_tdmr_init_request *req = container_of(
 		work, struct tdx_tdmr_init_request, work);
@@ -1063,7 +1063,7 @@ out:
  * initializes Physical Address Metadata Table(PAMT) which is something similar
  * to Linux struct page.  Parallelize it to shorten boot time by work queue.
  */
-static int __init tdx_init_tdmrs(void)
+static int tdx_init_tdmrs(void)
 {
 	/*
 	 * One TDMR can be initialized only by one thread.  No point to have
@@ -1103,7 +1103,7 @@ static int __init tdx_init_tdmrs(void)
 	return 0;
 }
 
-static int __init do_tdh_sys_key_config(void *param)
+static int do_tdh_sys_key_config(void *param)
 {
 	u64 err;
 
@@ -1123,7 +1123,7 @@ static int __init do_tdh_sys_key_config(void *param)
  * __tdx_init_module - finial initialization of TDX module so that it can be
  *                     workable.
  */
-static int __init __tdx_init_module(void)
+static int __tdx_init_module(void)
 {
 	u64 *tdmr_addrs;
 	u64 err;
