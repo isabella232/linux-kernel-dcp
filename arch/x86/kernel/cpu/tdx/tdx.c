@@ -119,6 +119,9 @@ enum TDX_MODULE_STATE {
 /* TODO: export the state via sysfs. */
 static enum TDX_MODULE_STATE tdx_module_state;
 
+/* Protect tdx_module_state */
+static DEFINE_MUTEX(tdx_mutex);
+
 bool is_debug_seamcall_available __read_mostly = true;
 
 bool is_nonarch_seamcall_available __read_mostly = true;
@@ -189,6 +192,13 @@ int register_tdx_notifier(struct notifier_block *nb)
 {
 	int ret;
 
+	/*
+	 * If tdx_module_state gets changed to TDX_MODULE_INITIALIZED after
+	 * blocking_notifier_chain_register() but before checking tdx module
+	 * state below, a duplicate event will be sent to the notifier. Hold
+	 * the mutex to prevent any change to tdx_module_state.
+	 */
+	mutex_lock(&tdx_mutex);
 	ret = blocking_notifier_chain_register(&tdx_notify_list, nb);
 	/*
 	 * Registering a notifier may happen after TDX module is ready to
@@ -196,6 +206,7 @@ int register_tdx_notifier(struct notifier_block *nb)
 	 */
 	if (!ret && (get_tdx_module_state() == TDX_MODULE_INITIALIZED))
 		nb->notifier_call(nb, TDX_MODULE_LOAD_DONE, NULL);
+	mutex_unlock(&tdx_mutex);
 
 	return ret;
 }
@@ -859,6 +870,8 @@ static int __init tdx_arch_init(void)
 		goto out;
 	}
 
+	mutex_lock(&tdx_mutex);
+
 	/* SEAMCALL requires to enable VMXON on CPUs. */
 	ret = seam_vmxon_on_each_cpu();
 	if (ret)
@@ -887,6 +900,7 @@ out:
 	}
 	if (ret)
 		set_tdx_module_state(TDX_MODULE_ERROR);
+	mutex_unlock(&tdx_mutex);
 	cpus_read_unlock();
 
 	if (ret && cpuhp_state != CPUHP_INVALID) {
@@ -1175,8 +1189,11 @@ static int __init tdx_late_init(void)
 
 	BUILD_BUG_ON(sizeof(struct tdmr_info) != 512);
 
-	if (get_tdx_module_state() != TDX_MODULE_LOADED)
+	mutex_lock(&tdx_mutex);
+	if (get_tdx_module_state() != TDX_MODULE_LOADED) {
+		mutex_unlock(&tdx_mutex);
 		return -ENODEV;
+	}
 
 	pr_info("Initializing TDX module.\n");
 
@@ -1245,6 +1262,7 @@ out_err:
 	kfree(tdmr_info);
 	kfree(tdx_cmrs);
 	cleanup_subtype_tdx_memory();
+	mutex_unlock(&tdx_mutex);
 
 	return ret;
 }
