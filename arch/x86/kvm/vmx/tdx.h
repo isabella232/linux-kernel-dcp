@@ -124,6 +124,7 @@ struct vcpu_tdx {
 	bool guest_pmi_exit;
 	u64 msr_host_kernel_gs_base;
 	u64 guest_perf_global_ctrl;
+	bool load_guest_dr6;
 };
 
 struct tdx_capabilities {
