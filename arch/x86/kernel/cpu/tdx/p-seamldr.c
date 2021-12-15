@@ -23,20 +23,12 @@
 #include "seam.h"
 #include "tdx.h"
 
-static char *np_seamldr_name __initdata = "intel-seam/np-seamldr.acm";
-static size_t np_seamldr_len __initdata;
+static char np_seamldr_name[128] __initdata = "intel-seam/np-seamldr.acm";
 
 static int __init seamldr_param(char *str)
 {
-	np_seamldr_len = strlen(str) + 1;
-
-	np_seamldr_name = memblock_alloc(np_seamldr_len, 0);
-	if (!np_seamldr_name) {
-		np_seamldr_len = 0;
-		return -ENOMEM;
-	}
-
-	strscpy(np_seamldr_name, str, np_seamldr_len);
+	pr_err("early_param phase");
+	strscpy(np_seamldr_name, str, sizeof(np_seamldr_name));
 	return 0;
 }
 early_param("np_seamldr", seamldr_param);
@@ -490,8 +482,6 @@ int __init load_p_seamldr(void)
 
 	pr_info("Loading TDX P-SEAMLDR %s.\n", np_seamldr_name);
 	err = p_seamldr_load(&np_seamldr);
-	if (np_seamldr_len)
-		memblock_free_late(__pa(np_seamldr_name), np_seamldr_len);
 	if (err) {
 		pr_err("failed to load TDX P-SEAMLDR\n");
 		return err;

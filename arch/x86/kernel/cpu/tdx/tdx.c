@@ -69,35 +69,19 @@ static void pr_seamcall_error(u64 op, const char *op_str,
 		pr_seamcall_ex_ret_info(op, err, ex);
 }
 
-static char *tdx_module_name __initdata = "intel-seam/libtdx.so";
-static size_t tdx_module_len __initdata;
-static char *tdx_sigstruct_name __initdata = "intel-seam/libtdx.so.sigstruct";
-static size_t tdx_sigstruct_len;
+static char tdx_module_name[128] __initdata = "intel-seam/libtdx.so";
+static char tdx_sigstruct_name[128] __initdata = "intel-seam/libtdx.so.sigstruct";
 
 static int __init setup_tdx_module(char *str)
 {
-	tdx_module_len = strlen(str) + 1;
-	tdx_module_name = memblock_alloc(tdx_module_len, 0);
-	if (!tdx_module_name) {
-		tdx_module_len = 0;
-		return -ENOMEM;
-	}
-
-	strscpy(tdx_module_name, str, tdx_module_len);
+	strscpy(tdx_module_name, str, sizeof(tdx_module_name));
 	return 1;
 }
 __setup("tdx_module=", setup_tdx_module);
 
 static int __init setup_tdx_sigstruct(char *str)
 {
-	tdx_sigstruct_len = strlen(str) + 1;
-	tdx_sigstruct_name = memblock_alloc(tdx_sigstruct_len, 0);
-	if (!tdx_sigstruct_name) {
-		tdx_sigstruct_len = 0;
-		return -ENOMEM;
-	}
-
-	strscpy(tdx_sigstruct_name, str, tdx_sigstruct_len);
+	strscpy(tdx_sigstruct_name, str, sizeof(tdx_sigstruct_name));
 	return 1;
 }
 __setup("tdx_sigstruct=", setup_tdx_sigstruct);
@@ -766,6 +750,8 @@ static int __init tdx_arch_init(void)
 	ret = -EINVAL;
 	if (!seam_get_firmware(&module, tdx_module_name) ||
 	    !seam_get_firmware(&sigstruct, tdx_sigstruct_name)) {
+		pr_err("no TDX module or sigstruct found %s/%s\n",
+				tdx_module_name, tdx_sigstruct_name);
 		ret = -ENOENT;
 		goto out_free;
 	}
@@ -829,10 +815,6 @@ out:
 		cpuhp_state = CPUHP_INVALID;
 	}
 out_free:
-	if (tdx_module_len)
-		memblock_free_late(__pa(tdx_module_name), tdx_module_len);
-	if (tdx_sigstruct_len)
-		memblock_free_late(__pa(tdx_sigstruct_name), tdx_sigstruct_len);
 	return ret;
 }
 /*
