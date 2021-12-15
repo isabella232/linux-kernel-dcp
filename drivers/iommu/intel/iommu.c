@@ -1021,6 +1021,11 @@ static struct dma_pte *pfn_to_dma_pte(struct dmar_domain *domain,
 				      unsigned long pfn, int *target_level)
 {
 	struct dma_pte *parent, *pte;
+	/*
+	 * level == 5: 5 level page table;
+	 * level == 4: 4 level page table;
+	 * level == 3: 3 level page table;
+	 */
 	int level = agaw_to_level(domain->agaw);
 	int offset;
 
@@ -6017,6 +6022,158 @@ static int intel_iommu_clear_dirty_log(struct iommu_domain *domain,
 	return ret;
 }
 
+static int
+__domain_split_block(struct dmar_domain *domain, struct intel_iommu *iommu,
+		     unsigned long iova, size_t size)
+{
+	struct dma_pte *pte = NULL;
+	unsigned long nr_pages = size >> VTD_PAGE_SHIFT;
+	unsigned long lvl_pages = 0, child_lvl_pages = 0;
+	unsigned long iov_pfn = iova >> VTD_PAGE_SHIFT;
+	unsigned int largepage_lvl = 0;
+	unsigned int create_pages = 0;
+	int i;
+	unsigned long page_pfn;
+	unsigned long phys_pfn;
+	phys_addr_t pteval;
+	u64 attr;
+	bool splitted = false;
+
+	spin_lock(&iommu->lock);
+	while (nr_pages > 0) {
+		/*
+		 * largepage_lvl == 1: 4KB page;
+		 * largepage_lvl == 2: 2MB page;
+		 * largepage_lvl == 3: 1GB page;
+		 */
+		largepage_lvl = hardware_largepage_caps(domain, iov_pfn,
+							0, nr_pages);
+
+		lvl_pages = lvl_to_nr_pages(largepage_lvl);
+		BUG_ON(nr_pages < lvl_pages);
+
+		if (largepage_lvl <= 1) {
+			/* It is not large page*/
+			pr_debug("The 0x%lx pte is not super page. largepage_lvl=%d\n",
+				iova, largepage_lvl);
+			goto skip;
+		}
+
+		/* Get the current level pte, e.g. if largepage_lvl == 1,
+		 * we get "SL-PDE: 4KB page" item which is assigned to pte.
+		 */
+		pte = pfn_to_dma_pte(domain, iov_pfn, &largepage_lvl);
+		if (!pte || !dma_pte_present(pte))
+			return -EINVAL;
+
+		if (!(pte->val & DMA_PTE_WRITE)) {
+			pr_warn("The 0x%lx pte is READ ONLY.\n", iova);
+			goto skip;
+		}
+
+		/* If the page is super, split it. */
+		if (!dma_pte_superpage(pte)) {
+			pr_warn("The 0x%lx pte is not super page.\n", iova);
+			goto skip;
+		}
+
+		phys_pfn = dma_pte_addr(pte);
+		page_pfn = iov_pfn;
+		attr = pte->val & VTD_ATTR_MASK;
+		pteval = ((phys_addr_t)phys_pfn) | attr;
+		pteval &= ~(uint64_t)DMA_PTE_LARGE_PAGE;
+		if (largepage_lvl == 2) {
+			/* 2MB: Create 512 4KB items, i.e. split 2MB to 512 4KB pages */
+			create_pages = 512;
+		} else {
+			/* 1GB: Create 512*512 4KB items */
+			create_pages = 512 * 512;
+		}
+
+		/* Change big page level to 4KB level */
+		largepage_lvl = 1;
+
+		/* Establish page table and get the 4KB page item */
+		pte = NULL;
+		for (i = 0; i < create_pages; i++) {
+			if (!pte) {
+				pte = pfn_to_dma_pte(domain, page_pfn, &largepage_lvl);
+				if (!pte)
+					return -ENOMEM;
+			}
+			cmpxchg64_local(&pte->val, 0ULL, pteval);
+			/* Always 1 here */
+			child_lvl_pages = lvl_to_nr_pages(largepage_lvl);
+			page_pfn += child_lvl_pages;
+			phys_pfn += child_lvl_pages;
+			pteval += child_lvl_pages * VTD_PAGE_SIZE;
+			pte++;
+			pr_debug("%s: Big page splitted to 4KB pages, pteval=0x%llx, pte=0x%llx\n",
+				__func__, pteval, (uint64_t)pte);
+			if (first_pte_in_page(pte))
+				pte = NULL;
+		}
+
+		splitted = true;
+skip:
+		nr_pages -= lvl_pages;
+		iov_pfn += lvl_pages;
+		iova += lvl_pages * VTD_PAGE_SIZE;
+	}
+	spin_unlock(&iommu->lock);
+
+	if (splitted)
+		return 1;
+
+	return 0;
+}
+
+static int intel_iommu_split_block(struct iommu_domain *domain,
+				   unsigned long iova, size_t size)
+{
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	struct device_domain_info *info;
+	struct subdev_domain_info *sinfo;
+	int ret = 0;
+	unsigned long flags;
+
+	if (!domain_use_first_level(dmar_domain) && !slad_support()) {
+		pr_err("Don't support SLAD\n");
+		return -EINVAL;
+	}
+
+	/* Return if size is less than 2MB */
+	if (size < 0x200000)
+		return 0;
+
+	spin_lock_irqsave(&device_domain_lock, flags);
+	list_for_each_entry(info, &dmar_domain->devices, link) {
+		pr_debug("%s: split for %02x:%02x.%d, iova=0x%lx, size=0x%zx\n",
+			__func__, info->bus, PCI_SLOT(info->devfn), PCI_FUNC(info->devfn),
+			iova, size);
+
+		ret = __domain_split_block(dmar_domain, info->iommu, iova, size);
+		if (ret && ret != 1)
+			goto out;
+	}
+
+	list_for_each_entry(sinfo, &dmar_domain->subdevices, link_domain) {
+		info = get_domain_info(sinfo->pdev);
+		pr_debug("%s: split for subdev %02x:%02x.%d, iova=0x%lx, size=0x%zx\n",
+			__func__, info->bus, PCI_SLOT(info->devfn), PCI_FUNC(info->devfn),
+			iova, size);
+
+		ret = __domain_split_block(dmar_domain, info->iommu, iova, size);
+		if (ret && ret != 1)
+			break;
+	}
+
+out:
+	spin_unlock_irqrestore(&device_domain_lock, flags);
+
+	return ret;
+}
+
 const struct iommu_ops intel_iommu_ops = {
 	.capable		= intel_iommu_capable,
 	.domain_alloc		= intel_iommu_domain_alloc,
@@ -6056,6 +6213,7 @@ const struct iommu_ops intel_iommu_ops = {
 	.sva_get_pasid		= intel_svm_get_pasid,
 	.page_response		= intel_svm_page_response,
 #endif
+	.split_block		= intel_iommu_split_block,
 	.set_hwdbm		= intel_iommu_set_hwdbm,
 	.sync_dirty_log		= intel_iommu_sync_dirty_log,
 	.clear_dirty_log	= intel_iommu_clear_dirty_log,
