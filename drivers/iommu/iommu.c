@@ -3094,6 +3094,46 @@ int iommu_domain_set_attr(struct iommu_domain *domain,
 }
 EXPORT_SYMBOL_GPL(iommu_domain_set_attr);
 
+static int iommu_split_block(struct iommu_domain *domain, unsigned long iova,
+			     size_t size)
+{
+	const struct iommu_ops *ops = domain->ops;
+	unsigned int min_pagesz;
+	size_t pgsize;
+	int ret = 0;
+
+	if (unlikely(!ops))
+		return -ENODEV;
+
+	if (unlikely(!ops->split_block)) {
+		pr_warn("don't support split_block\n");
+		return ret;
+	}
+
+	min_pagesz = 1 << __ffs(domain->pgsize_bitmap);
+	if (!IS_ALIGNED(iova | size, min_pagesz)) {
+		pr_err("unaligned: iova 0x%lx size 0x%zx min_pagesz 0x%x\n",
+		       iova, size, min_pagesz);
+		return -EINVAL;
+	}
+
+	while (size) {
+		pgsize = iommu_pgsize(domain, iova, size);
+
+		ret = ops->split_block(domain, iova, pgsize);
+		if (ret)
+			break;
+
+		pr_debug("split handled: iova 0x%lx size 0x%zx\n", iova, pgsize);
+
+		iova += pgsize;
+		size -= pgsize;
+	}
+	iommu_flush_iotlb_all(domain);
+
+	return ret;
+}
+
 int iommu_domain_set_hwdbm(struct iommu_domain *domain, bool enable,
 			   unsigned long iova, size_t size)
 {
@@ -3106,6 +3146,11 @@ int iommu_domain_set_hwdbm(struct iommu_domain *domain, bool enable,
 	}
 
 	ret = ops->set_hwdbm(domain, enable, iova, size);
+	if (ret)
+		return ret;
+
+	if (enable)
+		ret = iommu_split_block(domain, iova, size);
 
 	return ret;
 }
