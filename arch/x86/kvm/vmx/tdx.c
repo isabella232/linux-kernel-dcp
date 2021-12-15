@@ -2455,6 +2455,12 @@ static void tdx_update_exception_bitmap(struct kvm_vcpu *vcpu)
 		verify_eb = td_vmcs_read32(tdx, EXCEPTION_BITMAP);
 		KVM_BUG_ON(verify_eb != new_eb, vcpu->kvm);
 	}
+
+	/*
+	 * We can only get correct guest DR6 when #DB is intercepted,
+	 * so set the the load_guest_dr6 falg to true here.
+	 */
+	tdx->load_guest_dr6 = true;
 }
 
 static void tdx_set_dr7(struct kvm_vcpu *vcpu, unsigned long val)
@@ -2505,7 +2511,9 @@ static void tdx_load_guest_debug_regs(struct kvm_vcpu *vcpu)
 	td_dr_write64(tdx_vcpu, 1, vcpu->arch.eff_db[1]);
 	td_dr_write64(tdx_vcpu, 2, vcpu->arch.eff_db[2]);
 	td_dr_write64(tdx_vcpu, 3, vcpu->arch.eff_db[3]);
-	td_dr_write64(tdx_vcpu, 6, vcpu->arch.dr6);
+
+	if (tdx_vcpu->load_guest_dr6)
+		td_dr_write64(tdx_vcpu, 6, vcpu->arch.dr6);
 
 	/*
 	 * Optimization:
