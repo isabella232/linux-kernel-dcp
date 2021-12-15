@@ -52,11 +52,29 @@ static void ims_array_write_msi_msg(struct irq_data *data, struct msi_msg *msg)
 	iowrite32_and_flush(msg->data, &slot->data);
 }
 
+static int ims_array_set_auxdata(struct irq_data *data, unsigned int which,
+				 u64 auxval)
+{
+	struct msi_desc *desc = irq_data_get_msi_desc(data);
+	struct ims_slot __iomem *slot = desc->device_msi.priv_iomem;
+	u32 val, __iomem *ctrl = &slot->ctrl;
+
+	if (which != IMS_AUXDATA_CONTROL_WORD)
+		return -EINVAL;
+	if (auxval & ~(u64)IMS_CONTROL_WORD_AUXMASK)
+		return -EINVAL;
+
+	val = ioread32(ctrl) & IMS_CONTROL_WORD_IRQMASK;
+	iowrite32_and_flush(val | (u32) auxval, ctrl);
+	return 0;
+}
+
 static const struct irq_chip ims_array_msi_controller = {
 	.name			= "IMS",
 	.irq_mask		= ims_array_mask_irq,
 	.irq_unmask		= ims_array_unmask_irq,
 	.irq_write_msi_msg	= ims_array_write_msi_msg,
+	.irq_set_auxdata	= ims_array_set_auxdata,
 	.irq_retrigger		= irq_chip_retrigger_hierarchy,
 	.flags			= IRQCHIP_SKIP_SET_WAKE,
 };
