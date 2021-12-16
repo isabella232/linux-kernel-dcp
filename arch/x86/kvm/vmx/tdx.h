@@ -152,7 +152,7 @@ static inline bool is_td_vcpu(struct kvm_vcpu *vcpu)
 
 static inline bool is_debug_td(struct kvm_vcpu *vcpu)
 {
-	return !vcpu->arch.guest_state_protected;
+	return !vcpu->arch.guest_state_protected && is_td_vcpu(vcpu);
 }
 
 static inline struct kvm_tdx *to_kvm_tdx(struct kvm *kvm)
