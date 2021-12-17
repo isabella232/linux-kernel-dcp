@@ -164,8 +164,6 @@ static inline bool encls_failed(int ret)
 
 static inline int __ecreate(struct sgx_pageinfo *pginfo, void *secs)
 {
-	lockdep_assert_held(&sgx_lock_epc_srcu);
-
 	return __encls_2(ECREATE, pginfo, secs);
 }
 
@@ -176,8 +174,6 @@ static inline int __eextend(void *secs, void *addr)
 
 static inline int __eadd(struct sgx_pageinfo *pginfo, void *addr)
 {
-	lockdep_assert_held(&sgx_lock_epc_srcu);
-
 	return __encls_2(EADD, pginfo, addr);
 }
 
@@ -209,8 +205,6 @@ static inline int __etrack(void *addr)
 static inline int __eldu(struct sgx_pageinfo *pginfo, void *addr,
 			 void *va)
 {
-	lockdep_assert_held(&sgx_lock_epc_srcu);
-
 	return __encls_ret_3(ELDU, pginfo, addr, va);
 }
 
@@ -222,8 +216,6 @@ static inline int __eblock(void *addr)
 static inline int __epa(void *addr)
 {
 	unsigned long rbx = SGX_PAGE_TYPE_VA;
-
-	lockdep_assert_held(&sgx_lock_epc_srcu);
 
 	return __encls_2(EPA, rbx, addr);
 }

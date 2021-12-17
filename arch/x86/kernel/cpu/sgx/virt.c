@@ -76,20 +76,9 @@ static vm_fault_t sgx_vepc_fault(struct vm_fault *vmf)
 	struct vm_area_struct *vma = vmf->vma;
 	struct sgx_vepc *vepc = vma->vm_private_data;
 	int ret;
-	int srcu_idx;
 
 	mutex_lock(&vepc->lock);
-	srcu_idx = srcu_read_lock(&sgx_lock_epc_srcu);
-
-	if (sgx_epc_is_locked()) {
-		ret = -EBUSY;
-		goto out_unlock;
-	}
-
 	ret = __sgx_vepc_fault(vepc, vma, vmf->address);
-
-out_unlock:
-	srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
 	mutex_unlock(&vepc->lock);
 
 	if (!ret)
@@ -343,7 +332,6 @@ int sgx_virt_ecreate(struct sgx_pageinfo *pageinfo, void __user *secs,
 		     int *trapnr)
 {
 	int ret;
-	int srcu_idx;
 
 	/*
 	 * @secs is an untrusted, userspace-provided address.  It comes from
@@ -359,12 +347,6 @@ int sgx_virt_ecreate(struct sgx_pageinfo *pageinfo, void __user *secs,
 	if (WARN_ON_ONCE(!access_ok(secs, PAGE_SIZE)))
 		return -EINVAL;
 
-	srcu_idx = srcu_read_lock(&sgx_lock_epc_srcu);
-	if (sgx_epc_is_locked()) {
-		srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
-		return -EBUSY;
-	}
-
 	__uaccess_begin();
 	ret = __ecreate(pageinfo, (void *)secs);
 	__uaccess_end();
@@ -373,8 +355,6 @@ int sgx_virt_ecreate(struct sgx_pageinfo *pageinfo, void __user *secs,
 		*trapnr = ENCLS_TRAPNR(ret);
 		return -EFAULT;
 	}
-
-	srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
 
 	/* ECREATE doesn't return an error code, it faults or succeeds. */
 	WARN_ON_ONCE(ret);

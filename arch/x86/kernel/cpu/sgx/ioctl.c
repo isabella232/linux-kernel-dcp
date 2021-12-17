@@ -30,7 +30,6 @@ static struct sgx_va_page *sgx_encl_grow(struct sgx_encl *encl)
 		if (!va_page)
 			return ERR_PTR(-ENOMEM);
 
-		INIT_LIST_HEAD(&va_page->list);
 		va_page->epc_page = sgx_alloc_va_page();
 		if (IS_ERR(va_page->epc_page)) {
 			err = ERR_CAST(va_page->epc_page);
@@ -50,8 +49,7 @@ static void sgx_encl_shrink(struct sgx_encl *encl, struct sgx_va_page *va_page)
 
 	if (va_page) {
 		sgx_encl_free_epc_page(va_page->epc_page);
-		if (!list_empty(&va_page->list))
-			list_del(&va_page->list);
+		list_del(&va_page->list);
 		kfree(va_page);
 	}
 }
@@ -65,7 +63,6 @@ static int sgx_encl_create(struct sgx_encl *encl, struct sgx_secs *secs)
 	unsigned long encl_size;
 	struct file *backing;
 	long ret;
-	int srcu_idx;
 
 	va_page = sgx_encl_grow(encl);
 	if (IS_ERR(va_page))
@@ -85,12 +82,6 @@ static int sgx_encl_create(struct sgx_encl *encl, struct sgx_secs *secs)
 	}
 
 	encl->backing = backing;
-
-	srcu_idx = srcu_read_lock(&sgx_lock_epc_srcu);
-	if (sgx_epc_is_locked()) {
-		ret = -EBUSY;
-		goto err_out_backing;
-	}
 
 	secs_epc = sgx_alloc_epc_page(&encl->secs, true);
 	if (IS_ERR(secs_epc)) {
@@ -124,8 +115,6 @@ static int sgx_encl_create(struct sgx_encl *encl, struct sgx_secs *secs)
 	/* Set only after completion, as encl->lock has not been taken. */
 	set_bit(SGX_ENCL_CREATED, &encl->flags);
 
-	srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
-
 	return 0;
 
 err_out:
@@ -133,7 +122,6 @@ err_out:
 	encl->secs.epc_page = NULL;
 
 err_out_backing:
-	srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
 	fput(encl->backing);
 	encl->backing = NULL;
 
@@ -307,27 +295,20 @@ static int sgx_encl_add_page(struct sgx_encl *encl, unsigned long src,
 	struct sgx_epc_page *epc_page;
 	struct sgx_va_page *va_page;
 	int ret;
-	int srcu_idx;
-
-	va_page = sgx_encl_grow(encl);
-	if (IS_ERR(va_page))
-		return PTR_ERR(va_page);
 
 	encl_page = sgx_encl_page_alloc(encl, offset, secinfo->flags);
-	if (IS_ERR(encl_page)) {
-		ret = PTR_ERR(encl_page);
-		goto err_out_shrink;
-	}
-
-	srcu_idx = srcu_read_lock(&sgx_lock_epc_srcu);
-	if (sgx_epc_is_locked()) {
-		ret = -EBUSY;
-		goto err_out_free;
-	}
+	if (IS_ERR(encl_page))
+		return PTR_ERR(encl_page);
 
 	epc_page = sgx_alloc_epc_page(encl_page, true);
 	if (IS_ERR(epc_page)) {
-		ret = PTR_ERR(epc_page);
+		kfree(encl_page);
+		return PTR_ERR(epc_page);
+	}
+
+	va_page = sgx_encl_grow(encl);
+	if (IS_ERR(va_page)) {
+		ret = PTR_ERR(va_page);
 		goto err_out_free;
 	}
 
@@ -372,26 +353,21 @@ static int sgx_encl_add_page(struct sgx_encl *encl, unsigned long src,
 	}
 
 	sgx_mark_page_reclaimable(encl_page->epc_page);
-
 	mutex_unlock(&encl->lock);
 	mmap_read_unlock(current->mm);
-	srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
 	return ret;
 
 err_out:
 	xa_erase(&encl->page_array, PFN_DOWN(encl_page->desc));
 
 err_out_unlock:
+	sgx_encl_shrink(encl, va_page);
 	mutex_unlock(&encl->lock);
 	mmap_read_unlock(current->mm);
-	sgx_encl_free_epc_page(epc_page);
 
 err_out_free:
-	srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
+	sgx_encl_free_epc_page(epc_page);
 	kfree(encl_page);
-
-err_out_shrink:
-	sgx_encl_shrink(encl, va_page);
 
 	return ret;
 }

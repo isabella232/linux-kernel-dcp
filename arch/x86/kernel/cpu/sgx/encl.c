@@ -70,24 +70,16 @@ static struct sgx_epc_page *sgx_encl_eldu(struct sgx_encl_page *encl_page,
 	unsigned long va_offset = encl_page->desc & SGX_ENCL_PAGE_VA_OFFSET_MASK;
 	struct sgx_encl *encl = encl_page->encl;
 	struct sgx_epc_page *epc_page;
-	int srcu_idx;
 	int ret;
-
-	srcu_idx = srcu_read_lock(&sgx_lock_epc_srcu);
-	if (sgx_epc_is_locked()) {
-		epc_page = ERR_PTR(-EBUSY);
-		goto out;
-	}
 
 	epc_page = sgx_alloc_epc_page(encl_page, false);
 	if (IS_ERR(epc_page))
-		goto out;
+		return epc_page;
 
 	ret = __sgx_encl_eldu(encl_page, epc_page, secs_page);
 	if (ret) {
 		sgx_encl_free_epc_page(epc_page);
-		epc_page = ERR_PTR(ret);
-		goto out;
+		return ERR_PTR(ret);
 	}
 
 	sgx_free_va_slot(encl_page->va_page, va_offset);
@@ -95,8 +87,6 @@ static struct sgx_epc_page *sgx_encl_eldu(struct sgx_encl_page *encl_page,
 	encl_page->desc &= ~SGX_ENCL_PAGE_VA_OFFSET_MASK;
 	encl_page->epc_page = epc_page;
 
-out:
-	srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
 	return epc_page;
 }
 
@@ -687,29 +677,19 @@ int sgx_encl_test_and_clear_young(struct mm_struct *mm,
 struct sgx_epc_page *sgx_alloc_va_page(void)
 {
 	struct sgx_epc_page *epc_page;
-	int srcu_idx;
 	int ret;
-
-	srcu_idx = srcu_read_lock(&sgx_lock_epc_srcu);
-	if (sgx_epc_is_locked()) {
-		epc_page = ERR_PTR(-EBUSY);
-		goto out;
-	}
 
 	epc_page = sgx_alloc_epc_page(NULL, true);
 	if (IS_ERR(epc_page))
-		goto out;
+		return ERR_CAST(epc_page);
 
 	ret = __epa(sgx_get_epc_virt_addr(epc_page));
 	if (ret) {
 		WARN_ONCE(1, "EPA returned %d (0x%x)", ret, ret);
 		sgx_encl_free_epc_page(epc_page);
-		epc_page = ERR_PTR(-EFAULT);
-		goto out;
+		return ERR_PTR(-EFAULT);
 	}
 
-out:
-	srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
 	return epc_page;
 }
 
