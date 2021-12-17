@@ -20,17 +20,6 @@ struct sgx_epc_section sgx_epc_sections[SGX_MAX_EPC_SECTIONS];
 static int sgx_nr_epc_sections;
 static struct task_struct *ksgxd_tsk;
 static DECLARE_WAIT_QUEUE_HEAD(ksgxd_waitq);
-/*
- * The flags prevents new from using SGX for
- * things like EADD.
- */
-static bool __rcu sgx_epc_locked;
-/*
- * SRCU ensures that old users that might not
- * have noticed the flag have gone away before
- * proceeding with an SVN update.
- */
-DEFINE_SRCU(sgx_lock_epc_srcu);
 
 /*
  * These variables are part of the state of the reclaimer, and must be accessed
@@ -852,20 +841,3 @@ err_page_cache:
 }
 
 device_initcall(sgx_init);
-
-void sgx_lock_epc(void)
-{
-	sgx_epc_locked = true;
-	synchronize_srcu(&sgx_lock_epc_srcu);
-}
-
-void sgx_unlock_epc(void)
-{
-	sgx_epc_locked = false;
-	synchronize_srcu(&sgx_lock_epc_srcu);
-}
-
-bool sgx_epc_is_locked(void)
-{
-	return sgx_epc_locked;
-}

@@ -95,7 +95,4 @@ static inline int __init sgx_vepc_init(void)
 
 void sgx_update_lepubkeyhash(u64 *lepubkeyhash);
 
-extern struct srcu_struct sgx_lock_epc_srcu;
-bool sgx_epc_is_locked(void);
-
 #endif /* _X86_SGX_H */
