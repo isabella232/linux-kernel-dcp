@@ -365,7 +365,7 @@ static inline bool encls_leaf_enabled_in_guest(struct kvm_vcpu *vcpu, u32 leaf)
 	return false;
 }
 
-inline bool sgx_enabled_in_guest_bios(struct kvm_vcpu *vcpu)
+static inline bool sgx_enabled_in_guest_bios(struct kvm_vcpu *vcpu)
 {
 	const u64 bits = FEAT_CTL_SGX_ENABLED | FEAT_CTL_LOCKED;
 
@@ -499,58 +499,4 @@ void vmx_write_encls_bitmap(struct kvm_vcpu *vcpu, struct vmcs12 *vmcs12)
 			bitmap |= vmcs12->encls_exiting_bitmap;
 	}
 	vmcs_write64(ENCLS_EXITING_BITMAP, bitmap);
-}
-
-static inline struct kvm *sgx_notifier_to_kvm(struct sgx_kvm_notifier *notifier)
-{
-	struct kvm_arch *arch = container_of(notifier, struct kvm_arch, sgx_notifier);
-
-	return container_of(arch, struct kvm, arch);
-}
-
-static void kvm_sgx_notifier_halt_guest(struct sgx_kvm_notifier *notifier)
-{
-	struct kvm *kvm = sgx_notifier_to_kvm(notifier);
-	struct kvm_vcpu *vcpu;
-	int i;
-
-	kvm_for_each_vcpu(i, vcpu, kvm) {
-		vcpu->arch.pause = true;
-		kvm_make_request(KVM_REQ_SLEEP, vcpu);
-		kvm_vcpu_kick(vcpu);
-	}
-}
-
-static void kvm_sgx_notifier_resume_guest(struct sgx_kvm_notifier *notifier)
-{
-	struct kvm *kvm = sgx_notifier_to_kvm(notifier);
-	struct kvm_vcpu *vcpu;
-	int i;
-
-	kvm_for_each_vcpu(i, vcpu, kvm) {
-		kvm_set_guest_paused(vcpu);
-		vcpu->arch.pause = false;
-		rcuwait_wake_up(kvm_arch_vcpu_get_wait(vcpu));
-	}
-}
-
-static const struct sgx_kvm_notifier_ops kvm_sgx_notifier_ops = {
-	.halt = kvm_sgx_notifier_halt_guest,
-	.resume = kvm_sgx_notifier_resume_guest,
-};
-
-void kvm_init_sgx_notifier(struct kvm_vcpu *vcpu)
-{
-	struct kvm *kvm = vcpu->kvm;
-
-	if (!guest_cpuid_has(vcpu, X86_FEATURE_SGX) ||
-	    !sgx_enabled_in_guest_bios(vcpu))
-		return;
-
-	mutex_lock(&kvm->arch.sgx_notifier_lock);
-	if (!kvm->arch.sgx_notifier.ops) {
-		kvm->arch.sgx_notifier.ops = &kvm_sgx_notifier_ops;
-		sgx_kvm_notifier_register(&kvm->arch.sgx_notifier);
-	}
-	mutex_unlock(&kvm->arch.sgx_notifier_lock);
 }
