@@ -1115,22 +1115,9 @@ static int sgx_zap_section_pages(struct sgx_epc_section *section,
 			ret = sgx_zap_encl_page(section, epc_page, secs_pages_list);
 			if (ret)
 				return ret;
-			continue;
 		}
-
-		/*
-		 * Unuse EPC pages initialized for KVM guest.
-		 */
-		ret = __eremove(sgx_get_epc_virt_addr(epc_page));
-
-		if (ret == SGX_CHILD_PRESENT) {
-			list_add_tail(&epc_page->list, secs_pages_list);
-			ret = 0;
-		} else if (ret)
-			goto out;
 	}
 
-out:
 	return ret;
 }
 
@@ -1184,16 +1171,6 @@ int sgx_zap_pages(void)
 	 * EREMOVE them again.
 	 */
 	list_for_each_entry_safe(epc_page, tmp, &secs_pages_list, list) {
-		if (epc_page->flags & SGX_EPC_PAGE_GUEST) {
-			list_del(&epc_page->list);
-			ret = __eremove(sgx_get_epc_virt_addr(epc_page));
-			if (WARN_ON_ONCE(ret)) {
-				ret = -EIO;
-				goto out;
-			}
-			continue;
-		}
-
 		section = &sgx_epc_sections[epc_page->section];
 		ret = sgx_zap_encl_page(section, epc_page, NULL);
 		if (ret)
