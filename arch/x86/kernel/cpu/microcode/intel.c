@@ -1011,11 +1011,9 @@ int update_cpusvn_intel(void)
 	int ret;
 
 	sgx_lock_epc();
-	sgx_kvm_notifier_halt();
 	ret = sgx_zap_pages();
 	if (!ret)
 		ret = sgx_updatesvn();
-	sgx_kvm_notifier_resume();
 	sgx_unlock_epc();
 
 	if (ret == SGX_NO_UPDATE)
