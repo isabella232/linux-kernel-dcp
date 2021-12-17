@@ -12,6 +12,22 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v2.1
+----------------
+27. AMX fixes (Chang Seok Bae):
+0001-signal-Skip-the-altstack-update-when-not-needed.patch
+0001-x86-fpu-Optimize-out-sigframe-xfeatures-when-in-init.patch
+0001-x86-fpu-signal-Initialize-sw_bytes-in-save_xstate_ep.patch
+
+26. TDX fixes (Chao Gao):
+https://gitlab.devtools.intel.com/cqiang/linux.git  for-bkc-12-16
+
+25. VM Preserving Run-time (Chao Gao):
+https://gitlab.devtools.intel.com/cqiang/linux.git  for-bkc-12-16
+
+24. TDX Guest fixes (Kirill):
+Updated to the latest TDX Guest
+
 SPR-BKC-PC-v1.23
 ----------------
 23. SPR-BKC-PC-v1.config (Gonzalez Plascencia, Jair De Jesus)
