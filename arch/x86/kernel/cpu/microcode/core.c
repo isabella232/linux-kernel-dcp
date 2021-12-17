@@ -38,9 +38,6 @@
 #include <asm/processor.h>
 #include <asm/cmdline.h>
 #include <asm/setup.h>
-#include <asm/sgx.h>
-#include <asm/cpu.h>
-#include <asm/cpufeature.h>
 
 #define DRIVER_VERSION	"2.2"
 
@@ -805,33 +802,6 @@ static int mc_cpu_down_prep(unsigned int cpu)
 	return 0;
 }
 
-static ssize_t svnupdate_store(struct device *dev,
-			    struct device_attribute *attr,
-			    const char *buf, size_t size)
-{
-	unsigned long val;
-	ssize_t ret = 0;
-
-	ret = kstrtoul(buf, 0, &val);
-	if (ret)
-		return ret;
-
-	if (val != 1)
-		return size;
-
-	mutex_lock(&microcode_mutex);
-
-	ret = update_cpusvn_intel();
-
-	mutex_unlock(&microcode_mutex);
-
-	if (ret == 0)
-		ret = size;
-
-	return ret;
-}
-static DEVICE_ATTR_WO(svnupdate);
-
 static struct attribute *cpu_root_microcode_attrs[] = {
 	&dev_attr_reload.attr,
 	NULL
@@ -845,7 +815,6 @@ static const struct attribute_group cpu_root_microcode_group = {
 static int __init microcode_init(void)
 {
 	struct cpuinfo_x86 *c = &boot_cpu_data;
-	unsigned int cpuid_level;
 	int error;
 
 	if (dis_ucode_ldr)
@@ -884,27 +853,6 @@ static int __init microcode_init(void)
 	if (error) {
 		pr_err("Error creating microcode group!\n");
 		goto out_driver;
-	}
-
-	/*
-	 * Check CPUID directly. If SGX support bit is on
-	 * in CPUID level 0x00000007:0 (EBX), and EUPDAESVN
-	 * is enabled, allow svnupdate to occur even if
-	 * X86/FEATURE_SGX is clear. Future kexec()'s kernels
-	 * may want to use SGX.
-	 */
-	cpuid_level = cpuid_eax(0);
-	if ((cpuid_level >= 7) &&
-	    (cpuid_ebx(7) & (X86_FEATURE_SGX % 32)) &&
-	    (cpuid_eax(SGX_CPUID) & SGX_CPUID_EUPDATESVN)) {
-		error = sysfs_add_file_to_group(&cpu_subsys.dev_root->kobj,
-						&dev_attr_svnupdate.attr,
-						"microcode");
-
-		if (error) {
-			pr_err("Error creating microcode svnupdate file!\n");
-			goto out_ucode_group;
-		}
 	}
 
 	error = microcode_dev_init();
