@@ -2385,13 +2385,16 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 		ret = -EIO;
 		goto out_free;
 	}
-#if 0 
+
 	if (iommu->nesting) {
-		ret = iommu_enable_nesting(domain->domain);
+		int attr = 1;
+
+		ret = iommu_domain_set_attr(domain->domain, DOMAIN_ATTR_NESTING,
+					    &attr);
 		if (ret)
 			goto out_domain;
 	}
-#endif
+
 	ret = vfio_iommu_attach_group(domain, group);
 	if (ret)
 		goto out_domain;
