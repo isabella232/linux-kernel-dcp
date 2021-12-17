@@ -5036,7 +5036,7 @@ static int kvm_vcpu_ioctl_x86_set_xcrs(struct kvm_vcpu *vcpu,
  * EINVAL is returned when the host attempts to set the flag for a guest that
  * does not support pv clocks.
  */
-int kvm_set_guest_paused(struct kvm_vcpu *vcpu)
+static int kvm_set_guest_paused(struct kvm_vcpu *vcpu)
 {
 	if (!vcpu->arch.pv_time_enabled)
 		return -EINVAL;
@@ -5044,7 +5044,6 @@ int kvm_set_guest_paused(struct kvm_vcpu *vcpu)
 	kvm_make_request(KVM_REQ_CLOCK_UPDATE, vcpu);
 	return 0;
 }
-EXPORT_SYMBOL(kvm_set_guest_paused);
 
 static int kvm_vcpu_ioctl_enable_cap(struct kvm_vcpu *vcpu,
 				     struct kvm_enable_cap *cap)
