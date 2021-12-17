@@ -12,6 +12,14 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v1.23
+----------------
+23. SPR-BKC-PC-v1.config (Gonzalez Plascencia, Jair De Jesus)
+https://github.com/intel-innersource/os.linux.packaging.io4l.bkc-centos-stream-8.kernel-spr-bkc-pc/blob/cs8-spr-1.22-0.el8/kernel-x86_64-intel.config
+
+22. Seamless (Yu Chen):
+Four patches
+
 SPR-BKC-PC-v1.22
 ----------------
 21. SPR BKC PC kernel banne (Fenghua Yu):
