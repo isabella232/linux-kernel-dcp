@@ -378,11 +378,9 @@ int sgx_set_attribute(unsigned long *allowed_attributes,
 #ifdef CONFIG_X86_SGX
 void sgx_lock_epc(void);
 void sgx_unlock_epc(void);
-int sgx_zap_pages(void);
 #else
 static inline void sgx_lock_epc(void) { }
 static inline void sgx_unlock_epc(void) { }
-static inline int sgx_zap_pages(void) { return 0; }
 #endif
 
 #endif /* _ASM_X86_SGX_H */
