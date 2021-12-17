@@ -33,18 +33,6 @@ struct sgx_epc_page {
 	struct list_head list;
 };
 
-/**
- * enum sgx_epc_page_flags - the flag field in &struct sgx_epc_page
- * %SGX_EPC_PAGE_SECS:		a SECS page
- * %SGX_EPC_PAGE_VA:		a VA page
- * %SGX_EPC_PAGE_GUEST:		an EPC page allocated for KVM guest
- */
-enum sgx_epc_page_flags {
-	SGX_EPC_PAGE_SECS			= BIT(1),
-	SGX_EPC_PAGE_VA				= BIT(2),
-	SGX_EPC_PAGE_GUEST			= BIT(3),
-};
-
 /*
  * Contains the tracking data for NUMA nodes having EPC pages. Most importantly,
  * the free page list local to the node is stored here.
