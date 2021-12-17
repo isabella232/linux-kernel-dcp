@@ -1258,15 +1258,12 @@ void sgx_zap_abort(void)
 }
 
 static LIST_HEAD(sgx_kvm_notifier_list);
-static bool sgx_kvm_paused;
 static DEFINE_MUTEX(sgx_kvm_notifier_lock);
 
 void sgx_kvm_notifier_register(struct sgx_kvm_notifier *notifier)
 {
 	mutex_lock(&sgx_kvm_notifier_lock);
 	list_add_tail(&notifier->list, &sgx_kvm_notifier_list);
-	if (sgx_kvm_paused)
-		notifier->ops->halt(notifier);
 	mutex_unlock(&sgx_kvm_notifier_lock);
 }
 EXPORT_SYMBOL(sgx_kvm_notifier_register);
@@ -1287,7 +1284,6 @@ void sgx_kvm_notifier_halt(void)
 	list_for_each_entry(notifier, &sgx_kvm_notifier_list, list) {
 		notifier->ops->halt(notifier);
 	}
-	sgx_kvm_paused = true;
 	mutex_unlock(&sgx_kvm_notifier_lock);
 }
 
@@ -1299,6 +1295,5 @@ void sgx_kvm_notifier_resume(void)
 	list_for_each_entry(notifier, &sgx_kvm_notifier_list, list) {
 		notifier->ops->resume(notifier);
 	}
-	sgx_kvm_paused = false;
 	mutex_unlock(&sgx_kvm_notifier_lock);
 }
