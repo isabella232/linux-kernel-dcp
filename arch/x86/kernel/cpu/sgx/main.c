@@ -662,7 +662,6 @@ static bool __init sgx_setup_epc_section(u64 phys_addr, u64 size,
 	}
 
 	section->phys_addr = phys_addr;
-	section->size = size;
 
 	for (i = 0; i < nr_pages; i++) {
 		section->pages[i].section = index;
