@@ -29,7 +29,7 @@
 struct sgx_epc_page {
 	unsigned int section;
 	unsigned int flags;
-	void *owner;
+	struct sgx_encl_page *owner;
 	struct list_head list;
 };
 
