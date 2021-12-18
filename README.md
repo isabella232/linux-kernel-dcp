@@ -12,9 +12,14 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v2.3
+----------------
+30. IAX Crypto (Dave Jiang):
+https://github.com/intel-sandbox/idxd.git    djiang5/bkc-5.15-iax
+
 SPR-BKC-PC-v2.2
 ----------------
-28. SGX EDMM ( Reinette Chatre):
+28. SGX EDMM (Reinette Chatre):
 https://github.com/bjzhjing/os.linux.sapphirerapids.thirdparty.kernel sgx/edmm-seamless-spr-bkc-v1.22
 
 29. Updated SGX Seamless (old one reverted) (Cathy Zhang):
