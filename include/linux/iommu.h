@@ -318,6 +318,8 @@ struct iommu_ops {
 
 	int (*def_domain_type)(struct device *dev);
 
+	int (*merge_pages)(struct iommu_domain *domain, unsigned long iova,
+			   phys_addr_t phys, size_t size);
 	int (*split_block)(struct iommu_domain *domain, unsigned long iova,
 			   size_t size);
 	int (*set_hwdbm)(struct iommu_domain *domain, bool enable,

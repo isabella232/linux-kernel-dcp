@@ -3094,6 +3094,80 @@ int iommu_domain_set_attr(struct iommu_domain *domain,
 }
 EXPORT_SYMBOL_GPL(iommu_domain_set_attr);
 
+static int __iommu_merge_pages(struct iommu_domain *domain,
+			       unsigned long iova, phys_addr_t paddr,
+			       size_t size)
+{
+	const struct iommu_ops *ops = domain->ops;
+	unsigned int min_pagesz;
+	size_t pgsize;
+	int ret = 0;
+
+	if (unlikely(!ops))
+		return -ENODEV;
+
+	if (unlikely(!ops->merge_pages)) {
+		pr_warn("don't support merge_pages\n");
+		return ret;
+	}
+
+	min_pagesz = 1 << __ffs(domain->pgsize_bitmap);
+	if (!IS_ALIGNED(iova | paddr | size, min_pagesz)) {
+		pr_err("unaligned: iova 0x%lx pa %pa size 0x%zx min_pagesz 0x%x\n",
+			iova, &paddr, size, min_pagesz);
+		return -EINVAL;
+	}
+
+	while (size) {
+		pgsize = iommu_pgsize(domain, iova | paddr, size);
+
+		ret = ops->merge_pages(domain, iova, paddr, pgsize);
+		if (ret)
+			break;
+
+		pr_debug("merge handled: iova 0x%lx pa %pa size 0x%zx\n",
+			 iova, &paddr, pgsize);
+
+		iova += pgsize;
+		paddr += pgsize;
+		size -= pgsize;
+	}
+
+	return ret;
+}
+
+static int iommu_merge_pages(struct iommu_domain *domain, unsigned long iova,
+			     size_t size)
+{
+	phys_addr_t phys;
+	dma_addr_t p, i;
+	size_t cont_size;
+	int ret = 0;
+
+	while (size) {
+		phys = iommu_iova_to_phys(domain, iova);
+		cont_size = PAGE_SIZE;
+		p = phys + cont_size;
+		i = iova + cont_size;
+
+		while (cont_size < size && p == iommu_iova_to_phys(domain, i)) {
+			p += PAGE_SIZE;
+			i += PAGE_SIZE;
+			cont_size += PAGE_SIZE;
+		}
+
+		ret = __iommu_merge_pages(domain, iova, phys, cont_size);
+		if (ret)
+			break;
+
+		iova += cont_size;
+		size -= cont_size;
+	}
+	iommu_flush_iotlb_all(domain);
+
+	return ret;
+}
+
 static int iommu_split_block(struct iommu_domain *domain, unsigned long iova,
 			     size_t size)
 {
@@ -3151,6 +3225,8 @@ int iommu_domain_set_hwdbm(struct iommu_domain *domain, bool enable,
 
 	if (enable)
 		ret = iommu_split_block(domain, iova, size);
+	else
+		ret = iommu_merge_pages(domain, iova, size);
 
 	return ret;
 }

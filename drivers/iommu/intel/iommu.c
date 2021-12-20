@@ -6174,6 +6174,92 @@ out:
 	return ret;
 }
 
+static int
+__domain_merge_pages(struct dmar_domain *domain, struct intel_iommu *iommu,
+		     unsigned long iova, phys_addr_t paddr, size_t size)
+{
+	struct dma_pte *pte = NULL;
+	unsigned int largepage_lvl = 0;
+	unsigned long iov_pfn = iova >> VTD_PAGE_SHIFT;
+	unsigned long start_pfn = iov_pfn;
+	unsigned long end_pfn = (iova + size - 1) >> VTD_PAGE_SHIFT;
+	struct page *freelist;
+	int prot = 0;
+	int ret = 0;
+
+	/* Construct the big page again */
+	largepage_lvl = 1;
+	pte = pfn_to_dma_pte(domain, iov_pfn, &largepage_lvl);
+	if (!pte || !dma_pte_present(pte))
+		return -EINVAL;
+
+	if (pte->val & DMA_PTE_READ)
+		prot |= DMA_PTE_READ;
+	if (pte->val & DMA_PTE_WRITE)
+		prot |= DMA_PTE_WRITE;
+	if (pte->val & DMA_PTE_SNP)
+		prot |= DMA_PTE_SNP;
+
+	pr_debug("%s: start_pfn=0x%lx, end_pfn=0x%lx, prot=0x%x, size=0x%zx, paddr=0x%llx\n",
+		__func__, start_pfn, end_pfn, prot, size, paddr);
+
+	/* Free the splitted 4KB pages */
+	freelist = domain_unmap(domain, start_pfn, end_pfn, NULL);
+	dma_free_pagelist(freelist);
+
+	ret = __domain_mapping(domain, start_pfn, paddr >> VTD_PAGE_SHIFT,
+				size >> VTD_PAGE_SHIFT, prot);
+
+	return ret;
+}
+
+static int intel_iommu_merge_pages(struct iommu_domain *domain, unsigned long iova,
+				   phys_addr_t phys, size_t size)
+{
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	struct device_domain_info *info;
+	struct subdev_domain_info *sinfo;
+	int ret = 0;
+	unsigned long flags;
+
+	if (!domain_use_first_level(dmar_domain) && !slad_support()) {
+		pr_err("Don't support SLAD\n");
+		return -EINVAL;
+	}
+
+	/* Return if size is less than 2MB */
+	if (size < 0x200000)
+		return 0;
+
+	spin_lock_irqsave(&device_domain_lock, flags);
+
+	list_for_each_entry(info, &dmar_domain->devices, link) {
+		pr_debug("%s: merge for %02x:%02x.%d, iova=0x%lx, phys=0x%llx, size=0x%zx\n",
+			__func__, info->bus, PCI_SLOT(info->devfn), PCI_FUNC(info->devfn),
+			iova, phys, size);
+
+		ret = __domain_merge_pages(dmar_domain, info->iommu, iova, phys, size);
+		if (ret)
+			goto out;
+	}
+
+	list_for_each_entry(sinfo, &dmar_domain->subdevices, link_domain) {
+		info = get_domain_info(sinfo->pdev);
+		pr_debug("%s: merge for subdev %02x:%02x.%d, iova=0x%lx, phys=0x%llx, size=0x%zx\n",
+			__func__, info->bus, PCI_SLOT(info->devfn), PCI_FUNC(info->devfn),
+			iova, phys, size);
+
+		ret = __domain_merge_pages(dmar_domain, info->iommu, iova, phys, size);
+		if (ret)
+			break;
+	}
+
+out:
+	spin_unlock_irqrestore(&device_domain_lock, flags);
+
+	return ret;
+}
+
 const struct iommu_ops intel_iommu_ops = {
 	.capable		= intel_iommu_capable,
 	.domain_alloc		= intel_iommu_domain_alloc,
@@ -6213,6 +6299,7 @@ const struct iommu_ops intel_iommu_ops = {
 	.sva_get_pasid		= intel_svm_get_pasid,
 	.page_response		= intel_svm_page_response,
 #endif
+	.merge_pages		= intel_iommu_merge_pages,
 	.split_block		= intel_iommu_split_block,
 	.set_hwdbm		= intel_iommu_set_hwdbm,
 	.sync_dirty_log		= intel_iommu_sync_dirty_log,
