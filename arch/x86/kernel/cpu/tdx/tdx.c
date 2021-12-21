@@ -907,7 +907,7 @@ static int __init tdx_arch_init(void)
 	 */
 	if (!cpumask_equal(cpu_present_mask, cpu_online_mask)) {
 		ret = -EINVAL;
-		goto out;
+		goto out_unlock;
 	}
 
 	mutex_lock(&tdx_mutex);
@@ -954,6 +954,7 @@ out:
 	if (ret)
 		set_tdx_module_state(TDX_MODULE_ERROR);
 	mutex_unlock(&tdx_mutex);
+out_unlock:
 	cpus_read_unlock();
 
 	if (ret && cpuhp_state != CPUHP_INVALID) {
