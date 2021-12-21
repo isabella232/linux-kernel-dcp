@@ -1479,6 +1479,16 @@ int tdx_module_reload(void)
 	int ret, cpu;
 
 	cpus_read_lock();
+	/*
+	 * Initialization of TDX module needs to involve all CPUs.  Ensure all
+	 * CPUs are online.  All CPUs are required to be initialized by
+	 * TDH.SYS.LP.INIT otherwise TDH.SYS.CONFIG fails.
+	 */
+	if (!cpumask_equal(cpu_present_mask, cpu_online_mask)) {
+		ret = -EINVAL;
+		goto unlock;
+	}
+
 	ret = tdx_load_module_late();
 	if (ret)
 		goto unlock;
