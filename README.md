@@ -12,6 +12,13 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v2.4
+----------------
+31. VM Preserving Run-time Fixes (Chao Gao)
+https://gitlab.devtools.intel.com/cqiang/linux.git  for-bkc-12-24
+32. TDVMCALL[GetQuote] driver (Chenyi Qiang)
+https://gitlab.devtools.intel.com/cqiang/linux.git  for-bkc-12-24
+
 SPR-BKC-PC-v2.3
 ----------------
 30. IAX Crypto (Dave Jiang):
