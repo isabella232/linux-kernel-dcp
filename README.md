@@ -12,6 +12,14 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v2.5
+----------------
+33. firmware updates/telemetry support (Chen, Yu C):
+0001-efi-Introduce-EFI_FIRMWARE_MANAGEMENT_CAPSULE_HEADER.patch
+0002-ACPI-Introduce-Platform-Firmware-Runtime-Update-devi.patch
+0003-ACPI-Introduce-Platform-Firmware-Runtime-Telemetry.patch
+0004-ACPI-tools-Introduce-utility-for-firmware-updates-te.patch
+
 SPR-BKC-PC-v2.4
 ----------------
 31. VM Preserving Run-time Fixes (Chao Gao)
