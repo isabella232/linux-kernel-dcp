@@ -532,12 +532,8 @@ config ACPI_PFRUT
 	  The existing firmware code can be modified (driver update) or
 	  extended by adding new code to the firmware (code injection).
 
-	  Besides, the telemetry driver allows user space to fetch telemetry
-	  data from the firmware with the help of the Platform Firmware Runtime
-	  Telemetry interface.
-
-	  To compile the drivers as modules, choose M here:
-	  the modules will be called pfr_update and pfr_telemetry.
+	  To compile this driver as module, choose M here:
+	  the module will be called pfr_update.
 
 if ARM64
 source "drivers/acpi/arm64/Kconfig"
