@@ -49,6 +49,7 @@ enum dma_status {
  */
 enum dma_transaction_type {
 	DMA_MEMCPY,
+	DMA_MEMCPY_SG,
 	DMA_XOR,
 	DMA_PQ,
 	DMA_XOR_VAL,
@@ -807,6 +808,7 @@ struct dma_filter {
  * @device_router_config: optional callback for DMA router configuration
  * @device_free_chan_resources: release DMA channel's resources
  * @device_prep_dma_memcpy: prepares a memcpy operation
+ * @device_prep_dma_memcpy_sg: prepares a memcpy_sg operation
  * @device_prep_dma_xor: prepares a xor operation
  * @device_prep_dma_xor_val: prepares a xor validation operation
  * @device_prep_dma_pq: prepares a pq operation
@@ -885,6 +887,11 @@ struct dma_device {
 	struct dma_async_tx_descriptor *(*device_prep_dma_memcpy)(
 		struct dma_chan *chan, dma_addr_t dst, dma_addr_t src,
 		size_t len, unsigned long flags);
+	struct dma_async_tx_descriptor *(*device_prep_dma_memcpy_sg)(
+		struct dma_chan *chan,
+		struct scatterlist *dst_sg, unsigned int dst_nents,
+		struct scatterlist *src_sg, unsigned int src_nents,
+		unsigned long flags);
 	struct dma_async_tx_descriptor *(*device_prep_dma_xor)(
 		struct dma_chan *chan, dma_addr_t dst, dma_addr_t *src,
 		unsigned int src_cnt, size_t len, unsigned long flags);
@@ -1043,6 +1050,19 @@ static inline struct dma_async_tx_descriptor *dmaengine_prep_dma_memcpy(
 
 	return chan->device->device_prep_dma_memcpy(chan, dest, src,
 						    len, flags);
+}
+
+static inline struct dma_async_tx_descriptor *dmaengine_prep_dma_memcpy_sg(
+		struct dma_chan *chan,
+		struct scatterlist *dst_sg, unsigned int dst_nents,
+		struct scatterlist *src_sg, unsigned int src_nents,
+		unsigned long flags)
+{
+	if (!chan || !chan->device || !chan->device->device_prep_dma_memcpy_sg)
+		return NULL;
+
+	return chan->device->device_prep_dma_memcpy_sg(chan, dst_sg, dst_nents,
+						       src_sg, src_nents, flags);
 }
 
 static inline bool dmaengine_is_metadata_mode_supported(struct dma_chan *chan,
