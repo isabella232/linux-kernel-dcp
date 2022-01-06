@@ -12,6 +12,11 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v2.6
+----------------
+34. Perf Inject fix itrace space allowed for new attributes (Adrian Hunter):
+0001-perf-inject-Fix-itrace-space-allowed-for-new-attribu.patch
+
 SPR-BKC-PC-v2.5
 ----------------
 33. firmware updates/telemetry support (Chen, Yu C):
