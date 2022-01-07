@@ -391,6 +391,8 @@ void sgx_direct_reclaim(void)
 
 static int ksgxd(void *p)
 {
+	int srcu_idx;
+
 	set_freezable();
 
 	/*
@@ -411,9 +413,15 @@ static int ksgxd(void *p)
 				     kthread_should_stop() ||
 				     sgx_should_reclaim(SGX_NR_HIGH_PAGES));
 
+		srcu_idx = srcu_read_lock(&sgx_lock_epc_srcu);
+		if (sgx_epc_is_locked())
+			goto maybe_resched;
+
 		if (sgx_should_reclaim(SGX_NR_HIGH_PAGES))
 			sgx_reclaim_pages();
 
+maybe_resched:
+		srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
 		cond_resched();
 	}
 

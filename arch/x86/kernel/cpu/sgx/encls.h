@@ -226,6 +226,8 @@ static inline int __eldu(struct sgx_pageinfo *pginfo, void *addr,
 /* Mark an Enclave Page Cache (EPC) page as blocked */
 static inline int __eblock(void *addr)
 {
+	lockdep_assert_held(&sgx_lock_epc_srcu);
+
 	return __encls_ret_1(EBLOCK, addr);
 }
 
@@ -243,18 +245,24 @@ static inline int __epa(void *addr)
 static inline int __ewb(struct sgx_pageinfo *pginfo, void *addr,
 			void *va)
 {
+	lockdep_assert_held(&sgx_lock_epc_srcu);
+
 	return __encls_ret_3(EWB, pginfo, addr, va);
 }
 
 /* Restrict the permissions of an Enclave Page Cache (EPC) page */
 static inline int __emodpr(struct sgx_secinfo *secinfo, void *addr)
 {
+	lockdep_assert_held(&sgx_lock_epc_srcu);
+
 	return __encls_ret_2(EMODPR, secinfo, addr);
 }
 
 /* Change the type of an Enclave Page Cache (EPC) page */
 static inline int __emodt(struct sgx_secinfo *secinfo, void *addr)
 {
+	lockdep_assert_held(&sgx_lock_epc_srcu);
+
 	return __encls_ret_2(EMODT, secinfo, addr);
 }
 
