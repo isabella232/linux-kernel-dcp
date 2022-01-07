@@ -12,6 +12,11 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v2.7
+----------------
+35. Prevent SGX reclaimer from running during SGX SVN update (Cathy Zhang):
+https://github.com/bjzhjing/os.linux.sapphirerapids.thirdparty.kernel sgx/edmm-seamless-spr-bkc-v1.22
+
 SPR-BKC-PC-v2.6
 ----------------
 34. Perf Inject fix itrace space allowed for new attributes (Adrian Hunter):
