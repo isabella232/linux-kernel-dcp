@@ -262,6 +262,10 @@ static inline void copy_highpage(struct page *to, struct page *from)
 
 #endif
 
+int dma_migrate_pages_copy(const struct list_head *pages,
+			   const struct list_head *new_pages);
+bool migrate_use_dma(void);
+
 static inline void memcpy_page(struct page *dst_page, size_t dst_off,
 			       struct page *src_page, size_t src_off,
 			       size_t len)
