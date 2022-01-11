@@ -42,7 +42,7 @@ static enum TDX_HOST_OPTION tdx_host __initdata;
 
 static int __init tdx_host_param(char *str)
 {
-	if (!strcmp(str, "on"))
+	if (str && !strcmp(str, "on"))
 		tdx_host = TDX_HOST_ON;
 
 	return 0;
@@ -79,6 +79,8 @@ static char tdx_sigstruct_name[128] __initdata = "intel-seam/libtdx.so.sigstruct
 
 static int __init setup_tdx_module(char *str)
 {
+	if (!str || str[0] == '\0')
+		return 0;
 	strscpy(tdx_module_name, str, sizeof(tdx_module_name));
 	return 1;
 }
@@ -86,6 +88,8 @@ __setup("tdx_module=", setup_tdx_module);
 
 static int __init setup_tdx_sigstruct(char *str)
 {
+	if (!str || str[0] == '\0')
+		return 0;
 	strscpy(tdx_sigstruct_name, str, sizeof(tdx_sigstruct_name));
 	return 1;
 }
