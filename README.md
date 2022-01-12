@@ -12,6 +12,11 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v2.8
+----------------
+36. Add SPR-BKC-PC-v2.config (Miguel Bernal Martin):
+https://github.com/miguelinux/os.linux.sapphirerapids.thirdparty.kernel update-kconfig-to-v2
+
 SPR-BKC-PC-v2.7
 ----------------
 35. Prevent SGX reclaimer from running during SGX SVN update (Cathy Zhang):
