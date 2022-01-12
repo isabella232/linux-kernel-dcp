@@ -12,6 +12,12 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v2.9
+----------------
+37. Fix TDX issues (Chenyi Qiang):
+- Fix: LCK-10844. TDX: SEAM: check the tdx_host parameter to avoid NULL pointer dereference
+- Fix: LCK-10807, LCK-10725, LCK-10827. efi/x86-stub: force boot_params-accepted_memory to 0 when no unaccepted memory
+
 SPR-BKC-PC-v2.8
 ----------------
 36. Add SPR-BKC-PC-v2.config (Miguel Bernal Martin):
