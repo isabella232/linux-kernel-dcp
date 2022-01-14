@@ -12,6 +12,11 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v2.10
+----------------
+38. Enable MDEV and VFIO (Dave Jiang and Yi Liu):
+- https://github.com/intel-sandbox/idxd.git  djiang5/bkc-5.15-work
+
 SPR-BKC-PC-v2.9
 ----------------
 37. Fix TDX issues (Chenyi Qiang):
