@@ -301,18 +301,31 @@ swiotlb_init(int verbose)
 	if (swiotlb_force == SWIOTLB_NO_FORCE)
 		return;
 
-	/* Get IO TLB memory from the low pages */
-	tlb = memblock_alloc_low(bytes, PAGE_SIZE);
-	if (!tlb)
-		goto fail;
-	if (swiotlb_init_with_tbl(tlb, default_nslabs, verbose))
-		goto fail_free_mem;
-	return;
+	/* Double initialization case */
+	if (io_tlb_default_mem.nslabs)
+		return;
 
-fail_free_mem:
-	memblock_free_early(__pa(tlb), bytes);
-fail:
-	pr_warn("Cannot allocate buffer");
+	/* Get IO TLB memory from the low pages, but AMD SEV and
+	 * INTEL TDX increases the IO TLB memory size to maximum 1G
+	 * which may lead to allocation failure from low memory.
+	 * Retry allocation from whole available memory range for SEV/TDX:
+	 * 1. DMA in SEV/TDX guest can work properly on PA above 4G.
+	 * 2. Only retry for SWIOTLB_FORCE because in future SEV and TDX
+	 *    may remove the dependency to SWIOTLB, now they set SWIOTLB_FORCE
+	 *    to force this dependency.
+	 */
+	tlb = memblock_alloc_low(bytes, PAGE_SIZE);
+	if (!tlb && swiotlb_force == SWIOTLB_FORCE &&
+	    cc_platform_has(CC_ATTR_GUEST_MEM_ENCRYPT)) {
+		pr_info("Retry tlb memory allocation from all available memory\n");
+		tlb = memblock_alloc(bytes, PAGE_SIZE);
+	}
+
+	if (!tlb)
+		panic("Cannot allocate buffer");
+
+	if (swiotlb_init_with_tbl(tlb, default_nslabs, verbose))
+		panic("Cannot initialize tbl");
 }
 
 /*
