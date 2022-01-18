@@ -12,6 +12,11 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v3.1
+----------------
+39.  iommu/vt-d: Fix PCI bus rescan device hot add (Jacob Pan):
+- 0001-iommu-vt-d-Fix-PCI-bus-rescan-device-hot-add.patch 
+
 SPR-BKC-PC-v2.10
 ----------------
 38. Enable MDEV and VFIO (Dave Jiang and Yi Liu):
