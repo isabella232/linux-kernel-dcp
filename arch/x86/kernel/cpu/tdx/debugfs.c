@@ -114,7 +114,7 @@ static int print_severity_set(void *data, u64 val)
 	    val == DEBUGCONFIG_TRACE_ERROR ||
 	    val == DEBUGCONFIG_TRACE_CUSTOM ||
 	    val == DEBUGCONFIG_TRACE_NONE) {
-		tdh_trace_seamcalls(val);
+		do_tddebugconfig(DEBUGCONFIG_SET_TRACE_LEVEL, val, 0);
 		trace_seamcalls = val;
 		ret = 0;
 	}
