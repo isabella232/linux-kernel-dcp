@@ -8,7 +8,10 @@
 #ifdef CONFIG_X86_SHADOW_STACK
 static inline bool arch_validate_flags(unsigned long vm_flags)
 {
-	if ((vm_flags & VM_SHADOW_STACK) && (vm_flags & VM_WRITE))
+	/*
+	 * Shadow stack must not be executable, to help with W^X due to wrss.
+	 */
+	if ((vm_flags & VM_SHADOW_STACK) && (vm_flags & (VM_WRITE | VM_EXEC)))
 		return false;
 
 	return true;

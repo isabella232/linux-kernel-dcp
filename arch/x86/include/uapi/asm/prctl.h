@@ -28,6 +28,6 @@
 /* x86 feature bits to be used with ARCH_X86_FEATURE arch_prctl()s */
 #define LINUX_X86_FEATURE_IBT		0x00000001
 #define LINUX_X86_FEATURE_SHSTK		0x00000002
-
+#define LINUX_X86_FEATURE_WRSS		0x00000010
 
 #endif /* _ASM_X86_PRCTL_H */

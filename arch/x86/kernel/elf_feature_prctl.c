@@ -21,6 +21,8 @@ static int elf_feat_copy_status_to_user(struct thread_shstk *shstk, u64 __user *
 		buf[1] = shstk->base;
 		buf[2] = shstk->size;
 	}
+	if (shstk->wrss)
+		buf[0] |= LINUX_X86_FEATURE_WRSS;
 
 	return copy_to_user(ubuf, buf, sizeof(buf));
 }
@@ -41,11 +43,16 @@ int prctl_elf_feature(int option, u64 arg2)
 
 		if (arg2 & LINUX_X86_FEATURE_SHSTK)
 			shstk_disable()
+		if (arg2 & LINUX_X86_FEATURE_WRSS)
+			wrss_control(false);
 
 		return 0;
 	case ARCH_X86_FEATURE_ENABLE:
 		if (arg2 & thread->feat_prctl_locked)
 			return -EPERM;
+
+		if (arg2 & LINUX_X86_FEATURE_WRSS)
+			wrss_control(true);
 
 		return 0;
 	case ARCH_X86_FEATURE_LOCK:
