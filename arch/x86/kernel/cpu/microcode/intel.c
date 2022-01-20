@@ -1009,8 +1009,8 @@ int update_cpusvn_intel(void)
 {
 	int ret;
 
-	sgx_lock_epc();
 	sgx_kvm_notifier_halt();
+	sgx_lock_epc();
 	ret = sgx_zap_pages();
 	if (ret)
 		goto out;
@@ -1032,8 +1032,8 @@ int update_cpusvn_intel(void)
 	}
 
 out:
-	sgx_kvm_notifier_resume();
 	sgx_unlock_epc();
+	sgx_kvm_notifier_resume();
 
 	return ret;
 }
