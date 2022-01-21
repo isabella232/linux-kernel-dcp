@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v3.4
+----------------
+44. TDX: fix nosmap booting issue (Kirill Shutemov)
+
 SPR-BKC-PC-v3.3
 ----------------
 43. x86/microcode: adjust sequence of controlling KVM guest and EPC (Cathy Zhang)
