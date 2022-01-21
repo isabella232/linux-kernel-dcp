@@ -1104,13 +1104,23 @@ static int idxd_wq_load_config(struct idxd_wq *wq)
 	wq->size = wq->wqcfg->wq_size;
 	wq->threshold = wq->wqcfg->wq_thresh;
 
-	/* The driver does not support shared WQ mode in read-only config yet */
-	if (wq->wqcfg->mode == 0 || wq->wqcfg->pasid_en)
-		return -EOPNOTSUPP;
-
-	set_bit(WQ_FLAG_DEDICATED, &wq->flags);
+	if (wq->wqcfg->mode)
+		set_bit(WQ_FLAG_DEDICATED, &wq->flags);
 
 	wq->priority = wq->wqcfg->priority;
+
+	if (wq->wqcfg->bof)
+		set_bit(WQ_FLAG_BLOCK_ON_FAULT, &wq->flags);
+
+	if (device_pasid_enabled(idxd) && wq->wqcfg->mode == 1) {
+		wq->wqcfg->pasid_en = 1;
+		wq->wqcfg->pasid = idxd->pasid;
+		wqcfg_offset = WQCFG_OFFSET(idxd, wq->id, WQCFG_PASID_IDX);
+		iowrite32(wq->wqcfg->bits[WQCFG_PASID_IDX], idxd->reg_base + wqcfg_offset);
+	}
+
+	if (wq->wqcfg->mode_support)
+		set_bit(WQ_FLAG_MODE_1, &wq->flags);
 
 	for (i = 0; i < WQCFG_STRIDES(idxd); i++) {
 		wqcfg_offset = WQCFG_OFFSET(idxd, wq->id, i);
