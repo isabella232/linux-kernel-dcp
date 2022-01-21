@@ -12,6 +12,17 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v3.2
+----------------
+42. Fix TDX issue (Chenyi Qiang):
+- 0001-x86-cpu-tdx-Fix-the-seamcall-invalid-op-issue.patch
+- 0002-DMA-SWIOTLB-Retry-memory-allocation-when-fails-from-.patch
+
+41. Arch-lbr (Weijiang Yang);
+- https://gitlab.devtools.intel.com/yangweij/kvm-pmu.git  SPR-BKC-PC-v3.1-arch-lbr
+
+40. Fix TDX issue in LCK-10779 (Kirill Shutemov):
+
 SPR-BKC-PC-v3.1
 ----------------
 39.  iommu/vt-d: Fix PCI bus rescan device hot add (Jacob Pan):
