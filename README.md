@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v3.3
+----------------
+43. x86/microcode: adjust sequence of controlling KVM guest and EPC (Cathy Zhang)
+
 SPR-BKC-PC-v3.2
 ----------------
 42. Fix TDX issue (Chenyi Qiang)
