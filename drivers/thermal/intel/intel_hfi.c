@@ -24,7 +24,6 @@
 #include <linux/io.h>
 #include <linux/slab.h>
 
-#include "../thermal_core.h"
 #include "intel_hfi.h"
 
 #define THERM_STATUS_CLEAR_PKG_MASK (BIT(1) | BIT(3) | BIT(5) | BIT(7) | \
@@ -125,52 +124,6 @@ static struct hfi_features hfi_features;
 static DEFINE_MUTEX(hfi_lock);
 
 #define HFI_UPDATE_INTERVAL	HZ
-#define HFI_MAX_THERM_NOTIFY_COUNT	16
-
-static void get_one_hfi_cap(struct hfi_instance *hfi_instance, int cpu,
-			    struct hfi_cpu_data *hfi_caps)
-{
-	struct hfi_cpu_data *caps;
-	unsigned long flags;
-	s16 index;
-
-	index = per_cpu(hfi_cpu_info, cpu).index;
-	if (index < 0)
-		return;
-
-	/* Find the capabilities of @cpu */
-	raw_spin_lock_irqsave(&hfi_instance->event_lock, flags);
-	caps = hfi_instance->data + index * hfi_features.cpu_stride;
-	memcpy(hfi_caps, caps, sizeof(*hfi_caps));
-	raw_spin_unlock_irqrestore(&hfi_instance->event_lock, flags);
-}
-
-/*
- * Call update_capabilities() when there are changes in the HFI table.
- */
-static void update_capabilities(struct hfi_instance *hfi_instance)
-{
-	struct cpu_capacity cpu_caps[HFI_MAX_THERM_NOTIFY_COUNT];
-	int i = 0, cpu;
-
-	for_each_cpu(cpu, hfi_instance->cpus) {
-		struct hfi_cpu_data caps;
-
-		get_one_hfi_cap(hfi_instance, cpu, &caps);
-		cpu_caps[i].cpu = cpu;
-		cpu_caps[i].perf = caps.perf_cap;
-		cpu_caps[i].eff = caps.ee_cap;
-		++i;
-		if (i >= HFI_MAX_THERM_NOTIFY_COUNT) {
-			thermal_genl_capacity_event(HFI_MAX_THERM_NOTIFY_COUNT,
-						    cpu_caps);
-			i = 0;
-		}
-	}
-
-	if (i)
-		thermal_genl_capacity_event(i, cpu_caps);
-}
 
 static void hfi_update_work_fn(struct work_struct *work)
 {
@@ -181,7 +134,7 @@ static void hfi_update_work_fn(struct work_struct *work)
 	if (!hfi_instance)
 		return;
 
-	update_capabilities(hfi_instance);
+	/* TODO: Consume update here. */
 }
 
 void intel_hfi_process_event(__u64 pkg_therm_status_msr_val)
