@@ -4,12 +4,6 @@
  *  Author: Daniel Lezcano <daniel.lezcano@linaro.org>
  */
 
-struct cpu_capacity {
-	int cpu;
-	int perf;
-	int eff;
-};
-
 /* Netlink notification function */
 #ifdef CONFIG_THERMAL_NETLINK
 int __init thermal_netlink_init(void);
@@ -29,7 +23,6 @@ int thermal_notify_cdev_add(int cdev_id, const char *name, int max_state);
 int thermal_notify_cdev_delete(int cdev_id);
 int thermal_notify_tz_gov_change(int tz_id, const char *name);
 int thermal_genl_sampling_temp(int id, int temp);
-int thermal_genl_capacity_event(int count, struct cpu_capacity *caps);
 #else
 static inline int thermal_netlink_init(void)
 {
@@ -108,10 +101,4 @@ static inline int thermal_genl_sampling_temp(int id, int temp)
 {
 	return 0;
 }
-
-static inline int thermal_genl_capacity_event(int count, struct cpu_capacity *caps)
-{
-	return 0;
-}
-
 #endif /* CONFIG_THERMAL_NETLINK */

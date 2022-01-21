@@ -43,11 +43,6 @@ static const struct nla_policy thermal_genl_policy[THERMAL_GENL_ATTR_MAX + 1] = 
 	[THERMAL_GENL_ATTR_CDEV_MAX_STATE]	= { .type = NLA_U32 },
 	[THERMAL_GENL_ATTR_CDEV_NAME]		= { .type = NLA_STRING,
 						    .len = THERMAL_NAME_LENGTH },
-	/* CPU Capacity */
-	[THERMAL_GENL_ATTR_CAPACITY]		= { .type = NLA_NESTED },
-	[THERMAL_GENL_ATTR_CAPACITY_CPU_ID]	= { .type = NLA_U32 },
-	[THERMAL_GENL_ATTR_CAPACITY_CPU_PERF]	= { .type = NLA_U32 },
-	[THERMAL_GENL_ATTR_CAPACITY_CPU_EFF]	= { .type = NLA_U32 },
 };
 
 struct param {
@@ -63,8 +58,6 @@ struct param {
 	int temp;
 	int cdev_state;
 	int cdev_max_state;
-	struct cpu_capacity *cpu_capacities;
-	int cpu_capacities_count;
 };
 
 typedef int (*cb_t)(struct param *);
@@ -196,42 +189,6 @@ static int thermal_genl_event_gov_change(struct param *p)
 	return 0;
 }
 
-static int thermal_genl_event_capacity_change(struct param *p)
-{
-	struct cpu_capacity *cpu_cap = p->cpu_capacities;
-	struct sk_buff *msg = p->msg;
-	struct nlattr *start_cap;
-	int i, ret;
-
-	start_cap = nla_nest_start(msg, THERMAL_GENL_ATTR_CAPACITY);
-	if (!start_cap)
-		return -EMSGSIZE;
-
-	for (i = 0; i < p->cpu_capacities_count; ++i) {
-		if (nla_put_u32(msg, THERMAL_GENL_ATTR_CAPACITY_CPU_ID, cpu_cap->cpu)) {
-			ret = -EMSGSIZE;
-			goto out_cancel_nest;
-		}
-		if (nla_put_u32(msg, THERMAL_GENL_ATTR_CAPACITY_CPU_PERF, cpu_cap->perf)) {
-			ret = -EMSGSIZE;
-			goto out_cancel_nest;
-		}
-		if (nla_put_u32(msg, THERMAL_GENL_ATTR_CAPACITY_CPU_EFF, cpu_cap->eff)) {
-			ret = -EMSGSIZE;
-			goto out_cancel_nest;
-		}
-		++cpu_cap;
-	}
-
-	nla_nest_end(msg, start_cap);
-
-	return 0;
-out_cancel_nest:
-	nla_nest_cancel(msg, start_cap);
-
-	return ret;
-}
-
 int thermal_genl_event_tz_delete(struct param *p)
 	__attribute__((alias("thermal_genl_event_tz")));
 
@@ -261,7 +218,6 @@ static cb_t event_cb[] = {
 	[THERMAL_GENL_EVENT_CDEV_DELETE]	= thermal_genl_event_cdev_delete,
 	[THERMAL_GENL_EVENT_CDEV_STATE_UPDATE]	= thermal_genl_event_cdev_state_update,
 	[THERMAL_GENL_EVENT_TZ_GOV_CHANGE]	= thermal_genl_event_gov_change,
-	[THERMAL_GENL_EVENT_CAPACITY_CHANGE]	= thermal_genl_event_capacity_change,
 };
 
 /*
@@ -398,14 +354,6 @@ int thermal_notify_tz_gov_change(int tz_id, const char *name)
 
 	return thermal_genl_send_event(THERMAL_GENL_EVENT_TZ_GOV_CHANGE, &p);
 }
-
-int thermal_genl_capacity_event(int count, struct cpu_capacity *caps)
-{
-	struct param p = { .cpu_capacities_count = count, .cpu_capacities = caps };
-
-	return thermal_genl_send_event(THERMAL_GENL_EVENT_CAPACITY_CHANGE, &p);
-}
-EXPORT_SYMBOL_GPL(thermal_genl_capacity_event);
 
 /*************************** Command encoding ********************************/
 
