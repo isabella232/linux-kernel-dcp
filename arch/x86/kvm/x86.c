@@ -989,34 +989,6 @@ void kvm_load_host_xsave_state(struct kvm_vcpu *vcpu)
 }
 EXPORT_SYMBOL_GPL(kvm_load_host_xsave_state);
 
-void kvm_save_guest_xfd_err(struct kvm_vcpu *vcpu)
-{
-	struct fpu_guest *guest_fpu = &vcpu->arch.guest_fpu;
-
-	if (guest_cpuid_has(vcpu, X86_FEATURE_XFD)) {
-		/* Only guest XFD_ERR need be saved. */
-		if (!current->thread.fpu.fpstate->is_guest)
-			return;
-		/* Already saved before. */
-		if (guest_fpu->xfd_err_dirty)
-			return;
-
-		rdmsrl(MSR_IA32_XFD_ERR, guest_fpu->xfd_err);
-		if (guest_fpu->xfd_err)
-			guest_fpu->xfd_err_dirty = true;
-	}
-}
-EXPORT_SYMBOL_GPL(kvm_save_guest_xfd_err);
-
-static void kvm_restore_xfd_err(struct kvm_vcpu *vcpu)
-{
-	if (vcpu->arch.guest_fpu.xfd_err_dirty && vcpu->arch.guest_fpu.xfd_err) {
-		wrmsrl(MSR_IA32_XFD_ERR, vcpu->arch.guest_fpu.xfd_err);
-		vcpu->arch.guest_fpu.xfd_err_dirty = false;
-		vcpu->arch.guest_fpu.xfd_err = 0;
-	}
-}
-
 /*
  * Return dynamic feature bitmap that xcr0[i]=1 && xfd[i]=0
  */
@@ -9917,8 +9889,6 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 	} else if (unlikely(hw_breakpoint_active())) {
 		set_debugreg(0, 7);
 	}
-
-	kvm_restore_xfd_err(vcpu);
 
 	for (;;) {
 		exit_fastpath = static_call(kvm_x86_run)(vcpu);
