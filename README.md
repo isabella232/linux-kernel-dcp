@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v3.5
+----------------
+45. IDXD fix (Dave Jiang):
+
 SPR-BKC-PC-v3.4
 ----------------
 44. TDX: fix nosmap booting issue (Kirill Shutemov)
