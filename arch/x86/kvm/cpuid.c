@@ -43,8 +43,7 @@ static u32 xstate_required_size(u64 xstate_bv, bool compacted)
 		if (xstate_bv & 0x1) {
 		        u32 eax, ebx, ecx, edx, offset;
 		        cpuid_count(0xD, feature_bit, &eax, &ebx, &ecx, &edx);
-			/* ECX[2]: 64B alignment in compacted form */
-			offset = compacted ? ((ecx & 0x2) ? ALIGN(ret, 64) : ret) : ebx;
+			offset = compacted ? ret : ebx;
 			ret = max(ret, offset + eax);
 		}
 
