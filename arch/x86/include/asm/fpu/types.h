@@ -505,29 +505,6 @@ struct fpu {
  */
 struct fpu_guest {
 	/*
-	 * @user_xfeatures:		xfeature bitmap of features which are
-	 *				currently enabled for the guest vCPU.
-	 */
-	u64				user_xfeatures;
-
-	/*
-	 * @user_perm:			xfeature bitmap of features which are
-	 *				permitted to be enabled for the guest
-	 *				vCPU.
-	 */
-	u64				user_perm;
-
-	/*
-	 * @realloc_request:		xfeature bitmap of features which are
-	 *				requested to be enabled dynamically
-	 *				which requires reallocation of @fpstate
-	 *
-	 *				Set by an intercept handler and
-	 *				evaluated in fpu_swap_kvm_fpstate()
-	 */
-	u64				realloc_request;
-
-	/*
 	 * @fpstate:			Pointer to the allocated guest fpstate
 	 */
 	struct fpstate			*fpstate;
