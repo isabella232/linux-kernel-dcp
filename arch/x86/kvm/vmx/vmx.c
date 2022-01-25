@@ -38,7 +38,6 @@
 #include <asm/cpu_device_id.h>
 #include <asm/debugreg.h>
 #include <asm/desc.h>
-#include <asm/fpu/xstate.h>
 #include <asm/idtentry.h>
 #include <asm/io.h>
 #include <asm/irq_remapping.h>
@@ -2002,14 +2001,6 @@ static u64 vcpu_supported_debugctl(struct kvm_vcpu *vcpu)
 	return debugctl;
 }
 
-#ifdef CONFIG_X86_64
-static void vmx_set_xfd_passthrough(struct kvm_vcpu *vcpu)
-{
-	vmx_disable_intercept_for_msr(vcpu, MSR_IA32_XFD, MSR_TYPE_RW);
-	vcpu->arch.dyn_feature_enabled = true;
-}
-#endif
-
 /*
  * Writes msr value into the appropriate "register".
  * Returns 0 on success, non-0 otherwise.
@@ -2039,33 +2030,6 @@ static int vmx_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		break;
 	case MSR_KERNEL_GS_BASE:
 		vmx_write_guest_kernel_gs_base(vmx, data);
-		break;
-	case MSR_IA32_XFD:
-		if (!guest_cpuid_has(vcpu, X86_FEATURE_XFD))
-			return 1;
-
-		/* Setting unsupported bits causes #GP */
-		if (~XFEATURE_MASK_USER_DYNAMIC & data) {
-			kvm_inject_gp(vcpu, 0);
-			break;
-		}
-
-		/*
-		 * First check if need reallocate. If yes, then
-		 * let the fpu core do reallocation and update xfd;
-		 * otherwise, update xfd here.
-		 */
-		if (kvm_guest_realloc_fpstate(vcpu, data)) {
-			vmx_set_xfd_passthrough(vcpu);
-			/*
-			 * Go back to userspace and let fpu core reallocate.
-			 * In kvm_put_guest_fpu(), guest_fpu::fpstate::xfd
-			 * will be updated, and will be loaded into MSR in
-			 * next kvm_load_guest_fpu().
-			 */
-			return KVM_MSR_RET_USERSPACE;
-		}
-		ret = kvm_set_msr_common(vcpu, msr_info);
 		break;
 #endif
 	case MSR_IA32_SYSENTER_CS:
