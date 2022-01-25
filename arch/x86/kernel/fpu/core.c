@@ -230,7 +230,6 @@ bool fpu_alloc_guest_fpstate(struct fpu_guest *gfpu)
 	if (!fpstate)
 		return false;
 
-	/* Initialize guest fpstate xfd as zero and let guest initialize XFD */
 	__fpstate_reset(fpstate);
 	fpstate_init_user(fpstate);
 	fpstate->is_valloc	= true;
@@ -481,6 +480,7 @@ static void __fpstate_reset(struct fpstate *fpstate)
 	fpstate->user_size	= fpu_user_cfg.default_size;
 	fpstate->xfeatures	= fpu_kernel_cfg.default_features;
 	fpstate->user_xfeatures	= fpu_user_cfg.default_features;
+	fpstate->xfd		= init_fpstate.xfd;
 }
 
 void fpstate_reset(struct fpu *fpu)
@@ -488,9 +488,6 @@ void fpstate_reset(struct fpu *fpu)
 	/* Set the fpstate pointer to the default fpstate */
 	fpu->fpstate = &fpu->__fpstate;
 	__fpstate_reset(fpu->fpstate);
-
-	/* Initialize the xfd */
-	fpu->fpstate->xfd		= init_fpstate.xfd;
 
 	/* Initialize the permission related info in fpu */
 	fpu->perm.__state_perm		= fpu_kernel_cfg.default_features;
