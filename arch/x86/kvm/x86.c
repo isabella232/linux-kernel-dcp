@@ -1024,18 +1024,6 @@ void kvm_set_xfd_passthrough(struct kvm_vcpu *vcpu)
 		static_call(kvm_x86_set_xfd_passthrough)(vcpu);
 }
 
-static int complete_emulated_xsetbv(struct kvm_vcpu *vcpu)
-{
-	return kvm_skip_emulated_instruction(vcpu);
-}
-
-static void kvm_xsetbv_user_space(struct kvm_vcpu *vcpu, u32 exit_reason,
-				  int (*completion)(struct kvm_vcpu *vcpu))
-{
-	vcpu->run->exit_reason = exit_reason;
-	vcpu->arch.complete_userspace_io = completion;
-}
-
 static int __kvm_set_xcr(struct kvm_vcpu *vcpu, u32 index, u64 xcr)
 {
 	u64 xcr0 = xcr;
@@ -1082,15 +1070,6 @@ int kvm_emulate_xsetbv(struct kvm_vcpu *vcpu)
 	    __kvm_set_xcr(vcpu, kvm_rcx_read(vcpu), kvm_read_edx_eax(vcpu))) {
 		kvm_inject_gp(vcpu, 0);
 		return 1;
-	}
-	if (guest_cpuid_has(vcpu, X86_FEATURE_XFD)) {
-		if (kvm_guest_realloc_fpstate(vcpu, vcpu->arch.guest_fpu.fpstate->xfd)) {
-			kvm_set_xfd_passthrough(vcpu);
-			/* Bounce to user space */
-			kvm_xsetbv_user_space(vcpu, KVM_EXIT_X86_XSETBV,
-					      complete_emulated_xsetbv);
-			return 0;
-		}
 	}
 
 	return kvm_skip_emulated_instruction(vcpu);
