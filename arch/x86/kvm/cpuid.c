@@ -18,7 +18,6 @@
 #include <asm/processor.h>
 #include <asm/user.h>
 #include <asm/fpu/xstate.h>
-#include <asm/fpu/api.h>
 #include <asm/sgx.h>
 #include "cpuid.h"
 #include "lapic.h"
@@ -115,29 +114,6 @@ void kvm_update_pv_runtime(struct kvm_vcpu *vcpu)
 	 */
 	if (best)
 		vcpu->arch.pv_cpuid.features = best->eax;
-}
-
-static int kvm_check_dyn_feature_perm(struct kvm_vcpu *vcpu)
-{
-	struct kvm_cpuid_entry2 *best;
-	unsigned long mask = XFEATURE_MASK_USER_DYNAMIC;
-	int bit = 0;
-
-	for_each_set_bit_from(bit, &mask, 8 * sizeof(mask)) {
-		switch (bit) {
-		case XFEATURE_XTILE_DATA:
-			best = kvm_find_cpuid_entry(vcpu, 7, 0);
-			if (best && cpuid_entry_has(best, X86_FEATURE_AMX_TILE)) {
-				if (!(xstate_get_guest_group_perm() &
-					 XFEATURE_MASK_XTILE_DATA))
-					return -EINVAL;
-			}
-			break;
-		default:
-			break;
-		}
-	}
-	return 0;
 }
 
 void kvm_update_cpuid_runtime(struct kvm_vcpu *vcpu)
@@ -362,12 +338,6 @@ int kvm_vcpu_ioctl_set_cpuid2(struct kvm_vcpu *vcpu,
 	vcpu->arch.cpuid_entries = e2;
 	vcpu->arch.cpuid_nent = cpuid->nent;
 
-	/* Report failure if dynamic feature has no permission */
-	r = kvm_check_dyn_feature_perm(vcpu);
-	if (r) {
-		kvfree(e2);
-		return r;
-	}
 	kvm_update_cpuid_runtime(vcpu);
 	kvm_vcpu_after_set_cpuid(vcpu);
 
