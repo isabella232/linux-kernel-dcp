@@ -528,20 +528,6 @@ struct fpu_guest {
 	u64				realloc_request;
 
 	/*
-	 * @xfd_err:			Guest XFD_ERR used by KVM
-	 */
-	u64				xfd_err;
-
-	/*
-	 * @xfd_err_dirty:		Indicator for XFD_ERR is dirty
-	 *
-	 *				Set by KVM when it's preempted if
-	 *				guest XFD_ERR is non-zero. After
-	 *				that, XFD_ERR is dirty for KVM.
-	 */
-	bool				xfd_err_dirty;
-
-	/*
 	 * @fpstate:			Pointer to the allocated guest fpstate
 	 */
 	struct fpstate			*fpstate;
