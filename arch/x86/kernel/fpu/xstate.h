@@ -35,6 +35,11 @@ static inline u64 xstate_get_host_group_perm(void)
 	return xstate_get_group_perm(false);
 }
 
+static inline u64 xstate_get_guest_group_perm(void)
+{
+	return xstate_get_group_perm(true);
+}
+
 enum xstate_copy_mode {
 	XSTATE_COPY_FP,
 	XSTATE_COPY_FX,

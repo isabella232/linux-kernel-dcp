@@ -1743,11 +1743,6 @@ static inline int xstate_request_perm(unsigned long idx, bool guest)
 }
 #endif  /* !CONFIG_X86_64 */
 
-inline u64 xstate_get_guest_group_perm(void)
-{
-	return xstate_get_group_perm(true);
-}
-EXPORT_SYMBOL_GPL(xstate_get_guest_group_perm);
 /**
  * fpu_xstate_prctl - xstate permission operations
  * @tsk:	Redundant pointer to current
