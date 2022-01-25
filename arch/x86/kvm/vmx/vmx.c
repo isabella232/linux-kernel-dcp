@@ -169,8 +169,6 @@ static u32 vmx_possible_passthrough_msrs[MAX_POSSIBLE_PASSTHROUGH_MSRS] = {
 	MSR_FS_BASE,
 	MSR_GS_BASE,
 	MSR_KERNEL_GS_BASE,
-	MSR_IA32_XFD,
-	MSR_IA32_XFD_ERR,
 #endif
 	MSR_IA32_SYSENTER_CS,
 	MSR_IA32_SYSENTER_ESP,
@@ -7515,12 +7513,6 @@ static void update_intel_pt_cfg(struct kvm_vcpu *vcpu)
 		vmx->pt_desc.ctl_bitmask &= ~(0xfULL << (32 + i * 4));
 }
 
-static void vmx_update_intercept_xfd(struct kvm_vcpu *vcpu)
-{
-	vmx_set_intercept_for_msr(vcpu, MSR_IA32_XFD, MSR_TYPE_R, false);
-	vmx_set_intercept_for_msr(vcpu, MSR_IA32_XFD_ERR, MSR_TYPE_RW, false);
-}
-
 static void vmx_vcpu_after_set_cpuid(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_vmx *vmx = to_vmx(vcpu);
@@ -7560,9 +7552,6 @@ static void vmx_vcpu_after_set_cpuid(struct kvm_vcpu *vcpu)
 			vmx_set_guest_uret_msr(vmx, msr, enabled ? 0 : TSX_CTRL_RTM_DISABLE);
 		}
 	}
-
-	if (boot_cpu_has(X86_FEATURE_XFD) && guest_cpuid_has(vcpu, X86_FEATURE_XFD))
-		vmx_update_intercept_xfd(vcpu);
 
 	set_cr4_guest_host_mask(vmx);
 
