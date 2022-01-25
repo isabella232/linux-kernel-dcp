@@ -200,26 +200,6 @@ void fpu_reset_from_exception_fixup(void)
 #if IS_ENABLED(CONFIG_KVM)
 static void __fpstate_reset(struct fpstate *fpstate);
 
-#ifdef CONFIG_X86_64
-static void fpu_update_guest_xfd_state(void)
-{
-	u64 xfd;
-
-	rdmsrl(MSR_IA32_XFD, xfd);
-	current->thread.fpu.fpstate->xfd = xfd;
-	__this_cpu_write(xfd_state, xfd);
-}
-#else
-static void fpu_update_guest_xfd_state(void) { }
-#endif
-
-inline void kvm_update_guest_xfd_state(void)
-{
-	if (fpu_state_size_dynamic())
-		fpu_update_guest_xfd_state();
-}
-EXPORT_SYMBOL_GPL(kvm_update_guest_xfd_state);
-
 static void fpu_init_guest_permissions(struct fpu_guest *gfpu)
 {
 	struct fpu_state_perm *fpuperm;
