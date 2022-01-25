@@ -301,7 +301,8 @@ void idxd_wq_reset(struct idxd_wq *wq)
 
 	operand = BIT(wq->id % 16) | ((wq->id / 16) << 16);
 	idxd_cmd_exec(idxd, IDXD_CMD_RESET_WQ, operand, NULL);
-	idxd_wq_disable_cleanup(wq);
+	if (test_bit(IDXD_FLAG_CONFIGURABLE, &idxd->flags))
+		idxd_wq_disable_cleanup(wq);
 	wq->state = IDXD_WQ_DISABLED;
 }
 EXPORT_SYMBOL_GPL(idxd_wq_reset);
