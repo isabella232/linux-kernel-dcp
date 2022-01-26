@@ -520,6 +520,9 @@ static int idxd_probe(struct idxd_device *idxd)
 		return rc;
 
 	dev_dbg(dev, "IDXD reset complete\n");
+	rc = iommu_dev_enable_feature(dev, IOMMU_DEV_FEAT_SVA);
+	if (rc)
+		dev_warn(dev, "Unable to turn on SVA feature.\n");
 
 	if (IS_ENABLED(CONFIG_INTEL_IDXD_SVM) && sva) {
 		rc = idxd_enable_system_pasid(idxd);
