@@ -12,6 +12,11 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v3.7
+----------------
+47. More IDXD fixes (Dave Jiang):
+- https://github.com/intel-sandbox/idxd.git   djiang5/bkc-5.15-fixes
+
 SPR-BKC-PC-v3.6
 ----------------
 46. Update AMX KVM to upstream version (tip for 5.17) (Yang Zhong):
