@@ -12,6 +12,11 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v3.6
+----------------
+46. Update AMX KVM to upstream version (tip for 5.17) (Yang Zhong):
+- https://gitlab.devtools.intel.com/yangzhon/amx-kvm.git  amx-bkc-backport
+
 SPR-BKC-PC-v3.5
 ----------------
 45. IDXD fix (Dave Jiang):
