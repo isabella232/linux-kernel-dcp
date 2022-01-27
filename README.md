@@ -12,6 +12,11 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v3.8
+----------------
+48. SST HFI (Pandruvada, Srinivas):
+- https://gitlab.devtools.intel.com/spandruv/linux-po-spr.git  SPR-BKC-PC-v3.4
+
 SPR-BKC-PC-v3.7
 ----------------
 47. More IDXD fixes (Dave Jiang):
