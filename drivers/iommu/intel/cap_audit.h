@@ -122,7 +122,6 @@ bool intel_cap_slad_sanity(void);
 
 static inline bool scalable_mode_support(void)
 {
-	return true;
 	return (intel_iommu_sm && intel_cap_smts_sanity());
 }
 
