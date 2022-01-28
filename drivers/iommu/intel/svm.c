@@ -1230,8 +1230,7 @@ prq_advance:
 		}
 	}
 
-	if (!completion_done(&iommu->prq_complete))
-		complete(&iommu->prq_complete);
+	complete(&iommu->prq_complete);
 
 	return IRQ_RETVAL(handled);
 }
