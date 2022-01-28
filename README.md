@@ -12,6 +12,10 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v3.9
+----------------
+49. Sequential split lock (Tony Luck):
+
 SPR-BKC-PC-v3.8
 ----------------
 48. SST HFI (Pandruvada, Srinivas):
