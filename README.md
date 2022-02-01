@@ -12,6 +12,11 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v3.10
+----------------
+50. Fix VMD booting issue (Adrian Huang <ahuang12@lenovo.com>):
+- 5.16 commit: 2565e5b69c44b4e42469afea3cc5a97e74d1ed45
+
 SPR-BKC-PC-v3.9
 ----------------
 49. Sequential split lock (Tony Luck):
