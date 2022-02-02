@@ -12,6 +12,11 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v3.11
+----------------
+51. dmaengine: idxd: restore traffic class defaults after wq reset (Dave Jiang):
+- https://github.com/intel-sandbox/idxd/commit/594690f7b81e7fbc3dc8e967ac8fd1e977067020
+
 SPR-BKC-PC-v3.10
 ----------------
 50. Fix VMD booting issue (Adrian Huang <ahuang12@lenovo.com>):
