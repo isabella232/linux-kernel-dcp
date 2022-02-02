@@ -12,6 +12,11 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v3.12
+----------------
+52. sched/fair: Force progress on min_vruntime (Tim Chen):
+- https://git.kernel.org/pub/scm/linux/kernel/git/peterz/queue.git sched/wip.migrate
+
 SPR-BKC-PC-v3.11
 ----------------
 51. dmaengine: idxd: restore traffic class defaults after wq reset (Dave Jiang):
