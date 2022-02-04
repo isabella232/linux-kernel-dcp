@@ -12,6 +12,11 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v3.14
+----------------
+54. Check on PT SRE support on stepping (Jacob Pan):
+- https://github.com/intel-sandbox/linux-svm-kernel.git SPR-BKC-PC-v3.5-dma-pasid-nowa
+
 SPR-BKC-PC-v3.13
 ----------------
 53. Enable PASID for DMA API users (Jacob Pan):
