@@ -690,7 +690,7 @@ static void vidxd_mmio_init_wqcfg(struct vdcm_idxd *vidxd)
 
 	if (wq_dedicated(wq))
 		wqcfg->mode = WQCFG_MODE_DEDICATED;
-	else if (device_pasid_enabled(idxd))
+	else if (device_user_pasid_enabled(idxd))
 		wqcfg->pasid_en = 1;
 
 	wqcfg->bof = wq->wqcfg->bof;
@@ -721,7 +721,7 @@ static void vidxd_mmio_init_gencap(struct vdcm_idxd *vidxd)
 	gencap->config_en = 0;
 	gencap->max_ims_mult = 0;
 	gencap->cmd_cap = 1;
-	if (device_pasid_enabled(idxd))
+	if (device_user_pasid_enabled(idxd))
 		gencap->block_on_fault = 1;
 }
 
