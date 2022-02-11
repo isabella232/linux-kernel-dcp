@@ -192,6 +192,9 @@ ioasid_t iommu_enable_pasid_dma(struct device *dev)
 		return IOASID_DMA_PASID;
 	}
 	dom = iommu_get_domain_for_dev(dev);
+	if (!dom || !dom->ops)
+		return INVALID_IOASID;
+
 	/*
 	 * Use the reserved kernel PASID for all devices. For now,
 	 * there is no need to have different PASIDs for in-kernel use.
