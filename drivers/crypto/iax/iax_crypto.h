@@ -52,16 +52,22 @@ struct iax_wq {
 
 /* Representation of IAX device with wqs, populated by probe */
 struct iax_device {
-	struct list_head	list;
-	struct idxd_device	*idxd;
+	struct list_head		list;
+	struct idxd_device		*idxd;
 
-	int			n_wq;
-	struct list_head	wqs;
+	struct aecs_table_record	*aecs_table;
+	dma_addr_t			aecs_table_addr;
 
-	u64			comp_calls;
-	u64			comp_bytes;
-	u64			decomp_calls;
-	u64			decomp_bytes;
+	void				*aecs_table_unaligned;
+	dma_addr_t			aecs_table_addr_unaligned;
+
+	int				n_wq;
+	struct list_head		wqs;
+
+	u64				comp_calls;
+	u64				comp_bytes;
+	u64				decomp_calls;
+	u64				decomp_bytes;
 };
 
 /*
