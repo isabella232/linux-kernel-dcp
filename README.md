@@ -12,6 +12,17 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v3.16
+----------------
+58. Fix ZSWAP breakage (Tom Zanussi):
+- https://github.com/intel-sandbox/idxd.git tzanussi/iax-crypto-5.15-bkc-v2
+
+57. Rollback microcode (Ashok Raj):
+- https://github.com/intel-innersource/os.linux.packaging.io4l.bkc-centos-stream-8.kernel-spr-bkc-pc.git
+
+56. Fix TDX seamcall (Isaku Yamahata):
+- 0001-REVERTME-KVM-TDX-Retry-seamcall-when-TDX_OPERAND_BUS.patch
+
 SPR-BKC-PC-v3.15
 ----------------
 55. Fix a NULL domain issue in IOMMU (Jacob Pan):
