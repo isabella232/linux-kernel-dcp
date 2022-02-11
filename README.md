@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v3.15
+----------------
+55. Fix a NULL domain issue in IOMMU (Jacob Pan):
+
 SPR-BKC-PC-v3.14
 ----------------
 54. Check on PT SRE support on stepping (Jacob Pan)
