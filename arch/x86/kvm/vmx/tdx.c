@@ -1912,6 +1912,9 @@ static int __tdx_handle_exit(struct kvm_vcpu *vcpu,
 {
 	union tdx_exit_reason exit_reason = to_tdx(vcpu)->exit_reason;
 
+	if (exit_reason.full == (TDX_OPERAND_BUSY | TDX_OPERAND_ID_SEPT))
+		return 1;
+
 	if (unlikely(exit_reason.non_recoverable || exit_reason.error)) {
 		kvm_pr_unimpl("TD exit due to %s, Exit Reason %d\n",
 			      tdx_seamcall_error_name(exit_reason.full),

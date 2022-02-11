@@ -18,7 +18,7 @@
 asmlinkage u64 kvm_seamcall(u64 op, u64 rcx, u64 rdx, u64 r8, u64 r9, u64 r10,
 			struct tdx_ex_ret *ex);
 
-static inline u64 _seamcall(u64 op, u64 rcx, u64 rdx, u64 r8, u64 r9, u64 r10,
+static inline u64 __seamcall(u64 op, u64 rcx, u64 rdx, u64 r8, u64 r9, u64 r10,
 			struct tdx_ex_ret *ex)
 {
 	u64 err;
@@ -31,6 +31,18 @@ static inline u64 _seamcall(u64 op, u64 rcx, u64 rdx, u64 r8, u64 r9, u64 r10,
 	err = kvm_seamcall(op, rcx, rdx, r8, r9, r10, ex);
 	trace_seamcall_exit(op, err, ex);
 	return err;
+}
+
+static inline u64 _seamcall(u64 op, u64 rcx, u64 rdx, u64 r8, u64 r9, u64 r10,
+			struct tdx_ex_ret *ex)
+{
+	u64 ret;
+
+	do {
+		ret = __seamcall(op, rcx, rdx, r8, r9, r10, ex);
+	} while (ret == (TDX_OPERAND_BUSY | TDX_OPERAND_ID_SEPT));
+
+	return ret;
 }
 
 #define seamcall(op, rcx, rdx, r8, r9, r10, ex)				\
