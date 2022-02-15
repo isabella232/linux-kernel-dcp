@@ -31,7 +31,6 @@
 #define HEADER_SIZE				48
 #define TEST_SIZE_LIMIT				BIT(27)
 #define MAX_RETRY				5
-#define MINIMUM_SAF_INTERVAL			60
 
 /*
  * scan execution error code (edx stores error code after rdmsr(SCAN_STATUS))
@@ -69,7 +68,7 @@
  * @test_image_ptr: the 512B aligned linear address that points to scan test chunk loaded.
  * @num_chunks: the number of chunks in scan binary.
  * @chunk_size: shows the chunk size.
- * @max_parallel_tests: the maximum numbers of cores that scan test can run simultaneously.
+ * @max_cores: the maximum numbers of cores that scan test can run simultaneously.
  * @loading_error: set if error occurred during scan hashes or chunk authentication.
  * @hash_valid: set when scan hash copy completed.
  * @valid_chunks: the number of authenticated chunks.
@@ -81,7 +80,7 @@ struct saf_params {
 	u64 test_image_ptr;
 	int num_chunks;
 	int chunk_size;
-	int max_parallel_tests;
+	int max_cores;
 	bool loading_error;
 	bool hash_valid;
 	int valid_chunks;
@@ -118,10 +117,5 @@ struct saf_state {
 };
 
 DECLARE_PER_CPU(struct saf_state, saf_state);
-
-int load_scan_binary(void);
-extern struct saf_params saf_params;
-extern struct semaphore *sems;
-extern int saf_threads_per_core;
 
 #endif
