@@ -491,12 +491,11 @@ static struct idxd_device *idxd_alloc(struct pci_dev *pdev, struct idxd_driver_d
 static int idxd_enable_system_pasid(struct idxd_device *idxd)
 {
 	u32 pasid;
-	int ret;
 
 	pasid = iommu_enable_pasid_dma(&idxd->pdev->dev);
 	if (pasid == INVALID_IOASID) {
-		dev_err(&idxd->pdev->dev, "No DMA PASID %d\n", ret);
-		return ret;
+		dev_err(&idxd->pdev->dev, "No DMA PASID.\n");
+		return -ENXIO;
 	}
 	idxd->pasid = pasid;
 
