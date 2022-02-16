@@ -49,6 +49,36 @@ static int __init tdx_host_param(char *str)
 }
 early_param("tdx_host", tdx_host_param);
 
+/*
+ * is_seamrr_enabled - check if seamrr is supported.
+ */
+static bool __init is_seamrr_enabled(void)
+{
+	u64 mtrrcap, seamrr_base, seamrr_mask;
+
+	if (!boot_cpu_has(X86_FEATURE_MTRR))
+		return false;
+
+	/* MTRRcap.SEAMRR indicates the support of SEAMRR_PHYS_{BASE, MASK} */
+	rdmsrl(MSR_MTRRcap, mtrrcap);
+	if (!(mtrrcap & MTRRCAP_SEAMRR))
+		return false;
+
+	rdmsrl(MSR_IA32_SEAMRR_PHYS_BASE, seamrr_base);
+	if (!(seamrr_base & MSR_IA32_SEAMRR_PHYS_BASE_CONFIGURED)) {
+		pr_info("SEAMRR base is not configured by BIOS\n");
+		return false;
+	}
+
+	rdmsrl(MSR_IA32_SEAMRR_PHYS_MASK, seamrr_mask);
+	if (!(seamrr_mask & MSR_IA32_SEAMRR_PHYS_MASK_ENABLED)) {
+		pr_info("SEAMRR is not enabled by BIOS\n");
+		return false;
+	}
+
+	return true;
+}
+
 static int __init tdx_host_early_init(void)
 {
 	int ret;
@@ -56,6 +86,10 @@ static int __init tdx_host_early_init(void)
 	/* Avoid TDX overhead when opt-in is not present. */
 	if (tdx_host != TDX_HOST_ON)
 		return 0;
+
+	/* TDX requires SEAM mode. */
+	if (!is_seamrr_enabled())
+		return -EOPNOTSUPP;
 
 	ret = load_p_seamldr();
 	if (ret)
