@@ -12,6 +12,14 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v3.17
+----------------
+60. Fix WQ config fails with sm_off (Dave Jiang):
+- https://github.com/intel-sandbox/idxd.git djiang5/bkc-5.15-fixes
+
+59. Revert IOASID range adjustment (Jacob Pan):
+- https://github.com/intel-sandbox/idxd.git djiang5/bkc-5.15-fixes
+
 SPR-BKC-PC-v3.16
 ----------------
 58. Fix ZSWAP breakage (Tom Zanussi):
