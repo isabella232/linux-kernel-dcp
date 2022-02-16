@@ -678,7 +678,7 @@ static int tdx_init_cpus(void)
 static int tdx_init_system(void)
 {
 	struct tdx_ex_ret ex_ret;
-	int err;
+	u64 err;
 
 	/*
 	 * Detect HKID for TDX if initialization was successful.
@@ -719,7 +719,7 @@ static int tdx_init_system(void)
 static int tdx_get_system_info(void)
 {
 	struct tdx_ex_ret ex_ret;
-	int err;
+	u64 err;
 	int i;
 
 	/*
@@ -731,8 +731,7 @@ static int tdx_get_system_info(void)
 	if (WARN_ON(err)) {
 		pr_seamcall_error(SEAMCALL_TDH_SYS_INFO, "TDH_SYS_INFO",
 				  err, &ex_ret);
-		err = -EIO;
-		goto out;
+		return -EIO;
 	}
 
 	/*
@@ -754,8 +753,7 @@ static int tdx_get_system_info(void)
 		(tdx_tdsysinfo->max_tdmrs != TDX_MAX_NR_TDMRS) ||
 		(tdx_tdsysinfo->pamt_entry_size != TDX_PAMT_ENTRY_SIZE))) {
 		pr_err("Invalid TDSYSINFO.  Disable TDX.\n");
-		err = -EINVAL;
-		goto out;
+		return -EINVAL;
 	}
 
 	pr_info("TDX SEAM module: attributes 0x%x vendor_id 0x%x build_date %d "
@@ -769,8 +767,8 @@ static int tdx_get_system_info(void)
 	for (i = 0; i < tdx_nr_cmrs; i++)
 		pr_info("TDX CMR[%2d]: base 0x%016llx size 0x%016llx\n",
 			i, tdx_cmrs[i].base, tdx_cmrs[i].size);
-out:
-	return err;
+
+	return 0;
 }
 
 static void tdx_shutdown_cpu(void *data)
