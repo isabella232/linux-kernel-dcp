@@ -18,6 +18,15 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v3.18
+----------------
+61. Back port some high/critical Common Vulnerabilities and Exposures (CVE) fixes from upstream (Makr Horn):
+- commit: ec6af094ea28f0f2dda1a6a33b14cd57e36a9755
+- commit: f9d87929d451d3e649699d0f1d74f71f77ad38f5
+- commit: dfd0743f1d9ea76931510ed150334d571fbab49d
+- commit: 83912d6d55be10d65b5268d1871168b9ebe1ec4b
+- commit: 054aa8d439b9185d4f5eb9a90282d1ce74772969
+
 SPR-BKC-PC-v3.17
 ----------------
 60. Fix WQ config fails with sm_off (Dave Jiang)
