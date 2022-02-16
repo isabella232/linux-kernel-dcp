@@ -4,6 +4,7 @@
 #include <linux/linkage.h>
 
 #include <asm/asm-offsets.h>
+#include <asm/tdx_errno.h>
 #include <asm/frame.h>
 #include <asm/asm.h>
 
@@ -44,12 +45,15 @@ SYM_FUNC_START(__seamcall)
 	movq	%rdi, %rax
 
 	seamcall
+	/* CF=1, means SEAMCALL hits VMFailInvalid */
+	jnc     1f
+	mov     $TDX_SEAMCALL_VMFAILINVALID, %rax
 
 	/*
 	 * Store extra returned values into ex.  Some registers
 	 * may be unused depending on SEAMCALL functions.
 	 */
-	popq	%rdi
+1:	popq	%rdi
 	movq	%rcx, TDX_SEAM_rcx(%rdi)
 	movq	%rdx, TDX_SEAM_rdx(%rdi)
 	movq	%r8,  TDX_SEAM_r8(%rdi)

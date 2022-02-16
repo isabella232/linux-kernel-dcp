@@ -6,6 +6,7 @@
 
 #include <linux/types.h>
 #include <asm/page.h>
+#include <asm/tdx_errno.h>
 
 /*
  * NP-SEAMLDR error codes
@@ -41,7 +42,8 @@
 	P_SEAMLDR_ERROR_CODE(P_SEAMLDR_EBADSIG),	\
 	P_SEAMLDR_ERROR_CODE(P_SEAMLDR_EBADHASH),	\
 	P_SEAMLDR_ERROR_CODE(P_SEAMLDR_EINTERRUPT),	\
-	P_SEAMLDR_ERROR_CODE(P_SEAMLDR_ENOENTROPY)
+	P_SEAMLDR_ERROR_CODE(P_SEAMLDR_ENOENTROPY),	\
+	P_SEAMLDR_ERROR_CODE(TDX_SEAMCALL_VMFAILINVALID)
 
 const char *p_seamldr_error_name(u64 error_code);
 
