@@ -91,10 +91,30 @@ static int __init tdx_host_early_init(void)
 	if (!is_seamrr_enabled())
 		return -EOPNOTSUPP;
 
-	ret = load_p_seamldr();
+	/* TDX(SEAMCALL) requires VMX. */
+	ret = seam_init_vmx_early();
 	if (ret)
 		return ret;
 
+	ret = p_seamldr_get_info();
+	if (ret == -EIO) {
+		pr_err("No P-SEAMLDR loaded by BIOS.\n");
+
+		ret = load_p_seamldr();
+		if (ret)
+			return ret;
+
+		ret = p_seamldr_get_info();
+		if (ret) {
+			pr_err("Get P-SEAMLDR failed with %d\n", ret);
+			return ret;
+		}
+	} else if (ret) {
+		pr_err("Get P-SEAMLDR failed with %d\n", ret);
+		return ret;
+	}
+
+	setup_force_cpu_cap(X86_FEATURE_SEAM);
 	return tdx_sysmem_build();
 }
 early_initcall(tdx_host_early_init);

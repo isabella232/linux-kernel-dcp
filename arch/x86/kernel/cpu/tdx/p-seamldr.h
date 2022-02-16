@@ -118,6 +118,7 @@ struct seamldr_params {
 int seamldr_info(phys_addr_t seamldr_info);
 int seamldr_install(phys_addr_t seamldr_params);
 
+int __init p_seamldr_get_info(void);
 int __init load_p_seamldr(void);
 
 #endif /* _X86_TDX_P_SEAMLOADER_H */

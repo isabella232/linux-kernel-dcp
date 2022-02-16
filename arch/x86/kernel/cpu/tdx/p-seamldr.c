@@ -395,7 +395,7 @@ out:
 
 static struct p_seamldr_info *p_seamldr_info;
 
-static int __init p_seamldr_get_info(void)
+int __init p_seamldr_get_info(void)
 {
 	struct vmcs *vmcs = NULL;
 	int vmxoff_err = 0;
@@ -468,11 +468,6 @@ int __init load_p_seamldr(void)
 	struct cpio_data np_seamldr;
 	int err;
 
-	/* TDX requires VMX. */
-	err = seam_init_vmx_early();
-	if (err)
-		return err;
-
 	if (!seam_get_firmware(&np_seamldr, np_seamldr_name)) {
 		pr_err("no NP-SEAMLDR found %s\n", np_seamldr_name);
 		return -ENOENT;
@@ -485,13 +480,6 @@ int __init load_p_seamldr(void)
 		return err;
 	}
 
-	err = p_seamldr_get_info();
-	if (err) {
-		pr_err("failed to get TDX P-SEAMLDR info\n");
-		return err;
-	}
-
-	setup_force_cpu_cap(X86_FEATURE_SEAM);
 	pr_info("Successfully loaded TDX P-SEAMLDR.\n");
 	return 0;
 }
