@@ -1251,7 +1251,6 @@ void idxd_wq_free_irq(struct idxd_wq *wq)
 	if (idxd->request_int_handles)
 		idxd_device_release_int_handle(idxd, ie->int_handle, IDXD_IRQ_MSIX);
 	idxd_device_clear_perm_entry(idxd, msix_idx);
-	pci_free_msix_irq_vector(idxd->pdev, ie->vector);
 	ie->int_handle = INVALID_INT_HANDLE;
 	ie->pasid = INVALID_IOASID;
 	ie->wq = NULL;
@@ -1264,17 +1263,11 @@ int idxd_wq_enable_irq(struct idxd_wq *wq)
 	struct pci_dev *pdev = idxd->pdev;
 	struct device *dev = &pdev->dev;
 	struct idxd_irq_entry *ie;
-	int msix_idx;
 	int rc;
 
-	msix_idx = pci_add_msix_irq_vector(pdev);
-	if (msix_idx < 0)
-		return msix_idx;
+	ie = &idxd->irq_entries[wq->id + 1];
 
-	ie = &idxd->irq_entries[msix_idx];
-	ie->vector = pci_irq_vector(pdev, msix_idx);
-
-	idxd_device_set_perm_entry(idxd, msix_idx);
+	idxd_device_set_perm_entry(idxd, ie->id);
 	rc = request_threaded_irq(ie->vector, NULL, idxd_wq_thread, 0, "idxd-portal", ie);
 	if (rc < 0) {
 		dev_err(dev, "Failed to request irq %d.\n", ie->vector);
@@ -1282,7 +1275,7 @@ int idxd_wq_enable_irq(struct idxd_wq *wq)
 	}
 
 	if (idxd->request_int_handles) {
-		rc = idxd_device_request_int_handle(idxd, msix_idx, &ie->int_handle,
+		rc = idxd_device_request_int_handle(idxd, ie->id, &ie->int_handle,
 						    IDXD_IRQ_MSIX);
 		if (rc < 0)
 			goto err_int_handle;
@@ -1300,8 +1293,7 @@ err_int_handle:
 	ie->int_handle = INVALID_INT_HANDLE;
 	free_irq(ie->vector, ie);
 err_irq:
-	idxd_device_clear_perm_entry(idxd, msix_idx);
-	pci_free_msix_irq_vector(pdev, ie->vector);
+	idxd_device_clear_perm_entry(idxd, ie->id);
 	return rc;
 }
 

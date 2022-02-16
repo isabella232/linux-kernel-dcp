@@ -84,9 +84,9 @@ static int idxd_setup_interrupts(struct idxd_device *idxd)
 	}
 	idxd->irq_cnt = msixcnt;
 
-	/* Allocate first irq vector for device management */
-	rc = pci_alloc_irq_vectors(pdev, 1, 1, PCI_IRQ_MSIX);
-	if (rc != 1)
+	/* Allocate all irq vectors for device management */
+	rc = pci_alloc_irq_vectors(pdev, msixcnt, msixcnt, PCI_IRQ_MSIX);
+	if (rc != msixcnt)
 		return -ENOSPC;
 
 	idxd->irq_entries = kcalloc_node(msixcnt, sizeof(struct idxd_irq_entry),
@@ -100,13 +100,13 @@ static int idxd_setup_interrupts(struct idxd_device *idxd)
 		ie = &idxd->irq_entries[i];
 		ie->id = i;
 		ie->idxd = idxd;
+		ie->vector = pci_irq_vector(pdev, i);
 		init_llist_head(&ie->pending_llist);
 		INIT_LIST_HEAD(&ie->work_list);
 		spin_lock_init(&ie->list_lock);
 	}
 
 	ie = &idxd->irq_entries[0];
-	ie->vector = pci_irq_vector(pdev, 0);
 	rc = request_threaded_irq(ie->vector, NULL, idxd_misc_thread,
 				  0, "idxd-misc", ie);
 	if (rc < 0) {
