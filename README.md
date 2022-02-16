@@ -12,6 +12,11 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v3.19
+----------------
+62. Remove POC dynamic MSIX allocation code (Dave Jiang):
+- https://github.com/intel-sandbox/idxd.git djiang5/bkc-5.15-fixes
+
 SPR-BKC-PC-v3.18
 ----------------
 61. Back port some high/critical Common Vulnerabilities and Exposures (CVE) fixes from upstream (Makr Horn):
