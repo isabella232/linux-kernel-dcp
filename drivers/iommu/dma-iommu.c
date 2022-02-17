@@ -172,6 +172,7 @@ void iommu_put_dma_cookie(struct iommu_domain *domain)
 }
 EXPORT_SYMBOL(iommu_put_dma_cookie);
 
+#define PCI_PASID_MAX 0x100000 /* TODO: Use per dev limits */
 /**
  * iommu_enable_pasid_dma --Enable in-kernel DMA request with PASID
  * @dev:	Device to be enabled
@@ -186,25 +187,28 @@ EXPORT_SYMBOL(iommu_put_dma_cookie);
 ioasid_t iommu_enable_pasid_dma(struct device *dev)
 {
 	struct iommu_domain *dom;
+	u32 pasid;
 
 	if (dev->pasid) {
 		dev_err(dev, "PASID DMA already enabled\n");
-		return IOASID_DMA_PASID;
+		return dev->pasid;
 	}
 	dom = iommu_get_domain_for_dev(dev);
 	if (!dom || !dom->ops)
 		return INVALID_IOASID;
 
+	pasid = ioasid_alloc(host_pasid_set, IOASID_ALLOC_BASE, PCI_PASID_MAX, dev);
+	dev_alert(dev, "%s: PASID %u\n", __func__, pasid);
 	/*
 	 * Use the reserved kernel PASID for all devices. For now,
 	 * there is no need to have different PASIDs for in-kernel use.
 	 */
-	if (!dom->ops->enable_pasid_dma || dom->ops->enable_pasid_dma(dev, IOASID_DMA_PASID))
+	if (!dom->ops->enable_pasid_dma || dom->ops->enable_pasid_dma(dev, pasid))
 		return INVALID_IOASID;
 	/* Used for device IOTLB flush */
-	dev->pasid = IOASID_DMA_PASID;
+	dev->pasid = pasid;
 
-	return IOASID_DMA_PASID;
+	return pasid;
 }
 EXPORT_SYMBOL(iommu_enable_pasid_dma);
 
@@ -232,9 +236,11 @@ int iommu_disable_pasid_dma(struct device *dev)
 	if (!dom->ops->disable_pasid_dma)
 		return -ENOTSUPP;
 
+	dev_alert(dev, "%s: PASID %u\n", __func__, dev->pasid);
 	ret = dom->ops->disable_pasid_dma(dev);
 	if (!ret)
-		dev->pasid = 0;
+		ioasid_free(host_pasid_set, dev->pasid);
+	dev->pasid = 0;
 
 	return ret;
 }
