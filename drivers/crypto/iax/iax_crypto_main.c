@@ -41,17 +41,92 @@ static DEFINE_SPINLOCK(iax_devices_lock);
 
 static struct crypto_comp *deflate_generic_tfm;
 
-static bool iax_crypto_enabled = true;
+static int iax_wqs_get(struct iax_device *iax_device)
+{
+	struct iax_wq *iax_wq;
+	int n_wqs = 0;
+	int ret = 0;
+
+	list_for_each_entry(iax_wq, &iax_device->wqs, list) {
+		mutex_lock(&iax_wq->wq->wq_lock);
+		ret = idxd_wq_alloc_resources(iax_wq->wq);
+		if (ret < 0) {
+			pr_err("%s: WQ resource alloc failed for iax device %d, wq %d: ret=%d\n", __func__, iax_device->idxd->id, iax_wq->wq->id, ret);
+			mutex_unlock(&iax_wq->wq->wq_lock);
+			return ret;
+		}
+		idxd_wq_get(iax_wq->wq);
+		mutex_unlock(&iax_wq->wq->wq_lock);
+		n_wqs++;
+	}
+
+	return n_wqs;
+}
+
+static void iax_wqs_put(struct iax_device *iax_device)
+{
+	struct iax_wq *iax_wq;
+
+	list_for_each_entry(iax_wq, &iax_device->wqs, list) {
+		mutex_lock(&iax_wq->wq->wq_lock);
+		idxd_wq_free_resources(iax_wq->wq);
+		idxd_wq_put(iax_wq->wq);
+		mutex_unlock(&iax_wq->wq->wq_lock);
+	}
+}
+
+static int iax_all_wqs_get(void)
+{
+	struct iax_device *iax_device;
+	int n_wqs = 0;
+	int ret;
+
+	spin_lock(&iax_devices_lock);
+	list_for_each_entry(iax_device, &iax_devices, list) {
+		ret = iax_wqs_get(iax_device);
+		if (ret < 0) {
+			spin_unlock(&iax_devices_lock);
+			return ret;
+		}
+		n_wqs += ret;
+	}
+	spin_unlock(&iax_devices_lock);
+
+	return n_wqs;
+}
+
+static void iax_all_wqs_put(void)
+{
+	struct iax_device *iax_device;
+
+	spin_lock(&iax_devices_lock);
+	list_for_each_entry(iax_device, &iax_devices, list)
+		iax_wqs_put(iax_device);
+	spin_unlock(&iax_devices_lock);
+}
+
+static bool iax_crypto_enabled = false;
 static int iax_crypto_enable(const char *val, const struct kernel_param *kp)
 {
 	int ret = 0;
 
-        if (val[0] == '0')
-		iax_crypto_enabled = true; /* for BKC, never allow disable */
-	else if (val[0] == '1')
-		iax_crypto_enabled = true;
-	else
-		ret = -EINVAL;
+        if (val[0] == '0') {
+		iax_crypto_enabled = false;
+		iax_all_wqs_put();
+	} else if (val[0] == '1') {
+		ret = iax_all_wqs_get();
+		if (ret == 0) {
+			pr_info("%s: no wqs available, not enabling iax_crypto\n", __func__);
+			return ret;
+		} else if (ret < 0) {
+			pr_err("%s: iax_crypto enable failed: ret=%d\n", __func__, ret);
+			return ret;
+		} else
+			iax_crypto_enabled = true;
+	} else {
+		pr_err("%s: iax_crypto failed, bad enable val: ret=%d\n", __func__, -EINVAL);
+		return -EINVAL;
+	}
 
 	pr_info("%s: iax_crypto now %s\n", __func__,
 		iax_crypto_enabled ? "ENABLED" : "DISABLED");
@@ -59,7 +134,8 @@ static int iax_crypto_enable(const char *val, const struct kernel_param *kp)
 	return ret;
 }
 static const struct kernel_param_ops enable_ops = {
-        .set = iax_crypto_enable,
+	.set = iax_crypto_enable,
+	.get = param_get_bool,
 };
 module_param_cb(iax_crypto_enable, &enable_ops, &iax_crypto_enabled, 0644);
 MODULE_PARM_DESC(iax_crypto_enable, "Enable (value = 1) or disable (value = 0) iax_crypto");
@@ -393,8 +469,6 @@ static int save_iax_wq(struct idxd_wq *wq)
 	BUG_ON(nr_iax == 0);
 
 	cpus_per_iax = nr_cpus / nr_iax;
-
-	idxd_wq_get(wq);
 out:
 	spin_unlock(&iax_devices_lock);
 
@@ -430,8 +504,6 @@ static void remove_iax_wq(struct idxd_wq *wq)
 		cpus_per_iax = nr_cpus / nr_iax;
 	else
 		cpus_per_iax = 0;
-
-	idxd_wq_put(wq);
 }
 
 static struct idxd_wq *request_iax_wq(int iax)
@@ -1015,6 +1087,7 @@ static int iax_crypto_probe(struct idxd_dev *idxd_dev)
 	struct idxd_wq *wq = idxd_dev_to_wq(idxd_dev);
 	struct idxd_device *idxd = wq->idxd;
 	struct idxd_driver_data *data = idxd->data;
+	struct device *dev = &idxd_dev->conf_dev;
 	int ret = 0;
 
 	if (idxd->state != IDXD_DEV_ENABLED)
@@ -1025,6 +1098,13 @@ static int iax_crypto_probe(struct idxd_dev *idxd_dev)
 
 	mutex_lock(&wq->wq_lock);
 
+	if (!idxd_wq_driver_name_match(wq, dev)) {
+		pr_warn("%s: wq driver_name match failed: wq driver_name %s, dev driver name %s\n", __func__, wq->driver_name, dev->driver->name);
+		idxd->cmd_status = IDXD_SCMD_WQ_NO_DRV_NAME;
+		ret = -ENODEV;
+		goto err;
+	}
+
 	wq->type = IDXD_WQT_KERNEL;
 
 	ret = __drv_enable_wq(wq);
@@ -1032,13 +1112,6 @@ static int iax_crypto_probe(struct idxd_dev *idxd_dev)
 		pr_warn("%s: enable wq %d failed: %d\n", __func__, wq->id, ret);
 		ret = -ENXIO;
 		goto err;
-	}
-
-	ret = idxd_wq_alloc_resources(wq);
-	if (ret < 0) {
-		idxd->cmd_status = IDXD_SCMD_WQ_RES_ALLOC_ERR;
-		pr_warn("%s: WQ resource alloc failed: ret=%d\n", __func__, ret);
-		goto err_alloc;
 	}
 
 	ret = idxd_wq_init_percpu_ref(wq);
@@ -1063,7 +1136,6 @@ err_save:
 	percpu_ref_exit(&wq->wq_active);
 err_ref:
 	idxd_wq_free_resources(wq);
-err_alloc:
 	__drv_disable_wq(wq);
 err:
 	wq->type = IDXD_WQT_NONE;
