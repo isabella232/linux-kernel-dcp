@@ -10,8 +10,7 @@
 
 #define INVALID_IOASID ((ioasid_t)-1)
 #define IOASID_DMA_NO_PASID	0 /* For DMA request w/o PASID */
-#define IOASID_DMA_PASID	1 /* For in-kernel DMA w/ PASID */
-#define IOASID_ALLOC_BASE	2 /* Start of the allocation */
+#define IOASID_ALLOC_BASE	1 /* Start of the allocation */
 
 typedef unsigned int ioasid_t;
 typedef ioasid_t (*ioasid_alloc_fn_t)(ioasid_t min, ioasid_t max, void *data);
@@ -165,6 +164,7 @@ extern struct ioasid_user *ioasid_user_get_from_task(struct task_struct *task);
 extern void ioasid_user_put(struct ioasid_user *iuser);
 extern void ioasid_user_for_each_id(struct ioasid_user *iuser, void *data,
 				   void (*fn)(ioasid_t id, void *data));
+extern struct ioasid_set *host_pasid_set;
 
 #else /* CONFIG_IOASID_USER */
 static inline struct ioasid_user *
