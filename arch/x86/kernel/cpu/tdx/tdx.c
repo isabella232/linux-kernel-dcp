@@ -901,30 +901,35 @@ out:
 	return ret;
 }
 
+static int tdx_load_module_boot(void)
+{
+	struct cpio_data module, sigstruct;
+
+	pr_info("Loading TDX module via P-SEAMLDR with %s and %s\n",
+		tdx_module_name, tdx_sigstruct_name);
+
+	if (!seam_get_firmware(&module, tdx_module_name) ||
+	    !seam_get_firmware(&sigstruct, tdx_sigstruct_name)) {
+		pr_err("no TDX module or sigstruct found %s/%s\n",
+		       tdx_module_name, tdx_sigstruct_name);
+		return -ENOENT;
+	}
+
+	return tdx_load_module(module.data, module.size, sigstruct.data,
+			       sigstruct.size, SEAMLDR_SCENARIO_LOAD);
+}
+
 /*
  * Look for seam module binary in built-in firmware and initrd, and load it on
  * all CPUs through P-SEAMLDR.
  */
 static int __init tdx_arch_init(void)
 {
-	struct cpio_data module, sigstruct;
 	int vmxoff_err;
 	int ret = 0;
 
 	if (!boot_cpu_has(X86_FEATURE_SEAM))
 		goto out_free;
-
-	pr_info("Loading TDX module via P-SEAMLDR with %s and %s\n",
-		tdx_module_name, tdx_sigstruct_name);
-
-	ret = -EINVAL;
-	if (!seam_get_firmware(&module, tdx_module_name) ||
-	    !seam_get_firmware(&sigstruct, tdx_sigstruct_name)) {
-		pr_err("no TDX module or sigstruct found %s/%s\n",
-				tdx_module_name, tdx_sigstruct_name);
-		ret = -ENOENT;
-		goto out_free;
-	}
 
 	ret = tdx_sys_info_alloc(&tdx_tdsysinfo, &tdx_cmrs);
 	if (ret)
@@ -953,8 +958,7 @@ static int __init tdx_arch_init(void)
 	if (ret)
 		goto out;
 
-	ret = tdx_load_module(module.data, module.size,
-			sigstruct.data, sigstruct.size, SEAMLDR_SCENARIO_LOAD);
+	ret = tdx_load_module_boot();
 	if (ret) {
 		pr_info("Failed to load TDX module.\n");
 		goto out;
