@@ -978,12 +978,16 @@ static int __init tdx_arch_init(void)
 	if (ret)
 		goto out;
 
-	ret = tdx_load_module_boot();
-	if (ret) {
-		pr_info("Failed to load TDX module.\n");
-		goto out;
+	if (!tdx_module_loaded()) {
+		pr_err("No TDX module loaded by BIOS.\n");
+
+		ret = tdx_load_module_boot();
+		if (ret) {
+			pr_info("Failed to load TDX module.\n");
+			goto out;
+		}
+		pr_info("Loaded TDX module via P-SEAMLDR.\n");
 	}
-	pr_info("Loaded TDX module via P-SEAMLDR.\n");
 	set_tdx_module_state(TDX_MODULE_LOADED);
 
 	ret = tdx_init_system();

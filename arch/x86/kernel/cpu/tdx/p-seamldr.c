@@ -484,6 +484,11 @@ int __init load_p_seamldr(void)
 	return 0;
 }
 
+bool __init tdx_module_loaded(void)
+{
+	return !!p_seamldr_info->seam_ready;
+}
+
 #ifdef CONFIG_SYSFS
 
 static struct kobject *p_seamldr_kobj;
