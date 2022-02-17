@@ -12,6 +12,15 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v3.21
+----------------
+65. Fix https://nvd.nist.gov/vuln/detail/CVE-2022-23222 (Mark Horn and Miguel Bernal Marin):
+- https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/commit/?h=linux-5.10.y&id=35ab8c9085b0af847df7fac9571ccd26d9f0f513
+- https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=e60b0d12a95dcf16a63225cead4541567f5cb517
+- https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=ca796fe66f7fceff17679ee6cc5fe4b4023de44d
+
+64. Add SPR-BKC-PC-v3.config (Jair Gonzalez)
+
 SPR-BKC-PC-v3.20
 ----------------
 63. Fix vIOMMU GIOVA by avoiding reserved IOASIDs (Jacob Pan):
@@ -23,7 +32,7 @@ SPR-BKC-PC-v3.19
 
 SPR-BKC-PC-v3.18
 ----------------
-61. Back port some high/critical Common Vulnerabilities and Exposures (CVE) fixes from upstream (Makr Horn):
+61. Back port some high/critical Common Vulnerabilities and Exposures (CVE) fixes from upstream (Mark Horn):
 - commit: ec6af094ea28f0f2dda1a6a33b14cd57e36a9755
 - commit: f9d87929d451d3e649699d0f1d74f71f77ad38f5
 - commit: dfd0743f1d9ea76931510ed150334d571fbab49d
