@@ -432,6 +432,12 @@ static int __init p_seamldr_get_info(void)
 	if (err)
 		goto out;
 
+	if (!p_seamldr_info->p_seamldr_ready) {
+		pr_err("p_seamldr_ready is not set, it seems buggy P-SEAMLDR\n");
+		err = -EINVAL;
+		goto out;
+	}
+
 	pr_info("TDX P-SEAMLDR: version 0x%0x attributes 0x%0x vendor_id 0x%x "
 		"build_date %d build_num 0x%x minor 0x%x major 0x%x.\n",
 		p_seamldr_info->version, p_seamldr_info->attributes,
