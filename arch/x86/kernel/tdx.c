@@ -883,6 +883,8 @@ bool tdx_handle_virtualization_exception(struct pt_regs *regs,
 		ret = tdx_write_msr_safe(regs->cx, regs->ax, regs->dx);
 		break;
 	case EXIT_REASON_CPUID:
+		if (regs->ax == 5)
+			trace_printk("#VE CPUID at %pS\n", (void *)regs->ip);
 		ret = tdx_handle_cpuid(regs);
 		break;
 	case EXIT_REASON_IO_INSTRUCTION:
@@ -915,8 +917,20 @@ bool tdx_handle_virtualization_exception(struct pt_regs *regs,
 	}
 
 	/* After successful #VE handling, move the IP */
-	if (ret)
+	if (ret) {
+		if (regs->flags & X86_EFLAGS_TF) {
+			/*
+			 * Single-stepping through an emulated instruction is
+			 * two-fold: handling the #VE and raising a #DB. The
+			 * former is taken care of above; this tells the #VE
+			 * trap handler to do the latter. #DB is raised after
+			 * the instruction has been executed; the IP also needs
+			 * to be advanced in this case.
+			 */
+			ret = false;
+		}
 		regs->ip += ve->instr_len;
+	}
 
 	return ret;
 }

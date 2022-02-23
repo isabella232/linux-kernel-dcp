@@ -732,6 +732,11 @@ void pci_disable_early(void)
 	pci_probe |= PCI_PROBE_NOEARLY;
 }
 
+void pci_disable_mmconf(void)
+{
+	pci_probe &= ~PCI_PROBE_MMCONF;
+}
+
 /*
  * We want to figure out which context we are running in. But the hardware
  * does not introduce a reliable way (instruction, CPUID leaf, MSR, whatever)
@@ -800,9 +805,4 @@ bool arch_support_pci_device_msi(struct pci_dev *pdev)
 	 * the bare metal.
 	 */
 	return on_bare_metal(&pdev->dev);
-}
-
-void pci_disable_mmconf(void)
-{
-	pci_probe &= ~PCI_PROBE_MMCONF;
 }
