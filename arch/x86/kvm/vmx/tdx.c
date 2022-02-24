@@ -638,6 +638,7 @@ put_tdx:
 static int tdx_vcpu_create(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_tdx *tdx = to_tdx(vcpu);
+	struct kvm_tdx *kvm_tdx = to_kvm_tdx(vcpu->kvm);
 	int ret, i;
 
 	ret = tdx_alloc_td_page(&tdx->tdvpr);
@@ -665,6 +666,9 @@ static int tdx_vcpu_create(struct kvm_vcpu *vcpu)
 	vcpu->arch.guest_state_protected =
 		!(to_kvm_tdx(vcpu->kvm)->attributes & TDX_TD_ATTRIBUTE_DEBUG);
 	vcpu->arch.root_mmu.no_prefetch = true;
+
+	if ((kvm_tdx->xfam & TDX_TD_XFAM_AMX) == TDX_TD_XFAM_AMX)
+		vcpu->arch.xfd_no_write_intercept = true;
 
 	tdx->pi_desc.nv = POSTED_INTR_VECTOR;
 	tdx->pi_desc.sn = 1;
@@ -2220,11 +2224,10 @@ static int setup_tdparams(struct kvm *kvm, struct td_params *td_params,
 		return -EOPNOTSUPP;
 	}
 
-	if (td_params->xfam & TDX_TD_XFAM_AMX) {
-		pr_warn("TD doesn't support AMX. KVM needs to save/restore "
-			"IA32_XFD, IA32_XFD_ERR properly.\n");
-		return -EOPNOTSUPP;
-	}
+	/* TDX module requires bit 17 and bit 18 are either 00b or 11b */
+	if ((td_params->xfam & TDX_TD_XFAM_AMX) &&
+	    ((td_params->xfam & TDX_TD_XFAM_AMX) != TDX_TD_XFAM_AMX))
+		return -EINVAL;
 
 	if (init_vm->tsc_khz)
 		guest_tsc_khz = init_vm->tsc_khz;
