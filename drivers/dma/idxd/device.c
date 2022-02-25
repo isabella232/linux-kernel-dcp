@@ -914,11 +914,15 @@ static int idxd_wq_config_write(struct idxd_wq *wq)
 	if (wq_dedicated(wq))
 		wq->wqcfg->mode = 1;
 
-	if (device_pasid_enabled(idxd)) {
+	/*
+	 * Enable this for shared WQ. swq does not need to program the pasid field,
+	 * but pasid_en needs to be set. Programming here prevents swq being disabled
+	 * and re-enabled, which is something to avoid.
+	 */
+	if ((is_idxd_wq_kernel(wq) && device_pasid_enabled(idxd)) ||
+	    ((is_idxd_wq_user(wq) || is_idxd_wq_mdev(wq)) &&
+	     device_user_pasid_enabled(idxd)))
 		wq->wqcfg->pasid_en = 1;
-		if (wq->type == IDXD_WQT_KERNEL && wq_dedicated(wq))
-			wq->wqcfg->pasid = idxd->pasid;
-	}
 
 	/*
 	 * Here the priv bit is set depending on the WQ type. priv = 1 if the
@@ -1120,7 +1124,6 @@ static int idxd_wq_load_config(struct idxd_wq *wq)
 
 	if (device_pasid_enabled(idxd) && wq->wqcfg->mode == 1) {
 		wq->wqcfg->pasid_en = 1;
-		wq->wqcfg->pasid = idxd->pasid;
 		wqcfg_offset = WQCFG_OFFSET(idxd, wq->id, WQCFG_PASID_IDX);
 		iowrite32(wq->wqcfg->bits[WQCFG_PASID_IDX], idxd->reg_base + wqcfg_offset);
 	}
@@ -1347,6 +1350,15 @@ int __drv_enable_wq(struct idxd_wq *wq)
 		if (wq->threshold == 0) {
 			idxd->cmd_status = IDXD_SCMD_WQ_NO_THRESH;
 			dev_dbg(dev, "Shared wq and threshold 0.\n");
+			goto err;
+		}
+	}
+
+	if (device_pasid_enabled(idxd) && is_idxd_wq_kernel(wq) && wq_dedicated(wq)) {
+		rc = idxd_wq_set_pasid(wq, idxd->pasid);
+		if (rc < 0) {
+			idxd->cmd_status = IDXD_SCMD_WQ_PASID_ERR;
+			dev_dbg(dev, "wq set PASID failed.\n");
 			goto err;
 		}
 	}
