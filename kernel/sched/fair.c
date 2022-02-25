@@ -4224,6 +4224,27 @@ place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int initial)
 	se->vruntime = max_vruntime(se->vruntime, vruntime);
 }
 
+static void place_entity_migrate(struct cfs_rq *cfs_rq, struct sched_entity *se)
+{
+	if (!sched_feat(PLACE_MIGRATE))
+		return;
+
+	if (cfs_rq->nr_running < se->migrated) {
+		/*
+		 * Migrated to a shorter runqueue, go first because
+		 * we were under-served on the old runqueue.
+		 */
+		se->vruntime = cfs_rq->min_vruntime;
+		return;
+	}
+
+	/*
+	 * Migrated to a longer runqueue, go last because
+	 * we got over-served on the old runqueue.
+	 */
+	se->vruntime = cfs_rq->min_vruntime + sched_vslice(cfs_rq, se);
+}
+
 static void check_enqueue_throttle(struct cfs_rq *cfs_rq);
 
 static inline void check_schedstat_required(void)
@@ -4317,6 +4338,8 @@ enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 
 	if (flags & ENQUEUE_WAKEUP)
 		place_entity(cfs_rq, se, 0);
+	else if (se->migrated)
+		place_entity_migrate(cfs_rq, se);
 
 	check_schedstat_required();
 	update_stats_enqueue(cfs_rq, se, flags);
@@ -6979,6 +7002,7 @@ static void detach_entity_cfs_rq(struct sched_entity *se);
  */
 static void migrate_task_rq_fair(struct task_struct *p, int new_cpu)
 {
+	struct sched_entity *se = &p->se;
 	/*
 	 * As blocked tasks retain absolute vruntime the migration needs to
 	 * deal with this by subtracting the old and adding the new
@@ -7011,7 +7035,7 @@ static void migrate_task_rq_fair(struct task_struct *p, int new_cpu)
 		 * rq->lock and can modify state directly.
 		 */
 		lockdep_assert_rq_held(task_rq(p));
-		detach_entity_cfs_rq(&p->se);
+		detach_entity_cfs_rq(se);
 
 	} else {
 		/*
@@ -7022,14 +7046,15 @@ static void migrate_task_rq_fair(struct task_struct *p, int new_cpu)
 		 * wakee task is less decayed, but giving the wakee more load
 		 * sounds not bad.
 		 */
-		remove_entity_load_avg(&p->se);
+		remove_entity_load_avg(se);
 	}
 
 	/* Tell new CPU we are migrated */
-	p->se.avg.last_update_time = 0;
+	se->avg.last_update_time = 0;
 
 	/* We have migrated, no longer consider this task hot */
-	p->se.migrated = 1;
+	for_each_sched_entity(se)
+		se->migrated = READ_ONCE(cfs_rq_of(se)->nr_running) + !se->on_rq;
 
 	update_scan_period(p, new_cpu);
 }
