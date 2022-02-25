@@ -12,6 +12,11 @@ SPR feature repositories
 Code and descriptions in each repository must only contain public information.
 ------------------------------------------------------------------------------
 
+SPR-BKC-PC-v4.2
+----------------
+66. Updated TDX guest (Kirill A. Shutemov):
+- https://github.com/intel/tdx.git tdx-guest-v5.15-4
+
 SPR-BKC-PC-v3.21
 ----------------
 65. Fix https://nvd.nist.gov/vuln/detail/CVE-2022-23222 (Mark Horn and Miguel Bernal Marin):
