@@ -374,16 +374,25 @@ int idxd_wq_abort(struct idxd_wq *wq, u32 *status)
 }
 EXPORT_SYMBOL_GPL(idxd_wq_abort);
 
-int idxd_wq_set_pasid(struct idxd_wq *wq, int pasid)
+static void __idxd_wq_set_priv_locked(struct idxd_wq *wq)
 {
 	struct idxd_device *idxd = wq->idxd;
-	int rc;
 	union wqcfg wqcfg;
 	unsigned int offset;
 
-	rc = idxd_wq_disable(wq, false, NULL);
-	if (rc < 0)
-		return rc;
+	offset = WQCFG_OFFSET(idxd, wq->id, WQCFG_PRIV_IDX);
+	spin_lock(&idxd->dev_lock);
+	wqcfg.bits[WQCFG_PRIV_IDX] = ioread32(idxd->reg_base + offset);
+	wqcfg.priv = 1;
+	iowrite32(wqcfg.bits[WQCFG_PRIV_IDX], idxd->reg_base + offset);
+	spin_unlock(&idxd->dev_lock);
+}
+
+static void __idxd_wq_set_pasid_locked(struct idxd_wq *wq, int pasid)
+{
+	struct idxd_device *idxd = wq->idxd;
+	union wqcfg wqcfg;
+	unsigned int offset;
 
 	offset = WQCFG_OFFSET(idxd, wq->id, WQCFG_PASID_IDX);
 	spin_lock(&idxd->dev_lock);
@@ -392,6 +401,17 @@ int idxd_wq_set_pasid(struct idxd_wq *wq, int pasid)
 	wqcfg.pasid = pasid;
 	iowrite32(wqcfg.bits[WQCFG_PASID_IDX], idxd->reg_base + offset);
 	spin_unlock(&idxd->dev_lock);
+}
+
+int idxd_wq_set_pasid(struct idxd_wq *wq, int pasid)
+{
+	int rc;
+
+	rc = idxd_wq_disable(wq, false, NULL);
+	if (rc < 0)
+		return rc;
+
+	__idxd_wq_set_pasid_locked(wq, pasid);
 
 	rc = idxd_wq_enable(wq, NULL);
 	if (rc < 0)
@@ -1228,9 +1248,11 @@ static void idxd_device_set_perm_entry(struct idxd_device *idxd, int idx)
 {
 	union msix_perm mperm;
 
+	dev_dbg(&idxd->pdev->dev, "set MSIX_PERM entry for idx %d\n", idx);
 	if (!device_pasid_enabled(idxd))
 		return;
 
+	dev_dbg(&idxd->pdev->dev, "pasid %u for MSIX_PERM\n", idxd->pasid);
 	mperm.bits = 0;
 	mperm.pasid = idxd->pasid;
 	mperm.pasid_en = 1;
@@ -1239,6 +1261,7 @@ static void idxd_device_set_perm_entry(struct idxd_device *idxd, int idx)
 
 static void idxd_device_clear_perm_entry(struct idxd_device *idxd, int idx)
 {
+	dev_dbg(&idxd->pdev->dev, "clear MSIX_PERM entry for idx %d\n", idx);
 	iowrite32(0, idxd->reg_base + idxd->msix_perm_offset + idx * 8);
 }
 
@@ -1269,6 +1292,8 @@ int idxd_wq_enable_irq(struct idxd_wq *wq)
 	int rc;
 
 	ie = &idxd->irq_entries[wq->id + 1];
+
+	dev_dbg(dev, "wq %d enabling ie %d irq\n", wq->id, ie->id);
 
 	idxd_device_set_perm_entry(idxd, ie->id);
 	rc = request_threaded_irq(ie->vector, NULL, idxd_wq_thread, 0, "idxd-portal", ie);
@@ -1354,13 +1379,11 @@ int __drv_enable_wq(struct idxd_wq *wq)
 		}
 	}
 
-	if (device_pasid_enabled(idxd) && is_idxd_wq_kernel(wq) && wq_dedicated(wq)) {
-		rc = idxd_wq_set_pasid(wq, idxd->pasid);
-		if (rc < 0) {
-			idxd->cmd_status = IDXD_SCMD_WQ_PASID_ERR;
-			dev_dbg(dev, "wq set PASID failed.\n");
-			goto err;
-		}
+
+	if (is_idxd_wq_kernel(wq)) {
+		if (device_pasid_enabled(idxd) && wq_dedicated(wq))
+			__idxd_wq_set_pasid_locked(wq, idxd->pasid);
+		__idxd_wq_set_priv_locked(wq);
 	}
 
 	rc = 0;

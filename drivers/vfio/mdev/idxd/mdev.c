@@ -181,19 +181,24 @@ int idxd_mdev_get_host_pasid(struct mdev_device *mdev, u32 gpasid, u32 *pasid)
 	struct mm_struct *mm;
 
 	mm = get_task_mm(current);
-	if (!mm)
+	if (!mm) {
+		dev_warn(mdev_dev(mdev), "%s no mm!\n", __func__);
 		return -ENXIO;
+	}
 
 	ioasid_set = ioasid_find_mm_set(mm);
 	if (!ioasid_set) {
 		mmput(mm);
+		dev_warn(mdev_dev(mdev), "%s no ioasid_set!\n", __func__);
 		return -ENXIO;
 	}
 
 	*pasid = ioasid_find_by_spid(ioasid_set, gpasid, true);
 	mmput(mm);
-	if (*pasid == INVALID_IOASID)
+	if (*pasid == INVALID_IOASID) {
+		dev_warn(mdev_dev(mdev), "%s invalid ioasid by spid!\n", __func__);
 		return -ENXIO;
+	}
 
 	return 0;
 }
@@ -1480,6 +1485,8 @@ static int idxd_vdcm_msix_set_vector_signal(struct vdcm_idxd *vidxd, int vector,
 	char *name;
 	u32 pasid, auxval;
 	int irq, rc;
+	u8 *bar0 = vidxd->bar0;
+	u32 msix_perm;
 
 	dev_dbg(dev, "%s: set signal %d fd: %d\n", __func__, vector, fd);
 
@@ -1523,6 +1530,7 @@ static int idxd_vdcm_msix_set_vector_signal(struct vdcm_idxd *vidxd, int vector,
 					vfio_pdev->ctx[vector].producer.token, rc);
 				vfio_pdev->ctx[vector].producer.token = NULL;
 			}
+			dev_dbg(dev, "%s: updated irq %d\n", __func__, irq);
 		}
 		return 0;
 	}
@@ -1550,13 +1558,31 @@ static int idxd_vdcm_msix_set_vector_signal(struct vdcm_idxd *vidxd, int vector,
 		return 0;
 	}
 
-	rc = idxd_mdev_get_pasid(mdev, &pasid);
-	if (rc < 0) {
-		dev_warn(dev, "%s unable to get pasid, failing\n", __func__);
-		goto err;
-	}
+	/*
+	 * This only points to MSIX entry 1, which is fine for now.
+	 */
+	msix_perm = *(u32 *)(bar0 + VIDXD_MSIX_PERM_OFFSET + 8 * vector);
+	dev_dbg(dev, "MSIX PERM: %#x\n", msix_perm);
+	if (!(msix_perm & BIT(3))) {
+		rc = idxd_mdev_get_pasid(mdev, &pasid);
+		if (rc < 0) {
+			dev_warn(dev, "%s unable to get pasid, failing\n", __func__);
+			goto err;
+		}
 
-	dev_dbg(dev, "%s: pasid: %d\n", __func__, pasid);
+		dev_dbg(dev, "%s: pasid: %d\n", __func__, pasid);
+	} else {
+		u32 gpasid;
+
+		gpasid = (msix_perm & GENMASK(31, 12)) >> 12;
+		rc = idxd_mdev_get_host_pasid(vidxd->ivdev.mdev, gpasid, &pasid);
+		if (rc < 0) {
+			dev_warn(dev, "%s guest pasid %u translate failure\n", __func__, gpasid);
+			goto err;
+		}
+		dev_dbg(dev, "%s: guest pasid: %u host pasid: %u\n",
+			__func__, gpasid, pasid);
+	}
 
 	auxval = ims_ctrl_pasid_aux(pasid, true);
 	rc = irq_set_auxdata(irq, IMS_AUXDATA_CONTROL_WORD, auxval);
@@ -1579,6 +1605,8 @@ static int idxd_vdcm_msix_set_vector_signal(struct vdcm_idxd *vidxd, int vector,
 			vfio_pdev->ctx[vector].producer.token, rc);
 		vfio_pdev->ctx[vector].producer.token = NULL;
 	}
+
+	dev_dbg(dev, "%s: irq %d set\n", __func__, irq);
 
 	return 0;
 

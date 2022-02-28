@@ -83,6 +83,8 @@ static int vidxd_set_ims_pasid(struct vdcm_idxd *vidxd, int index, bool pasid_en
 		rc = idxd_mdev_get_pasid(vidxd->ivdev.mdev, &pasid);
 	if (rc < 0)
 		return rc;
+	dev_dbg(dev, "IMS entry: %d pasid_en: %u guest pasid %u host pasid: %u\n",
+		index, pasid_en, gpasid, pasid);
 	auxval = ims_ctrl_pasid_aux(pasid, 1);
 	return irq_set_auxdata(irq, IMS_AUXDATA_CONTROL_WORD, auxval);
 
@@ -97,12 +99,16 @@ int vidxd_mmio_write(struct vdcm_idxd *vidxd, u64 pos, void *buf, unsigned int s
 	dev_dbg(dev, "vidxd mmio W %d %x %x: %llx\n", vidxd->wq->id, size,
 		offset, get_reg_val(buf, size));
 
-	if (((size & (size - 1)) != 0) || (offset & (size - 1)) != 0)
+	if (((size & (size - 1)) != 0) || (offset & (size - 1)) != 0) {
+		dev_warn(dev, "XXX %s out of bounds\n", __func__);
 		return -EINVAL;
+	}
 
 	/* If we don't limit this, we potentially can write out of bound */
-	if (size > sizeof(u32))
+	if (size > sizeof(u32)) {
+		dev_warn(dev, "XXX %s size greater than u32\n", __func__);
 		return -EINVAL;
+	}
 
 	switch (offset) {
 	case IDXD_GENCFG_OFFSET ... IDXD_GENCFG_OFFSET + 3:
@@ -212,9 +218,8 @@ int vidxd_mmio_write(struct vdcm_idxd *vidxd, u64 pos, void *buf, unsigned int s
 	}
 
 	case VIDXD_MSIX_PERM_OFFSET ...  VIDXD_MSIX_PERM_OFFSET + VIDXD_MSIX_PERM_TBL_SZ - 1: {
-		int index, rc;
+		int index;
 		u32 msix_perm;
-		u32 pasid, pasid_en;
 
 		if (size != sizeof(u32) || !IS_ALIGNED(offset, sizeof(u64))) {
 			dev_warn(dev, "XXX unaligned MSIX PERM access\n");
@@ -224,30 +229,8 @@ int vidxd_mmio_write(struct vdcm_idxd *vidxd, u64 pos, void *buf, unsigned int s
 		index = (offset - VIDXD_MSIX_PERM_OFFSET) / 8;
 		msix_perm = get_reg_val(buf, sizeof(u32)) & 0xfffff00d;
 		memcpy(bar0 + offset, buf, size);
-		/*
-		 * index 0 for MSIX is emulated for misc interrupts. The MSIX indices from
-		 * 1...N are backed by IMS. Here we would pass in index - 1, which is 0 for
-		 * the first one
-		 */
-		if (index > 0) {
-			pasid_en = (msix_perm >> 3) & 1;
-
-			/*
-			 * When vSVA is turned on, this is the only place where the guest PASID
-			 * can be retrieved by the host. The guest driver writes the PASID to the
-			 * MSIX permission entry. In turn the vdcm will translate this to the
-			 * IMS entry.
-			 */
-
-			if (pasid_en) {
-				pasid = (msix_perm >> 12) & 0xfffff;
-				if (!pasid)
-					break;
-			}
-			rc = vidxd_set_ims_pasid(vidxd, index - 1, pasid_en, pasid);
-			if (rc < 0)
-				return rc;
-		}
+		dev_dbg(dev, "%s writing to MSIX_PERM: %#x offset %#x index: %u\n",
+			__func__, msix_perm, offset, index);
 		break;
 	}
 	} /* offset */
@@ -1199,7 +1182,7 @@ static void vidxd_wq_enable(struct vdcm_idxd *vidxd, int wq_id)
 	wq_pasid_enable = vwqcfg->pasid_en;
 
 	if (wq_dedicated(wq)) {
-		u32 wq_pasid;
+		u32 wq_pasid = ~0U;
 		bool priv;
 
 		if (wq_pasid_enable) {
@@ -1208,9 +1191,12 @@ static void vidxd_wq_enable(struct vdcm_idxd *vidxd, int wq_id)
 			priv = vwqcfg->priv;
 			gpasid = vwqcfg->pasid;
 			rc = idxd_mdev_get_host_pasid(mdev, gpasid, &wq_pasid);
+			dev_dbg(dev, "guest pasid enabled, translate gpasid: %d\n", gpasid);
 		} else {
 			priv = 1;
 			rc = idxd_mdev_get_pasid(mdev, &wq_pasid);
+			dev_dbg(dev, "guest pasid disabled, using default host pasid: %u\n",
+				wq_pasid);
 		}
 		if (rc < 0) {
 			dev_err(dev, "idxd pasid setup failed wq %d: %d\n", wq->id, rc);
