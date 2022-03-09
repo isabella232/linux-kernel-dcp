@@ -94,6 +94,7 @@ int seamldr_install(phys_addr_t seamldr_params)
  * that iret loads the intended segment selectors.
  */
 extern unsigned long np_seamldr_saved_cr4 __initdata;
+extern unsigned long np_seamldr_saved_cr0 __initdata;
 
 static int __init np_seamldr_die_notify(struct notifier_block *nb,
 					unsigned long cmd, void *args)
@@ -119,15 +120,20 @@ static int __init np_seamldr_die_notify(struct notifier_block *nb,
 	pr_err("np_seamldr_saved_cr4 0x%lx\n", np_seamldr_saved_cr4);
 
 	if (cmd == DIE_TRAP && die_args->trapnr == X86_TRAP_UD &&
-	    np_seamldr_saved_cr4) {
+	    (np_seamldr_saved_cr4 || np_seamldr_saved_cr0)) {
 		pr_err("rdfsbase\n");
 		/*
 		 * #UD on rdfsbase/wrfsbase due to CR4.FSGSBASE = 0. Forcibly
 		 * restore CR4 to the saved one.
 		 * cr4_set_bits() doesn't work as it checks shadowed CR4 because
 		 * The NP-SEAMLDR clobbers CR4 outside of shadowed CR4.
+		 * We restore CR0 then CR4 to cover CET feature, which request
+		 * CR0.WP = 1 before setting CR4.CET = 1
 		 */
-		__write_cr4(np_seamldr_saved_cr4);
+		if (np_seamldr_saved_cr0)
+			write_cr0(np_seamldr_saved_cr0);
+		if (np_seamldr_saved_cr4)
+			__write_cr4(np_seamldr_saved_cr4);
 		/*
 		 * Saved CS is clobbered value by NP-SEAMLDR.  Store correct
 		 * value.
@@ -149,7 +155,7 @@ static int __init np_seamldr_die_notify(struct notifier_block *nb,
 	}
 
 	if (cmd == DIE_GPF && die_args->trapnr == X86_TRAP_GP &&
-	    np_seamldr_saved_cr4) {
+	    (np_seamldr_saved_cr4 || np_seamldr_saved_cr0)) {
 		/*
 		 * iretq in nmi_restore causes #GP due to clobbered %CS/%SS.
 		 * Correct them.

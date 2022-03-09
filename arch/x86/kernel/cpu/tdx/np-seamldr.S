@@ -56,6 +56,8 @@
  *   rflags,
  * Restore segment registers. don't save them because they have known values.
  *   DS, ES, CS, SS
+ * Note that the CR4.CET depends on CR0.WP, so we need restore CR0 then CR4,
+ * otherwise #GP when we restore CR4.CET if CR0.WP = 0
  */
 	.text
 	__INIT
@@ -90,18 +92,19 @@ SYM_FUNC_START(np_seamldr_launch)
 	pushq	%r11
 	andq	$~X86_CR3_PCID_MASK, %r11
 
-	/* EnterACCS and the NP-SEAMLDR modify CR0 and CR4. */
-	movq	%cr0, %rax
-	pushq	%rax
+	/* EnterACCS and the NP-SEAMLDR modify CR4 and CR0. */
 	movq	%cr4, %rax
 	/*
-	 * If exception or interrupt happens before restoring CR4, fsgsbase
-	 * feature is disabled.  The handler needs to restore CR4 from the
+	 * If exception or interrupt happens before restoring CR0/CR4, fsgsbase
+	 * feature is disabled.  The handler needs to restore CR0/CR4 from the
 	 * global variable.
 	 */
 	movq	%rax, np_seamldr_saved_cr4(%rip)
+	movq	%cr0, %rax
+	movq	%rax, np_seamldr_saved_cr0(%rip)
 
 	/* Enable CR4.SMXE for GETSEC. */
+	movq	%cr4, %rax
 	orq	$X86_CR4_SMXE, %rax
 	movq	%rax, %cr4
 
@@ -208,13 +211,15 @@ SYM_FUNC_START(np_seamldr_launch)
 	UNWIND_HINT sp_reg=ORC_REG_SP sp_offset=8*9 type=UNWIND_HINT_TYPE_CALL
 
 	/* Restore CPU status, in reverse order of saving. */
+	movq	np_seamldr_saved_cr0(%rip), %rax
+	movq	%rax, %cr0
+	movq	$0, np_seamldr_saved_cr0(%rip)
 
 	movq	np_seamldr_saved_cr4(%rip), %rax
 	/* This changes CR4.PCIDE from 0 to 1, CR3.PCID must be 0.  Or #GP. */
 	movq	%rax, %cr4
 	movq	$0, np_seamldr_saved_cr4(%rip)
-	popq	%rax
-	movq	%rax, %cr0
+
 	popq	%rax
 	movq	%rax, %cr3	/* Restore CR3.PCID */
 
@@ -275,3 +280,4 @@ saved_rbp:
 	.quad	0
 
 SYM_DATA(np_seamldr_saved_cr4, .quad 0)
+SYM_DATA(np_seamldr_saved_cr0, .quad 0)
