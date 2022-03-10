@@ -1190,8 +1190,15 @@ static void vidxd_wq_enable(struct vdcm_idxd *vidxd, int wq_id)
 
 			priv = vwqcfg->priv;
 			gpasid = vwqcfg->pasid;
-			rc = idxd_mdev_get_host_pasid(mdev, gpasid, &wq_pasid);
-			dev_dbg(dev, "guest pasid enabled, translate gpasid: %d\n", gpasid);
+
+			if (gpasid == 0) {
+				rc = idxd_mdev_get_pasid(mdev, &wq_pasid);
+				dev_dbg(dev, "shared wq, pasid 0, use default host: %u\n",
+					wq_pasid);
+			} else {
+				rc = idxd_mdev_get_host_pasid(mdev, gpasid, &wq_pasid);
+				dev_dbg(dev, "guest pasid enabled, translate gpasid: %d\n", gpasid);
+			}
 		} else {
 			priv = 1;
 			rc = idxd_mdev_get_pasid(mdev, &wq_pasid);

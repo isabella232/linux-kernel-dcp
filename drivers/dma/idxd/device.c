@@ -443,6 +443,7 @@ static void __idxd_wq_set_priv_locked(struct idxd_wq *wq)
 	spin_lock(&idxd->dev_lock);
 	wqcfg.bits[WQCFG_PRIV_IDX] = ioread32(idxd->reg_base + offset);
 	wqcfg.priv = 1;
+	wq->wqcfg->bits[WQCFG_PRIV_IDX] = wqcfg.bits[WQCFG_PRIV_IDX];
 	iowrite32(wqcfg.bits[WQCFG_PRIV_IDX], idxd->reg_base + offset);
 	spin_unlock(&idxd->dev_lock);
 }
@@ -458,6 +459,7 @@ static void __idxd_wq_set_pasid_locked(struct idxd_wq *wq, int pasid)
 	wqcfg.bits[WQCFG_PASID_IDX] = ioread32(idxd->reg_base + offset);
 	wqcfg.pasid_en = 1;
 	wqcfg.pasid = pasid;
+	wq->wqcfg->bits[WQCFG_PASID_IDX] = wqcfg.bits[WQCFG_PASID_IDX];
 	iowrite32(wqcfg.bits[WQCFG_PASID_IDX], idxd->reg_base + offset);
 	spin_unlock(&idxd->dev_lock);
 }
@@ -977,7 +979,7 @@ static int idxd_wq_config_write(struct idxd_wq *wq)
 	 */
 	for (i = 0; i < WQCFG_STRIDES(idxd); i++) {
 		wq_offset = WQCFG_OFFSET(idxd, wq->id, i);
-		wq->wqcfg->bits[i] = ioread32(idxd->reg_base + wq_offset);
+		wq->wqcfg->bits[i] |= ioread32(idxd->reg_base + wq_offset);
 	}
 
 	if (wq->size == 0 && wq->type != IDXD_WQT_NONE)
@@ -992,16 +994,6 @@ static int idxd_wq_config_write(struct idxd_wq *wq)
 	/* byte 8-11 */
 	if (wq_dedicated(wq))
 		wq->wqcfg->mode = 1;
-
-	/*
-	 * Enable this for shared WQ. swq does not need to program the pasid field,
-	 * but pasid_en needs to be set. Programming here prevents swq being disabled
-	 * and re-enabled, which is something to avoid.
-	 */
-	if ((is_idxd_wq_kernel(wq) && device_pasid_enabled(idxd)) ||
-	    ((is_idxd_wq_user(wq) || is_idxd_wq_mdev(wq)) &&
-	     device_user_pasid_enabled(idxd)))
-		wq->wqcfg->pasid_en = 1;
 
 	/*
 	 * Here the priv bit is set depending on the WQ type. priv = 1 if the
@@ -1200,12 +1192,6 @@ static int idxd_wq_load_config(struct idxd_wq *wq)
 
 	if (wq->wqcfg->bof)
 		set_bit(WQ_FLAG_BLOCK_ON_FAULT, &wq->flags);
-
-	if (device_pasid_enabled(idxd) && wq->wqcfg->mode == 1) {
-		wq->wqcfg->pasid_en = 1;
-		wqcfg_offset = WQCFG_OFFSET(idxd, wq->id, WQCFG_PASID_IDX);
-		iowrite32(wq->wqcfg->bits[WQCFG_PASID_IDX], idxd->reg_base + wqcfg_offset);
-	}
 
 	if (wq->wqcfg->mode_support)
 		set_bit(WQ_FLAG_MODE_1, &wq->flags);
@@ -1438,11 +1424,27 @@ int __drv_enable_wq(struct idxd_wq *wq)
 		}
 	}
 
+	/*
+	 * In the event that the WQ is configurable for pasid and priv bits.
+	 * For kernel wq, the driver should setup the pasid, pasid_en, and priv bit.
+	 * However, for non-kernel wq, the driver should only set the pasid_en bit for
+	 * shared wq. A dedicated wq will configure pasid and pasid_en later on so
+	 * there is no need to setup.
+	 */
+	if (test_bit(IDXD_FLAG_CONFIGURABLE, &idxd->flags) ||
+	    test_bit(WQ_FLAG_MODE_1, &wq->flags)) {
+		if (is_idxd_wq_kernel(wq)) {
+			if (device_pasid_enabled(idxd)) {
+				u32 pasid = wq_dedicated(wq) ? idxd->pasid : 0;
 
-	if (is_idxd_wq_kernel(wq)) {
-		if (device_pasid_enabled(idxd) && wq_dedicated(wq))
-			__idxd_wq_set_pasid_locked(wq, idxd->pasid);
-		__idxd_wq_set_priv_locked(wq);
+				__idxd_wq_set_pasid_locked(wq, pasid);
+			}
+			__idxd_wq_set_priv_locked(wq);
+		} else {
+			if (device_user_pasid_enabled(idxd) && wq_shared(wq))
+				__idxd_wq_set_pasid_locked(wq, 0);
+		}
+
 	}
 
 	rc = 0;
