@@ -58,10 +58,6 @@ extern u32 pkrs_init_value;
 void pkrs_save_irq(struct pt_regs *regs);
 void pkrs_restore_irq(struct pt_regs *regs);
 
-bool pks_enabled(void);
-void pks_mk_noaccess(int pkey);
-void pks_mk_readonly(int pkey);
-void pks_mk_readwrite(int pkey);
 u32 get_current_pkrs(void);
 
 #else /* !CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS */
@@ -69,14 +65,6 @@ u32 get_current_pkrs(void);
 static inline void pkrs_save_irq(struct pt_regs *regs) { }
 static inline void pkrs_restore_irq(struct pt_regs *regs) { }
 
-static inline bool pks_enabled(void)
-{
-	return false;
-}
-
-static inline void pks_mk_noaccess(int pkey) {}
-static inline void pks_mk_readonly(int pkey) {}
-static inline void pks_mk_readwrite(int pkey) {}
 static inline u32 get_current_pkrs(void)
 {
 	return 0;
