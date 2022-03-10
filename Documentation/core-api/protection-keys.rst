@@ -157,7 +157,6 @@ this additional protection to the page.
         void pks_mk_noaccess(int pkey);
         void pks_mk_readonly(int pkey);
         void pks_mk_readwrite(int pkey);
-        void pks_abandon_protections(int pkey);
 
 pks_enabled() allows users to know if PKS is configured and available on the
 current running system.
@@ -170,11 +169,7 @@ protections for the domain identified by the pkey parameter.  3 states are
 available: pks_mk_noaccess(), pks_mk_readonly(), and pks_mk_readwrite() which
 set the access to none, read, and read/write respectively.
 
-The interface sets Access Disabled for all keys not in use.  The
-pks_abandon_protections() call reduces the protections for the specified key to
-be fully accessible thus abandoning the protections of the key.  There is no
-way to reverse this.  As such pks_abandon_protections() is intended to provide
-a 'relief valve' if the PKS protections should prove too restrictive.
+The interface sets (Access Disabled (AD=1)) for all keys not in use.
 
 It should be noted that the underlying WRMSR(MSR_IA32_PKRS) is not serializing
 but still maintains ordering properties similar to WRPKRU.  Thus it is safe to

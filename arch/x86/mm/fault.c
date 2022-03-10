@@ -1161,20 +1161,16 @@ static void
 do_kern_addr_fault(struct pt_regs *regs, unsigned long hw_error_code,
 		   unsigned long address)
 {
-	if (hw_error_code & X86_PF_PK) {
-		/*
-		 * X86_PF_PK (Protection key exceptions) may occur on kernel
-		 * addresses when PKS (PKeys Supervisor) is enabled.
-		 *
-		 * However, if PKS is not enabled WARN if this exception is
-		 * seen because there are no user pages in the kernel portion
-		 * of the address space.
-		 */
-		WARN_ON_ONCE(!cpu_feature_enabled(X86_FEATURE_PKS));
-
-		if (handle_abandoned_pks_value(regs))
-			return;
-	}
+	/*
+	 * X86_PF_PK (Protection key exceptions) may occur on kernel addresses
+	 * when PKS (PKeys Supervisor) is enabled.
+	 *
+	 * However, if PKS is not enabled WARN if this exception is seen
+	 * because there are no user pages in the kernel portion of the address
+	 * space.
+	 */
+	WARN_ON_ONCE(!cpu_feature_enabled(X86_FEATURE_PKS) &&
+		     (hw_error_code & X86_PF_PK));
 
 #ifdef CONFIG_X86_32
 	/*
