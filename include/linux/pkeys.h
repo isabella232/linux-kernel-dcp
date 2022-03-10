@@ -55,15 +55,9 @@ enum pks_pkey_consumers {
 };
 extern u32 pkrs_init_value;
 
-void pkrs_save_irq(struct pt_regs *regs);
-void pkrs_restore_irq(struct pt_regs *regs);
-
 u32 get_current_pkrs(void);
 
 #else /* !CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS */
-
-static inline void pkrs_save_irq(struct pt_regs *regs) { }
-static inline void pkrs_restore_irq(struct pt_regs *regs) { }
 
 static inline u32 get_current_pkrs(void)
 {
