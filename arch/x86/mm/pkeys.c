@@ -497,7 +497,7 @@ EXPORT_SYMBOL_GPL(pks_update_exception);
 
 u32 get_current_pkrs(void)
 {
-	return 0;
+	return this_cpu_read(pkrs_cache);
 }
 EXPORT_SYMBOL_GPL(get_current_pkrs);
 

@@ -13,6 +13,7 @@
 bool pks_available(void);
 void pks_update_protection(u8 pkey, u8 protection);
 void pks_update_exception(struct pt_regs *regs, u8 pkey, u8 protection);
+u32 get_current_pkrs(void);
 
 /**
  * pks_set_noaccess() - Disable all access to the domain
@@ -54,6 +55,11 @@ static inline void pks_update_exception(struct pt_regs *regs,
 					u8 pkey,
 					u8 protection)
 { }
+
+static inline u32 get_current_pkrs(void)
+{
+	return 0;
+}
 
 #endif /* CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS */
 

@@ -48,17 +48,4 @@ static inline bool arch_pkeys_enabled(void)
 
 #endif /* ! CONFIG_ARCH_HAS_PKEYS */
 
-#ifdef CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS
-
-u32 get_current_pkrs(void);
-
-#else /* !CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS */
-
-static inline u32 get_current_pkrs(void)
-{
-	return 0;
-}
-
-#endif /* CONFIG_ARCH_ENABLE_SUPERVISOR_PKEYS */
-
 #endif /* _LINUX_PKEYS_H */
