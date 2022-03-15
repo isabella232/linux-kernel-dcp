@@ -846,7 +846,8 @@ static void tdx_restore_host_xsave_state(struct kvm_vcpu *vcpu)
 		xsetbv(XCR_XFEATURE_ENABLED_MASK, host_xcr0);
 	if (static_cpu_has(X86_FEATURE_XSAVES) &&
 	    /* PT can be exposed to TD guest regardless of KVM's XSS support */
-	    host_xss != (kvm_tdx->xfam & (supported_xss | XFEATURE_MASK_PT)))
+	    host_xss != (kvm_tdx->xfam & (supported_xss | XFEATURE_MASK_PT |
+					  TDX_TD_XFAM_CET)))
 		wrmsrl(MSR_IA32_XSS, host_xss);
 	if (static_cpu_has(X86_FEATURE_PKU) &&
 	    (kvm_tdx->xfam & XFEATURE_MASK_PKRU))
@@ -2189,8 +2190,17 @@ static int setup_tdparams(struct kvm *kvm, struct td_params *td_params,
 		guest_supported_xss = (entry->ecx | ((u64)entry->edx << 32));
 	else
 		guest_supported_xss = 0;
+
+	/*
+	 * TDX module requires bit 11 and bit 12 are either 00b or 11b but current
+	 * KVM only support CET_U in supported_xss. Thus in TD guest, forcefully set
+	 * both bits if either of them is required.
+	 */
+	if (guest_supported_xss & TDX_TD_XFAM_CET)
+		guest_supported_xss |= TDX_TD_XFAM_CET;
+
 	/* PT can be exposed to TD guest regardless of KVM's XSS support */
-	guest_supported_xss &= (supported_xss | XFEATURE_MASK_PT);
+	guest_supported_xss &= (supported_xss | XFEATURE_MASK_PT | TDX_TD_XFAM_CET);
 
 	max_pa = 36;
 	entry = tdx_find_cpuid_entry(kvm_tdx, 0x80000008, 0);
@@ -2227,6 +2237,11 @@ static int setup_tdparams(struct kvm *kvm, struct td_params *td_params,
 	/* TDX module requires bit 17 and bit 18 are either 00b or 11b */
 	if ((td_params->xfam & TDX_TD_XFAM_AMX) &&
 	    ((td_params->xfam & TDX_TD_XFAM_AMX) != TDX_TD_XFAM_AMX))
+		return -EINVAL;
+
+	/* TDX module requires bit 11 and bit 12 are either 00b or 11b */
+	if ((td_params->xfam & TDX_TD_XFAM_CET) &&
+	    ((td_params->xfam & TDX_TD_XFAM_CET) != TDX_TD_XFAM_CET))
 		return -EINVAL;
 
 	if (init_vm->tsc_khz)

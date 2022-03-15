@@ -249,6 +249,7 @@ struct tdx_cpuid_value {
 
 #define TDX_TD_XFAM_LBR		BIT_ULL(15)
 #define TDX_TD_XFAM_AMX		(BIT_ULL(17) | BIT_ULL(18))
+#define TDX_TD_XFAM_CET		(BIT_ULL(11) | BIT_ULL(12))
 
 /*
  * TD_PARAMS is provided as an input to TDH_MNG_INIT, the size of which is 1024B.
