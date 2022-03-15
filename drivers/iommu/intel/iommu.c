@@ -5911,6 +5911,8 @@ static int intel_iommu_set_hwdbm(struct iommu_domain *domain, bool enable,
 	}
 
 out:
+	spin_unlock_irqrestore(&device_domain_lock, flags);
+
 	return ret;
 }
 
