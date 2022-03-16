@@ -109,7 +109,11 @@
 #define TDX_GUEST_EVENT_NOTIFY_VECTOR	0xec
 #endif
 
-#define LOCAL_TIMER_VECTOR		0xeb
+#if defined(CONFIG_HAVE_KVM) && defined(CONFIG_INTEL_TDX_HOST)
+#define TDX_GUEST_PMI_VECTOR		0xeb
+#endif
+
+#define LOCAL_TIMER_VECTOR		0xea
 
 #define NR_VECTORS			 256
 
