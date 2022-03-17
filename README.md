@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v4.17
+----------------
+81. KVM: TDX: Enable CET in TD VM (Chenyi Qiang)
+
 SPR-BKC-PC-v4.16
 ----------------
 80. Fix TDX guest (Kuppuswamy Sathyanarayanan)
