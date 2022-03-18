@@ -387,6 +387,13 @@ int idxd_register_dma_device(struct idxd_device *idxd)
 	INIT_LIST_HEAD(&dma->channels);
 	dma->dev = dev;
 
+	/*
+	 * claim device max_segment_size to HugePage/THP size, otherwise
+	 * DMA-API debug code would complain it's longer than default.
+	 */
+	idxd_dma->dma_parms.max_segment_size = HPAGE_PMD_SIZE;
+	dma->dev->dma_parms = &idxd_dma->dma_parms;
+
 	dma_cap_set(DMA_PRIVATE, dma->cap_mask);
 	dma->device_release = idxd_dma_release;
 

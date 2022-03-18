@@ -261,6 +261,7 @@ enum idxd_device_flag {
 struct idxd_dma_dev {
 	struct idxd_device *idxd;
 	struct dma_device dma;
+	struct device_dma_parameters dma_parms;
 };
 
 struct idxd_driver_data {
