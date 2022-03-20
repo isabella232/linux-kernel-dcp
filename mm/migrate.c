@@ -1415,9 +1415,6 @@ static void migrate_pages_copy(struct list_head *pages,
 	if (migrate_use_dma() && !dma_migrate_pages_copy(pages, new_pages))
 		return;
 
-	if (migrate_use_dma())
-		pr_info("DMA copy failed, fallback to CPU\n");
-
 	newpage = list_first_entry(new_pages, struct page, lru);
 	list_for_each_entry(page, pages, lru) {
 		if (PageHuge(page) || PageTransHuge(page))
