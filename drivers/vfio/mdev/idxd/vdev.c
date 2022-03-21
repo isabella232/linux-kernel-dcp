@@ -301,7 +301,9 @@ int vidxd_portal_mmio_write(struct vdcm_idxd *vidxd, u64 pos, void *buf,
 
 		mutex_lock(&vidxd->mig_submit_lock);
 		if (vidxd->paused) {
+#if 0
 			if (wq_dedicated(wq)) {
+#endif
 				/* Queue the descriptor if submitted to DWQ */
 				if (vwq->ndescs == wq->size) {
 					printk("can't submit more descriptors than WQ size. Dropping.\n");
@@ -323,11 +325,13 @@ int vidxd_portal_mmio_write(struct vdcm_idxd *vidxd, u64 pos, void *buf,
 
 				list_add_tail(&elem->link, &vwq->head);
 				vwq->ndescs++;
+#if 0
 			} else {
 				/* Return retry if submitted to SWQ */
 				rc = -EAGAIN;
 				goto out_unlock;
 			}
+#endif
                } else {
 			void __iomem *wq_portal;
 			wq_portal = vidxd->idxd->portal_base +
