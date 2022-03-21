@@ -776,6 +776,7 @@ static ssize_t wq_name_store(struct device *dev,
 			     size_t count)
 {
 	struct idxd_wq *wq = confdev_to_wq(dev);
+	char *input, *pos;
 
 	if (wq->state != IDXD_WQ_DISABLED)
 		return -EPERM;
@@ -783,9 +784,14 @@ static ssize_t wq_name_store(struct device *dev,
 	if (strlen(buf) > WQ_NAME_SIZE || strlen(buf) == 0)
 		return -EINVAL;
 
+	input = kstrndup(buf, count, GFP_KERNEL);
+	if (!input)
+		return -ENOMEM;
+
+	pos = strim(input);
 	memset(wq->name, 0, WQ_NAME_SIZE + 1);
-	strncpy(wq->name, buf, WQ_NAME_SIZE);
-	strreplace(wq->name, '\n', '\0');
+	sprintf(wq->name, "%s", pos);
+	kfree(input);
 	return count;
 }
 
