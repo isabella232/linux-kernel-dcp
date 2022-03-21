@@ -991,6 +991,7 @@ static ssize_t wq_driver_name_store(struct device *dev, struct device_attribute 
 				    const char *buf, size_t count)
 {
 	struct idxd_wq *wq = confdev_to_wq(dev);
+	char *input, *pos;
 
 	if (wq->state != IDXD_WQ_DISABLED)
 		return -EPERM;
@@ -998,9 +999,14 @@ static ssize_t wq_driver_name_store(struct device *dev, struct device_attribute 
 	if (strlen(buf) > WQ_NAME_SIZE || strlen(buf) == 0)
 		return -EINVAL;
 
+	input = kstrndup(buf, count, GFP_KERNEL);
+	if (!input)
+		return -ENOMEM;
+
+	pos = strim(input);
 	memset(wq->driver_name, 0, WQ_NAME_SIZE + 1);
-	strncpy(wq->driver_name, buf, WQ_NAME_SIZE);
-	strreplace(wq->name, '\n', '\0');
+	sprintf(wq->driver_name, "%s", pos);
+	kfree(input);
 	return count;
 }
 
