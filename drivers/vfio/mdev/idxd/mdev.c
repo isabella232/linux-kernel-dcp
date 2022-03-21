@@ -587,7 +587,9 @@ static int vidxd_resubmit_pending_descs (struct vdcm_idxd *vidxd,
 			memcpy((u8 *)&el, data_ptr + *offset, sizeof(el));
 			*offset += sizeof(el);
 
-			portal = wq->portal;
+			portal = vidxd->idxd->portal_base +
+				idxd_get_wq_portal_full_offset(wq->id,
+						el.portal_prot, IDXD_IRQ_IMS);
 			portal += (el.portal_id << 6);
 
 			pr_info("submitting a desc to WQ %d:%d ded %d\n",
