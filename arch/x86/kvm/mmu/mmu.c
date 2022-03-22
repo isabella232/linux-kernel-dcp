@@ -6371,8 +6371,14 @@ static void kvm_mmu_zap_memslot(struct kvm *kvm, struct kvm_memory_slot *slot)
 	flush = slot_handle_level(kvm, slot, kvm_zap_rmapp, PG_LEVEL_4K,
 			  KVM_MAX_HUGEPAGE_LEVEL, true);
 	if (kvm->arch.gfn_shared_mask) {
-		slot_handle_level(kvm, slot, kvm_drop_zapped_private_rmapp,
-				  PG_LEVEL_4K, KVM_MAX_HUGEPAGE_LEVEL, false);
+		/*
+		 * TLB flushing is necessary before drop the private
+		 * pages
+		 */
+		if (flush)
+			kvm_flush_remote_tlbs(kvm);
+		flush = slot_handle_level(kvm, slot, kvm_drop_zapped_private_rmapp,
+					  PG_LEVEL_4K, KVM_MAX_HUGEPAGE_LEVEL, false);
 	}
 	write_unlock(&kvm->mmu_lock);
 
