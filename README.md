@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v4.18
+----------------
+82. Fix DSA live migration (Yi Sun)
+
 SPR-BKC-PC-v4.17
 ----------------
 81. KVM: TDX: Enable CET in TD VM (Chenyi Qiang)
