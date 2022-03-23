@@ -434,8 +434,6 @@ static int vidxd_resume_wq_state(struct vdcm_idxd *vidxd)
 				}
 
 				if (wq_pasid >= 0) {
-					u32 status;
-
 					wqcfg->bits[WQCFG_PASID_IDX] &=
 								~GENMASK(29, 8);
 					wqcfg->priv = priv;
@@ -449,8 +447,8 @@ static int vidxd_resume_wq_state(struct vdcm_idxd *vidxd)
 					idxd_wq_setup_priv(wq, priv);
 					spin_unlock_irqrestore(&idxd->dev_lock,
 									flags);
-					idxd_wq_enable(wq, &rc);
-					if (status) {
+					rc = idxd_wq_enable(wq, NULL);
+					if (rc) {
 						dev_err(dev, "resume wq failed\n");
 						break;;
 					}
@@ -462,7 +460,7 @@ static int vidxd_resume_wq_state(struct vdcm_idxd *vidxd)
 				spin_lock_irqsave(&idxd->dev_lock, flags);
 				idxd_wq_setup_pasid(wq, 0);
 				spin_unlock_irqrestore(&idxd->dev_lock, flags);
-				idxd_wq_enable(wq, &rc);
+				rc = idxd_wq_enable(wq, NULL);
 				if (rc) {
 					dev_err(dev, "resume wq %d failed\n",
 							wq->id);
