@@ -163,7 +163,7 @@ int dma_migrate_pages_copy(const struct list_head *pages,
 			  const struct list_head *new_pages)
 {
 	struct page *page, *newpage;
-	struct scatterlist *src_sg, *dst_sg;
+	struct scatterlist *src_sg, *dst_sg = NULL;
 	struct scatterlist *src_ptr, *dst_ptr;
 	unsigned int order, nents = 0;
 	int err = 0;
