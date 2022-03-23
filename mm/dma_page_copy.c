@@ -15,7 +15,7 @@ static int __dma_page_copy_sg(struct scatterlist *src, struct scatterlist *dst,
 	dma_cap_mask_t mask;
 	dma_cookie_t cookie;
 	enum dma_status status;
-	unsigned int nr_sgs, nr_sgd;
+	unsigned int nr_sgs, nr_sgd = 0;
 	int err = 0;
 
 	/* acquire DMA chan */
