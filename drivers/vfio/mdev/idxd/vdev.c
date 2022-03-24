@@ -1007,7 +1007,7 @@ static void vidxd_wq_reset(struct vdcm_idxd *vidxd, int wq_id_mask)
 	union wqcfg *wqcfg = (union wqcfg *)(bar0 + VIDXD_WQCFG_OFFSET);
 	struct mdev_device *mdev = vidxd->ivdev.mdev;
 	struct device *dev = mdev_dev(mdev);
-	u32 status;
+	u32 status = 0;
 
 	wq = vidxd->wq;
 	dev_dbg(dev, "vidxd reset wq %u:%u\n", 0, wq->id);
