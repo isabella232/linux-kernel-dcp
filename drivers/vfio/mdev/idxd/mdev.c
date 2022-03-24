@@ -1787,6 +1787,9 @@ static int idxd_vdcm_set_ctx_trigger_single(struct eventfd_ctx **ctx,
 		if (!count)
 			return -EINVAL;
 
+		if (!data)
+			return -EINVAL;
+
 		trigger = *(u8 *)data;
 		if (trigger && *ctx)
 			eventfd_signal(*ctx, 1);
