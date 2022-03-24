@@ -697,9 +697,10 @@ static int iax_compress(struct crypto_tfm *tfm,
 	idxd_desc = idxd_alloc_desc(wq, IDXD_OP_BLOCK);
 	if (IS_ERR(idxd_desc)) {
 		pr_err("%s: idxd descriptor allocation failed\n", __func__);
-		pr_warn("%s: iax compress (verify) failed: ret=%ld\n", __func__, PTR_ERR(desc));
+		pr_warn("%s: iax compress (verify) failed: ret=%ld\n", __func__,
+			PTR_ERR(idxd_desc));
 
-		return PTR_ERR(desc);
+		return PTR_ERR(idxd_desc);
 	}
 	desc = idxd_desc->iax_hw;
 
