@@ -360,10 +360,8 @@ static struct iax_device *add_iax_device(struct idxd_device *idxd)
 
 	iax_device->idxd = idxd;
 
-	if (iax_aecs_alloc(iax_device) < 0) {
-		iax_device_free(iax_device);
+	if (iax_aecs_alloc(iax_device) < 0)
 		return NULL;
-	}
 
 	list_add_tail(&iax_device->list, &iax_devices);
 
