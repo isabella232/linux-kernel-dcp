@@ -559,6 +559,9 @@ static int __init distribute_tdmrs_across_tdmr_ranges(
 	/* Distribute TDMRs on basis of 'struct tdmr_range' one by one. */
 	remain_1g_areas =
 		TDMR_SIZE_TO_1G_AREAS(calculate_total_tdmr_range_size(tr_ctx));
+	if (!remain_1g_areas)
+		return 0;
+
 	remain_tdmr_num = max_tdmr_num;
 	last_tdmr_idx = 0;
 	list_for_each_entry(tr, &tr_ctx->tr_list, list) {
