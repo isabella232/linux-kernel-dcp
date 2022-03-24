@@ -68,7 +68,7 @@
 static inline int do_tddebugconfig(u64 subleaf, u64 param1, u64 param2)
 {
 	u64 err;
-	int ret;
+	int ret = -EOPNOTSUPP;
 
 	if (is_debug_seamcall_available) {
 		preempt_disable();
