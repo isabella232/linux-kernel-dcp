@@ -953,7 +953,7 @@ static void vidxd_wq_abort(struct vdcm_idxd *vidxd, int val)
 	u8 *bar0 = vidxd->bar0;
 	union wqcfg *wqcfg = (union wqcfg *)(bar0 + VIDXD_WQCFG_OFFSET);
 	struct idxd_wq *wq = vidxd->wq;
-	u32 status;
+	u32 status = 0;
 
 	dev_dbg(dev, "%s\n", __func__);
 	if (wqcfg->wq_state != IDXD_WQ_DEV_ENABLED) {
