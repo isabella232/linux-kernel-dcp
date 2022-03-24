@@ -188,12 +188,20 @@ int dma_migrate_pages_copy(const struct list_head *pages,
 	/* segment */
 	newpage = list_first_entry(new_pages, struct page, lru);
 	list_for_each_entry(page, pages, lru) {
-		if (PageHuge(page))
-			order = huge_page_order(page_hstate(page));
-		else if (PageTransHuge(page))
+		if (PageHuge(page)) {
+			struct hstate *hs;
+
+			hs = page_hstate(page);
+			if (!hs) {
+				err = -ENOENT;
+				goto done;
+			}
+			order = huge_page_order(hs);
+		} else if (PageTransHuge(page)) {
 			order = thp_order(page);
-		else
+		} else {
 			order = 0;
+		}
 		memset(src_ptr, 0, sizeof(*src_ptr));
 		memset(dst_ptr, 0, sizeof(*dst_ptr));
 		sg_set_page(src_ptr++, page, PAGE_SIZE << order, 0);
