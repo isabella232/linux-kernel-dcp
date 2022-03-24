@@ -3433,6 +3433,9 @@ static void split_private_spte(struct kvm_vcpu *vcpu, u64 *sptep, u64 old_spte)
 
 	gfn = kvm_mmu_page_get_gfn(sp, sptep - sp->spt);
 	slot = kvm_vcpu_gfn_to_memslot(vcpu, gfn);
+	if (WARN_ON(!slot))
+		return;
+
 	rmap_head = gfn_to_rmap(gfn, sp->role.level, slot);
 	__pte_list_remove(sptep, rmap_head);
 
