@@ -1188,7 +1188,7 @@ static void vidxd_wq_enable(struct vdcm_idxd *vidxd, int wq_id)
 	wq_pasid_enable = vwqcfg->pasid_en;
 
 	if (wq_dedicated(wq)) {
-		u32 wq_pasid = ~0U;
+		int wq_pasid = -1;
 		bool priv;
 
 		if (wq_pasid_enable) {
