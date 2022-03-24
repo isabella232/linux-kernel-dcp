@@ -153,7 +153,7 @@ quit:
 struct cpio_data find_cpio_file(const char *path, void *data, size_t len)
 {
 	struct cpio_data blob;
-	long offset;
+	long offset = 0;
 
 	while (len > 0) {
 		blob = find_cpio_data(path, data, len, &offset);
