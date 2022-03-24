@@ -66,7 +66,7 @@ void idxd_mdev_host_release(struct kref *kref)
 	struct idxd_device *idxd = container_of(kref, struct idxd_device, mdev_kref);
 	struct device *dev = &idxd->pdev->dev;
 	struct vfio_pci_core_device *vfio_pdev = &idxd->vfio_pdev;
-	int i;
+	int i, rc;
 
 	if (!idxd->mdev_host_init)
 		return;
@@ -78,7 +78,10 @@ void idxd_mdev_host_release(struct kref *kref)
 	vfio_pdev->num_regions = 0;
 	kfree(vfio_pdev->region);
 	vfio_pdev->region = NULL;
-	iommu_unregister_device_fault_handler(&idxd->pdev->dev);
+	rc = iommu_unregister_device_fault_handler(&idxd->pdev->dev);
+	if (rc)
+		dev_warn(dev, "iommu_unregister_device_fault_handler() failed\n");
+
 	for (i = 0; i < vfio_pdev->num_ext_irqs; i++)
 		vfio_pci_set_ext_irq_trigger(vfio_pdev,
 					     VFIO_IRQ_SET_DATA_NONE | VFIO_IRQ_SET_ACTION_TRIGGER,
