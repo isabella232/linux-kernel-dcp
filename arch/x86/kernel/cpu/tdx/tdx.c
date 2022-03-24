@@ -1593,6 +1593,7 @@ static ssize_t tdx_module_reload_store(struct kobject *kobj,
 {
 	unsigned long val;
 	ssize_t ret;
+	int vmxoff_err;
 
 	ret = kstrtoul(buf, 0, &val);
 	if (ret)
@@ -1611,7 +1612,12 @@ static ssize_t tdx_module_reload_store(struct kobject *kobj,
 	default:
 		ret = -EINVAL;
 	}
-	seam_vmxoff_on_each_cpu();
+	vmxoff_err = seam_vmxoff_on_each_cpu();
+	if (vmxoff_err) {
+		pr_info("Failed to VMXOFF.\n");
+		if (!ret)
+			ret = vmxoff_err;
+	}
 unlock:
 	mutex_unlock(&tdx_mutex);
 
