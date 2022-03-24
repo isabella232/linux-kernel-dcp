@@ -1039,7 +1039,7 @@ static int sgx_zap_section_pages(struct sgx_epc_section *section,
 				 struct list_head *secs_pages_list)
 {
 	struct sgx_epc_page *epc_page;
-	int i, ret;
+	int i, ret = 0;
 	unsigned long nr_pages = section->size >> PAGE_SHIFT;
 
 	for (i = 0; i < nr_pages; i++) {

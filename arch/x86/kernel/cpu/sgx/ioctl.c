@@ -168,7 +168,8 @@ static long sgx_ioc_enclave_create(struct sgx_encl *encl, void __user *arg)
 		srcu_idx = srcu_read_lock(&sgx_lock_epc_srcu);
 		if (sgx_epc_is_locked()) {
 			srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
-			return -EBUSY;
+			ret = -EBUSY;
+			goto out;
 		}
 
 		ret = sgx_encl_create(encl, secs);
@@ -176,6 +177,7 @@ static long sgx_ioc_enclave_create(struct sgx_encl *encl, void __user *arg)
 		srcu_read_unlock(&sgx_lock_epc_srcu, srcu_idx);
 	}
 
+out:
 	kfree(secs);
 	return ret;
 }
