@@ -420,7 +420,7 @@ static int vidxd_resume_wq_state(struct vdcm_idxd *vidxd)
 			/* If dedicated WQ and PASID is not enabled, program
 			 * the default PASID in the WQ PASID register */
 			if (wq_dedicated(wq) && vwqcfg->mode_support) {
-				int wq_pasid, gpasid = -1;
+				int wq_pasid = -1, gpasid = -1;
 
 				if (vwqcfg->pasid_en) {
 					gpasid = vwqcfg->pasid;
