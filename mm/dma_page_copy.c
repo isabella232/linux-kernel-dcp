@@ -66,8 +66,7 @@ unmap_sg:
 		dma_unmap_sg(dev, src, nr_sgs, DMA_TO_DEVICE);
 	if (nr_sgd)
 		dma_unmap_sg(dev, dst, nr_sgd, DMA_FROM_DEVICE);
-	if (dma_copy_chan)
-		dma_release_channel(dma_copy_chan);
+	dma_release_channel(dma_copy_chan);
 	return err;
 }
 
