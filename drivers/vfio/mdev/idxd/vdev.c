@@ -1230,8 +1230,8 @@ static void vidxd_wq_enable(struct vdcm_idxd *vidxd, int wq_id)
 			idxd_wq_setup_pasid(wq, wq_pasid);
 			idxd_wq_setup_priv(wq, priv);
 			spin_unlock_irqrestore(&idxd->dev_lock, flags);
-			idxd_wq_enable(wq, &status);
-			if (status) {
+			rc = idxd_wq_enable(wq, &status);
+			if (rc < 0 || status) {
 				dev_err(dev, "vidxd enable wq %d failed\n", wq->id);
 				idxd_complete_command(vidxd, status);
 				return;
