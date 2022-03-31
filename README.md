@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v4.22
+----------------
+86. kexec: Fix kexec with CET (Rick Edgecombe)
+
 SPR-BKC-PC-v4.21
 ----------------
 85. Fix DSA/IAX security issues (Dave Jiang)
