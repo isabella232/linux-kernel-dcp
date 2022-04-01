@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v4.24
+----------------
+88. Back port a few CVE commits from upstream (Mark Horn)
+
 SPR-BKC-PC-v4.23
 ----------------
 87. Fix DMA-API debug warning print when using DMA to do page migration (Jiangbo Wu)
