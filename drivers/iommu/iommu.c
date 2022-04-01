@@ -1410,7 +1410,7 @@ int iommu_report_device_fault(struct device *dev, struct iommu_fault_event *evt)
 		exp = get_jiffies_64() + prq_timeout;
 		evt_pending->expire = exp;
 		mutex_lock(&fparam->lock);
-		if (list_empty(&fparam->faults)) {
+		if (list_empty(&fparam->faults) && prq_timeout) {
 			/* First pending event, start timer */
 			tmr = &dev->iommu->fault_param->timer;
 			WARN_ON(timer_pending(tmr));
@@ -1563,7 +1563,7 @@ int iommu_page_response(struct iommu_domain *domain,
 	}
 
 	/* stop response timer if no more pending request */
-	if (list_empty(&param->fault_param->faults) &&
+	if (prq_timeout && list_empty(&param->fault_param->faults) &&
 		timer_pending(&param->fault_param->timer)) {
 		pr_debug("no pending PRQ, stop timer\n");
 		del_timer(&param->fault_param->timer);
