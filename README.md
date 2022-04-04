@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v1.19
+----------------
+18. AMX-KVM (Jing Liu)
+
 SPR-BKC-PC-v1.18
 ----------------
 17. SDSI (Dave Box)
