@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v1.18
+----------------
+17. SDSI (Dave Box)
+
 SPR-BKC-PC-v1.17
 ----------------
 16. SGX Seamless fix (Cathy Zhang):
