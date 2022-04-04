@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v1.22
+----------------
+21. SPR BKC PC kernel banne (Fenghua Yu)
+
 SPR-BKC-PC-v1.21
 ----------------
 20. KVM TDP/TDX fixes (Chao Gao)
