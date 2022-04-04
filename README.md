@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v1.17
+----------------
+16. SGX Seamless fix (Cathy Zhang):
+
 SPR-BKC-PC-v1.16
 ----------------
 15. SAF (Jithu Joseph and Kyung Min Park):
