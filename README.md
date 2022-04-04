@@ -18,9 +18,13 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v1.21
+----------------
+20. KVM TDP/TDX fixes (Chao Gao)
+
 SPR-BKC-PC-v1.20
 ----------------
-19 SPI-NOR (Mika Westerberg)
+19. SPI-NOR (Mika Westerberg)
 
 SPR-BKC-PC-v1.19
 ----------------
