@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v1.20
+----------------
+19 SPI-NOR (Mika Westerberg)
+
 SPR-BKC-PC-v1.19
 ----------------
 18. AMX-KVM (Jing Liu)
