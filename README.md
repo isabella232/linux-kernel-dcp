@@ -18,6 +18,11 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v1.23
+----------------
+23. SPR-BKC-PC-v1.config (Gonzalez Plascencia, Jair De Jesus)
+22. Seamless (Yu Chen)
+
 SPR-BKC-PC-v1.22
 ----------------
 21. SPR BKC PC kernel banne (Fenghua Yu)
