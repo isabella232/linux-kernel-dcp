@@ -18,6 +18,12 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v3.17
+----------------
+60. Fix WQ config fails with sm_off (Dave Jiang)
+
+59. Revert IOASID range adjustment (Jacob Pan)
+
 SPR-BKC-PC-v3.16
 ----------------
 58. Fix ZSWAP breakage (Tom Zanussi)
