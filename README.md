@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v3.12
+----------------
+52. sched/fair: Force progress on min_vruntime (Tim Chen)
+
 SPR-BKC-PC-v3.11
 ----------------
 51. dmaengine: idxd: restore traffic class defaults after wq reset (Dave Jiang)
