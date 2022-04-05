@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v4.15
+----------------
+79. Fix scheduler fairness issue (Tim Chen and PeterZ)
+
 SPR-BKC-PC-v4.14
 ----------------
 78. Updated PKS (Ira Weiny)
