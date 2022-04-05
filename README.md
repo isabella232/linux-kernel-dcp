@@ -18,6 +18,12 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v2.4
+---------------
+31. VM Preserving Run-time Fixes (Chao Gao)
+
+32. TDVMCALL[GetQuote] driver (Chenyi Qiang)
+
 SPR-BKC-PC-v2.3
 ----------------
 30. IAX Crypto (Dave Jiang)
