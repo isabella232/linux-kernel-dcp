@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v2.10
+----------------
+38. Enable MDEV and VFIO (Dave Jiang and Yi Liu)
+
 PR-BKC-PC-v2.9
 ----------------
 37. Fix TDX issues (Chenyi Qiang)
