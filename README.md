@@ -18,6 +18,14 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v3.2
+----------------
+42. Fix TDX issue (Chenyi Qiang)
+
+41. Arch-lbr (Weijiang Yang)
+
+40. Fix TDX issue (Kirill Shutemov)
+
 SPR-BKC-PC-v3.1
 ----------------
 39.  iommu/vt-d: Fix PCI bus rescan device hot add (Jacob Pan)
