@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v4.9
+----------------
+73. Fix DSA/IAX issues (Dave Jiang)
+
 SPR-BKC-PC-v4.8
 ----------------
 72. Enable CET KVM (Weijiang Yang)
