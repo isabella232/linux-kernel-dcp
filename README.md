@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v2.7
+----------------
+35. Prevent SGX reclaimer from running during SGX SVN update (Cathy Zhang):
+
 SPR-BKC-PC-v2.6
 ----------------
 34. Perf Inject fix itrace space allowed for new attributes (Adrian Hunter)
