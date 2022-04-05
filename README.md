@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v4.16
+----------------
+80. Fix TDX guest (Kuppuswamy Sathyanarayanan)
+
 SPR-BKC-PC-v4.15
 ----------------
 79. Fix scheduler fairness issue (Tim Chen and PeterZ)
