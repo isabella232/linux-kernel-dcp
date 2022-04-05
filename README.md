@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v4.21
+----------------
+85. Fix DSA/IAX security issues (Dave Jiang)
+
 SPR-BKC-PC-v4.20
 ----------------
 84. Fix dmatest failed in guest with IAX passthrough (Dave Jiang)
