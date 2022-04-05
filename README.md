@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v2.3
+----------------
+30. IAX Crypto (Dave Jiang)
+
 SPR-BKC-PC-v2.2
 ----------------
 28. SGX EDMM ( Reinette Chatre):
