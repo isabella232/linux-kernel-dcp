@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v3.6
+----------------
+46. Update AMX KVM to upstream version (tip for 5.17) (Yang Zhong)
+
 SPR-BKC-PC-v3.5
 ----------------
 45. IDXD fix (Dave Jiang):
