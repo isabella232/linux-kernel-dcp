@@ -18,6 +18,11 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v4.19
+----------------
+83. KVM: TDX: Do TLB flushing for TD guest before drop the private page (Yuan Y
+ao)
+
 SPR-BKC-PC-v4.18
 ----------------
 82. Fix DSA live migration (Yi Sun)
