@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v3.11
+----------------
+51. dmaengine: idxd: restore traffic class defaults after wq reset (Dave Jiang)
+
 SPR-BKC-PC-v3.10
 ----------------
 50. Fix VMD booting issue (Adrian Huang <ahuang12@lenovo.com>):
