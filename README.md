@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v3.14
+----------------
+54. Check on PT SRE support on stepping (Jacob Pan)
+
 SPR-BKC-PC-v3.13
 ----------------
 53. Enable PASID for DMA API users (Jacob Pan)
