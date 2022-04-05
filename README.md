@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v4.5
+----------------
+69. Fix TDX to accommodate the BIOS DXE driver loader (Xiaoyao Li)
+
 SPR-BKC-PC-v4.4
 ----------------
 68. CET (Rick Edgecombe)
