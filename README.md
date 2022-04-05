@@ -18,6 +18,11 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v4.11
+----------------
+75. X86: TDX: Fix hang/panic when loading np_seamldr with shadow stack (CET) en
+abled (Yuan Yao)
+
 SPR-BKC-PC-v4.10
 ----------------
 74. Add new IDXD and Zswap features:
