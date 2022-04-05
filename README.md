@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v4.20
+----------------
+84. Fix dmatest failed in guest with IAX passthrough (Dave Jiang)
+
 SPR-BKC-PC-v4.19
 ----------------
 83. KVM: TDX: Do TLB flushing for TD guest before drop the private page (Yuan Y
