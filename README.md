@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v3.1
+----------------
+39.  iommu/vt-d: Fix PCI bus rescan device hot add (Jacob Pan)
+
 SPR-BKC-PC-v2.10
 ----------------
 38. Enable MDEV and VFIO (Dave Jiang and Yi Liu)
