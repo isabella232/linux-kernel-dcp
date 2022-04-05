@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v2.8
+----------------
+36. Add SPR-BKC-PC-v2.config (Miguel Bernal Martin)
+
 SPR-BKC-PC-v2.7
 ----------------
 35. Prevent SGX reclaimer from running during SGX SVN update (Cathy Zhang):
