@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v4.6
+----------------
+70. Enable AMX feature in the TD VM (Yang Zhong)
+
 SPR-BKC-PC-v4.5
 ----------------
 69. Fix TDX to accommodate the BIOS DXE driver loader (Xiaoyao Li)
