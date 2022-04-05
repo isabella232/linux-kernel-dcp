@@ -18,6 +18,13 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v4.10
+----------------
+74. Add new IDXD and Zswap features:
+- crypto: Enable iax_crypto_enable and iax_crypto_disable (Tom Zanussi)
+- dmaengine: idxd: add wq driver name support for accel-config user tool (Dave 
+Jiang)
+
 SPR-BKC-PC-v4.9
 ----------------
 73. Fix DSA/IAX issues (Dave Jiang)
