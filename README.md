@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v3.8
+----------------
+48. SST HFI (Pandruvada, Srinivas)
+
 SPR-BKC-PC-v3.7
 ----------------
 47. More IDXD fixes (Dave Jiang)
