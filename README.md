@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v3.20
+----------------
+63. Fix vIOMMU GIOVA by avoiding reserved IOASIDs (Jacob Pan)
+
 PR-BKC-PC-v3.19
 ----------------
 62. Remove POC dynamic MSIX allocation code (Dave Jiang)
