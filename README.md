@@ -18,6 +18,12 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v2.2
+----------------
+28. SGX EDMM ( Reinette Chatre):
+
+29. Updated SGX Seamless (old one reverted) (Cathy Zhang):
+
 SPR-BKC-PC-v2.1
 ---------------
 27. AMX fixes (Chang Seok Bae)
