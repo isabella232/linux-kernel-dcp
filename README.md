@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v4.13
+----------------
+77. DSA fix (Dave Jiang)
+
 SPR-BKC-PC-v4.12
 ----------------
 76. DMA pages copy support for page migration (Peter Zhu and Jiangbo Wu)
