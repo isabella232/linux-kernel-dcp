@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v4.1
+----------------
+66. Update TDX guest (Kirill Shutemov)
+
 SPR-BKC-PC-v3.21
 ----------------
 65. Fix https://nvd.nist.gov/vuln/detail/CVE-2022-23222 (Mark Horn and Miguel Bernal Marin):
