@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v4.8
+----------------
+72. Enable CET KVM (Weijiang Yang)
+
 SPR-BKC-PC-v4.7
 ----------------
 71. Fix TDX KVM TLB flushing bug (Yuan Yao)
