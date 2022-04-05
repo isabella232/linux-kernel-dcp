@@ -18,6 +18,14 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v3.16
+----------------
+58. Fix ZSWAP breakage (Tom Zanussi)
+
+57. Rollback microcode (Ashok Raj)
+
+56. Fix TDX seamcall (Isaku Yamahata)
+
 SPR-BKC-PC-v3.15
 ----------------
 55. Fix a NULL domain issue in IOMMU (Jacob Pan):
