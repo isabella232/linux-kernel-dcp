@@ -18,6 +18,16 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v2.1
+---------------
+27. AMX fixes (Chang Seok Bae)
+
+26. TDX fixes (Chao Gao)
+
+25. VM Preserving Run-time (Chao Gao)
+
+24. TDX Guest fixes (Kirill)
+
 SPR-BKC-PC-v1.23
 ----------------
 23. SPR-BKC-PC-v1.config (Gonzalez Plascencia, Jair De Jesus)
