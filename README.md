@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v2.6
+----------------
+34. Perf Inject fix itrace space allowed for new attributes (Adrian Hunter)
+
 SPR-BKC-PC-v2.5
 ----------------
 33. firmware updates/telemetry support (Chen, Yu C)
