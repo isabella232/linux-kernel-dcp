@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+PR-BKC-PC-v2.9
+----------------
+37. Fix TDX issues (Chenyi Qiang)
+
 SPR-BKC-PC-v2.8
 ----------------
 36. Add SPR-BKC-PC-v2.config (Miguel Bernal Martin)
