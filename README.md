@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v4.7
+----------------
+71. Fix TDX KVM TLB flushing bug (Yuan Yao)
+
 SPR-BKC-PC-v4.6
 ----------------
 70. Enable AMX feature in the TD VM (Yang Zhong)
