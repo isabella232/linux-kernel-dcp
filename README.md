@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+PR-BKC-PC-v3.19
+----------------
+62. Remove POC dynamic MSIX allocation code (Dave Jiang)
+
 SPR-BKC-PC-v3.18
 ----------------
 61. Back port some high/critical Common Vulnerabilities and Exposures (CVE) fixes from upstream (Makr Horn):
