@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v2.5
+----------------
+33. firmware updates/telemetry support (Chen, Yu C)
+
 SPR-BKC-PC-v2.4
 ---------------
 31. VM Preserving Run-time Fixes (Chao Gao)
