@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v5.3
+----------------
+91. Fix TLB flushing issue for TDX guest's private pages (Yuan Yao)
+
 SPR-BKC-PC-v5.2
 ----------------
 90. Minor TDX/KVM/SGX/IOMMU fixes (Chenyi Qiang and Jacob Pan)
