@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v5.1
+----------------
+89. Fix a DSA issue (Dave Jiang)
+
 SPR-BKC-PC-v4.24
 ----------------
 88. Back port a few CVE commits from upstream (Mark Horn)
