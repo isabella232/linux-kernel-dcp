@@ -18,6 +18,10 @@ Use at your own risk.
 Release History
 ===============
 
+SPR-BKC-PC-v5.2
+----------------
+90. Minor TDX/KVM/SGX/IOMMU fixes (Chenyi Qiang and Jacob Pan)
+
 SPR-BKC-PC-v5.1
 ----------------
 89. Fix a DSA issue (Dave Jiang)
