@@ -2885,6 +2885,9 @@ void device_initialize(struct device *dev)
 #ifdef CONFIG_GENERIC_MSI_IRQ
 	raw_spin_lock_init(&dev->msi_lock);
 	INIT_LIST_HEAD(&dev->msi_list);
+	INIT_LIST_HEAD(&dev->dev_msi_list);
+	dev->msi_last_list = &dev->msi_list;
+	dev->dev_msi_last_list = &dev->dev_msi_list;
 #endif
 	INIT_LIST_HEAD(&dev->links.consumers);
 	INIT_LIST_HEAD(&dev->links.suppliers);
